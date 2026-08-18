@@ -4,7 +4,6 @@ import time
 import random
 import sqlite3
 import threading
-import json
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
@@ -177,39 +176,14 @@ def find_reminder(peer, arg):
         return row
 
 
-# ===== НОВОЕ: надёжное получение reply через API =====
-def get_reply_info(msg_obj):
-    """
-    Получает информацию о reply-сообщении.
-    Сначала смотрит в событии, если нет — делает API-запрос.
-    Возвращает (reply_from, reply_text, reply_attachments_list)
-    """
-    reply = msg_obj.get("reply_message") or {}
-    if not isinstance(reply, dict):
-        reply = {}
-    
-    reply_from = int(reply.get("from_id", 0) or 0)
-    reply_text = (reply.get("text") or "").strip()
-    reply_attachments = reply.get("attachments", []) or []
-    
-    # Если reply_from есть, но текста нет — пробуем получить через API
-    if reply_from > 0 and not reply_text and not reply_attachments:
-        try:
-            reply_id = reply.get("id", 0)
-            reply_peer = reply.get("peer_id", 0) or msg_obj.get("peer_id", 0)
-            if reply_id > 0:
-                result = VK.messages.getById(message_ids=reply_id)
-                items = result.get("items", [])
-                if items:
-                    m = items[0]
-                    reply_text = (m.get("text") or "").strip()
-                    reply_attachments = m.get("attachments", []) or []
-        except Exception as e:
-            print("reply api error:", e)
-    
-    # Преобразуем вложения в простой формат
-    attach_list = []
-    for att in reply_attachments:
+# ===== ПРОСТОЕ получение reply-данных напрямую из события =====
+def parse_reply_attachments(reply_obj):
+    """Преобразует вложения из reply_message в строку для VK API."""
+    if not reply_obj or not isinstance(reply_obj, dict):
+        return ""
+    attachments = reply_obj.get("attachments", []) or []
+    parts = []
+    for att in attachments:
         try:
             att_type = att.get("type", "")
             if att_type == "photo":
@@ -217,29 +191,28 @@ def get_reply_info(msg_obj):
                 owner_id = ph.get("owner_id", 0)
                 photo_id = ph.get("id", 0)
                 if owner_id and photo_id:
-                    attach_list.append(f"photo{owner_id}_{photo_id}")
+                    parts.append(f"photo{owner_id}_{photo_id}")
             elif att_type == "doc":
                 d = att.get("doc", {})
                 owner_id = d.get("owner_id", 0)
                 doc_id = d.get("id", 0)
                 if owner_id and doc_id:
-                    attach_list.append(f"doc{owner_id}_{doc_id}")
+                    parts.append(f"doc{owner_id}_{doc_id}")
             elif att_type == "video":
                 v = att.get("video", {})
                 owner_id = v.get("owner_id", 0)
                 video_id = v.get("id", 0)
                 if owner_id and video_id:
-                    attach_list.append(f"video{owner_id}_{video_id}")
+                    parts.append(f"video{owner_id}_{video_id}")
             elif att_type == "audio":
                 a = att.get("audio", {})
                 owner_id = a.get("owner_id", 0)
                 audio_id = a.get("id", 0)
                 if owner_id and audio_id:
-                    attach_list.append(f"audio{owner_id}_{audio_id}")
+                    parts.append(f"audio{owner_id}_{audio_id}")
         except Exception as e:
             print("attach parse error:", e)
-    
-    return reply_from, reply_text, attach_list
+    return ",".join(parts)
 
 
 def handle_message(peer, sender, text, msg_obj):
@@ -262,33 +235,39 @@ def handle_message(peer, sender, text, msg_obj):
 
     # ----- !создать -----
     if cmd == "!создать":
-        reply_from, reply_text, reply_attachments = get_reply_info(msg_obj)
-        
-        if not reply_text and not reply_attachments:
-            send_msg(peer, "❌ Ответьте на сообщение с текстом или фото и введите !создать <название> <минуты>")
-            return
-        if len(args) < 2:
-            send_msg(peer, "❌ Формат: !создать <название> <минуты>")
-            return
         try:
-            minutes = int(args[-1])
-            name = " ".join(args[:-1])
-        except ValueError:
-            send_msg(peer, "❌ Минуты должны быть числом.")
-            return
-        
-        attachments_str = ",".join(reply_attachments) if reply_attachments else ""
-        
-        with DB_LOCK:
+            reply = msg_obj.get("reply_message") or {}
+            if not isinstance(reply, dict):
+                reply = {}
+            reply_text = (reply.get("text") or "").strip()
+            reply_attachments_str = parse_reply_attachments(reply)
+            
+            if not reply_text and not reply_attachments_str:
+                send_msg(peer, "❌ Ответьте на сообщение с текстом или фото и введите !создать <название> <минуты>")
+                return
+            if len(args) < 2:
+                send_msg(peer, "❌ Формат: !создать <название> <минуты>")
+                return
             try:
-                CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, interval_minutes, next_trigger) 
-                                VALUES(?,?,?,?,?,?)""",
-                             (peer, name, reply_text, attachments_str, minutes, time.time() + minutes * 60))
-                CONN.commit()
-                attach_info = f" + {len(reply_attachments)} влож." if reply_attachments else ""
-                send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.{attach_info}")
-            except sqlite3.IntegrityError:
-                send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
+                minutes = int(args[-1])
+                name = " ".join(args[:-1])
+            except ValueError:
+                send_msg(peer, "❌ Минуты должны быть числом.")
+                return
+            
+            with DB_LOCK:
+                try:
+                    CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, interval_minutes, next_trigger) 
+                                    VALUES(?,?,?,?,?,?)""",
+                                 (peer, name, reply_text, reply_attachments_str, minutes, time.time() + minutes * 60))
+                    CONN.commit()
+                    attach_info = " + вложения" if reply_attachments_str else ""
+                    send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.{attach_info}")
+                except sqlite3.IntegrityError:
+                    send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
+        except Exception as e:
+            print("create error:", e)
+            send_msg(peer, f"❌ Ошибка при создании напоминания: {e}")
 
     # ----- !список -----
     elif cmd == "!список":
