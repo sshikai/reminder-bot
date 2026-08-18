@@ -4,6 +4,7 @@ import time
 import random
 import sqlite3
 import threading
+import json
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
@@ -26,6 +27,7 @@ def init_db():
             peer_id INTEGER,
             name TEXT,
             text TEXT,
+            attachments TEXT,
             interval_minutes INTEGER,
             next_trigger REAL,
             enabled INTEGER DEFAULT 1,
@@ -101,11 +103,18 @@ def is_owner(sender, peer):
         return True
     return get_chat_owner(peer) == sender
 
-def send_msg(peer, text):
+def send_msg(peer, text, attachments=None):
     if VK is None or not peer:
         return
     try:
-        VK.messages.send(peer_id=peer, message=text, random_id=random.getrandbits(31))
+        params = {
+            'peer_id': peer,
+            'message': text,
+            'random_id': random.getrandbits(31)
+        }
+        if attachments:
+            params['attachment'] = attachments
+        VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
 
@@ -167,7 +176,7 @@ def find_reminder(peer, arg):
         ).fetchone()
         return row
 
-def handle_message(peer, sender, text, reply_from, reply_text):
+def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments):
     if peer < 2000000000:
         return
 
@@ -185,9 +194,10 @@ def handle_message(peer, sender, text, reply_from, reply_text):
 
     owner = is_owner(sender, peer)
 
+    # ----- !создать -----
     if cmd == "!создать":
-        if not reply_text:
-            send_msg(peer, "❌ Ответьте на сообщение с текстом напоминания и введите !создать <название> <минуты>")
+        if not reply_text and not reply_attachments:
+            send_msg(peer, "❌ Ответьте на сообщение с текстом или вложением и введите !создать <название> <минуты>")
             return
         if len(args) < 2:
             send_msg(peer, "❌ Формат: !создать <название> <минуты>")
@@ -198,38 +208,47 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         except ValueError:
             send_msg(peer, "❌ Минуты должны быть числом.")
             return
+        
+        # Сохраняем вложения как JSON
+        attachments_json = json.dumps(reply_attachments) if reply_attachments else ""
+        
         with DB_LOCK:
             try:
-                CONN.execute("""INSERT INTO reminders(peer_id, name, text, interval_minutes, next_trigger) 
-                                VALUES(?,?,?,?,?)""",
-                             (peer, name, reply_text, minutes, time.time() + minutes * 60))
+                CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, interval_minutes, next_trigger) 
+                                VALUES(?,?,?,?,?,?)""",
+                             (peer, name, reply_text, attachments_json, minutes, time.time() + minutes * 60))
                 CONN.commit()
-                send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.")
+                attach_info = f" + {len(reply_attachments)} влож." if reply_attachments else ""
+                send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.{attach_info}")
             except sqlite3.IntegrityError:
                 send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
 
+    # ----- !список -----
     elif cmd == "!список":
         with DB_LOCK:
             rows = CONN.execute(
-                "SELECT id, name, interval_minutes, next_trigger, enabled FROM reminders WHERE peer_id=? ORDER BY id",
+                "SELECT id, name, interval_minutes, next_trigger, enabled, attachments FROM reminders WHERE peer_id=? ORDER BY id",
                 (peer,)
             ).fetchall()
         if not rows:
             send_msg(peer, "📭 Список напоминаний пуст.")
             return
-        msg = "📋 Список напоминаний:\n\n"
+        msg = " Список напоминаний:\n\n"
         now = time.time()
-        for idx, r in enumerate(rows, 1):
+        for r in rows:
             remaining = max(0, r["next_trigger"] - now)
             mins = int(remaining // 60)
             secs = int(remaining % 60)
-            status = "🟢 ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
-            msg += f"#{idx} {r['name']}\n"
+            status = " ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
+            attach_count = len(json.loads(r["attachments"])) if r["attachments"] else 0
+            attach_info = f" + {attach_count} влож." if attach_count else ""
+            msg += f"#{idx} {r['name']}{attach_info}\n"
             msg += f"   {status}\n"
             msg += f"   Интервал: {r['interval_minutes']} мин.\n"
             msg += f"   Через: {mins} мин {secs} сек\n\n"
         send_msg(peer, msg)
 
+    # ----- !удалить -----
     elif cmd == "!удалить":
         if not args:
             send_msg(peer, "❌ Формат: !удалить <название или номер>")
@@ -244,6 +263,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             CONN.commit()
         send_msg(peer, f"✅ Напоминание «{rem['name']}» удалено.")
 
+    # ----- !редактировать -----
     elif cmd == "!редактировать":
         if len(args) < 2:
             send_msg(peer, "❌ Формат: !редактировать <название или номер> <минуты>")
@@ -264,6 +284,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             CONN.commit()
         send_msg(peer, f"✅ Напоминание «{rem['name']}» обновлено. Новый интервал: {minutes} мин.")
 
+    # ----- !отключить -----
     elif cmd == "!отключить":
         if not args:
             with DB_LOCK:
@@ -281,6 +302,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
                 CONN.commit()
             send_msg(peer, f"🔕 Напоминание «{rem['name']}» отключено.")
 
+    # ----- !включить -----
     elif cmd == "!включить":
         if not args:
             now = time.time()
@@ -306,6 +328,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
                 CONN.commit()
             send_msg(peer, f"🔔 Напоминание «{rem['name']}» включено.")
 
+    # ----- !развернуть -----
     elif cmd == "!развернуть":
         if not args:
             send_msg(peer, "❌ Формат: !развернуть <название или номер>")
@@ -315,12 +338,13 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         if not rem:
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
-        send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+        send_msg(peer, f" Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
 
+    # ----- !помощь -----
     elif cmd == "!помощь":
         help_text = (
             "📖 Команды MD BOT:\n\n"
-            "!создать <название> <минуты> — создать напоминание (ответом на сообщение)\n"
+            "!создать <название> <минуты> — создать напоминание (ответом на сообщение с текстом/фото)\n"
             "!список — список всех напоминаний с номерами и статусами\n"
             "!удалить <название или номер> — удалить напоминание\n"
             "!редактировать <название или номер> <минуты> — изменить интервал\n"
@@ -335,10 +359,12 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             "!назначить @игрок — выдать права админа\n"
             "!снять @игрок — снять права админа\n\n"
             "💡 Во всех командах вместо названия можно указывать номер из !список.\n"
+            " Бот сохраняет фото и другие вложения из сообщений!\n"
             "⚠️ Все команды доступны только администраторам."
         )
         send_msg(peer, help_text)
 
+    # ----- !назначить -----
     elif cmd == "!назначить":
         if not owner:
             send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
@@ -360,13 +386,14 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         else:
             send_msg(peer, "ℹ️ Эти игроки уже являются администраторами.")
 
+    # ----- !снять -----
     elif cmd == "!снять":
         if not owner:
-            send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
+            send_msg(peer, " Эту команду может использовать только создатель бота или владелец чата.")
             return
         targets = extract_targets(text, reply_from)
         if not targets:
-            send_msg(peer, "❌ Укажите игрока: !снять @игрок (или ответом на сообщение).")
+            send_msg(peer, " Укажите игрока: !снять @игрок (или ответом на сообщение).")
             return
         chat_owner_id = get_chat_owner(peer)
         removed = []
@@ -384,21 +411,23 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         if protected:
             parts.append("⚠️ Нельзя снять права с создателя или владельца чата.")
         if not parts:
-            parts.append("ℹ️ У этих игроков нет прав админа.")
+            parts.append("️ У этих игроков нет прав админа.")
         send_msg(peer, "\n".join(parts))
 
+    # ----- !админы -----
     elif cmd == "!админы":
         chat_owner_id = get_chat_owner(peer)
-        lines = ["👥 Администраторы:\n"]
+        lines = [" Администраторы:\n"]
         if chat_owner_id:
-            lines.append(f"👑 Владелец чата: {mention(chat_owner_id)}")
-        lines.append(f"👑 Создатель: {mention(CREATOR_ID)}")
+            lines.append(f" Владелец чата: {mention(chat_owner_id)}")
+        lines.append(f" Создатель: {mention(CREATOR_ID)}")
         extras = [uid for uid in get_extra_admins(peer) if uid != chat_owner_id and uid != CREATOR_ID]
         if extras:
             lines.append("🛡 Админы: " + ", ".join(mention(uid) for uid in extras))
         else:
             lines.append("🛡 Админы: отсутствуют")
         send_msg(peer, "\n".join(lines))
+
 
 def timer_loop():
     while True:
@@ -416,14 +445,27 @@ def timer_loop():
                 
                 with DB_LOCK:
                     due = CONN.execute(
-                        "SELECT id, name, text, interval_minutes, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
+                        "SELECT id, name, text, attachments, interval_minutes, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
                         (peer, now)
                     ).fetchall()
                 
                 for rem in due:
                     if rem["enabled"] == 1:
                         msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
-                        send_msg(peer, msg)
+                        
+                        # Отправляем вложения если есть
+                        attachments = rem["attachments"]
+                        if attachments:
+                            try:
+                                attach_list = json.loads(attachments)
+                                # Преобразуем вложения в формат VK API
+                                attach_str = ",".join(f"{att['type']}{att['owner_id']}_{att['id']}" for att in attach_list)
+                                send_msg(peer, msg, attachments=attach_str)
+                            except Exception as e:
+                                print("attachment error:", e)
+                                send_msg(peer, msg)
+                        else:
+                            send_msg(peer, msg)
                     
                     new_trigger = now + rem["interval_minutes"] * 60
                     with DB_LOCK:
@@ -464,8 +506,9 @@ def main():
                     reply = msg.get("reply_message") or {}
                     reply_from = int(reply.get("from_id", 0) or 0) if isinstance(reply, dict) else 0
                     reply_text = (reply.get("text") or "").strip() if isinstance(reply, dict) else ""
-                    if peer > 0 and sender > 0 and txt:
-                        handle_message(peer, sender, txt, reply_from, reply_text)
+                    reply_attachments = reply.get("attachments", []) if isinstance(reply, dict) else []
+                    if peer > 0 and sender > 0:
+                        handle_message(peer, sender, txt, reply_from, reply_text, reply_attachments)
                 except Exception as e:
                     print("message error:", e)
         except Exception as e:
