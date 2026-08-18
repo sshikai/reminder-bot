@@ -7,11 +7,9 @@ import threading
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
-# ===== НАСТРОЙКИ =====
 VK_TOKEN = os.environ.get("VK_TOKEN", "").strip()
-CREATOR_ID = 479753606  # ты — админ в любом чате, снять нельзя
+CREATOR_ID = 479753606
 
-# ===== БАЗА ДАННЫХ =====
 DATA_DIR = "/app/data" if os.path.isdir("/app/data") else os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(DATA_DIR, "bot.db")
 CONN = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
@@ -149,15 +147,7 @@ def norm(s):
     s = s.rstrip(".,;:!?")
     return re.sub(r"\s+", " ", s).strip()
 
-
-# ===== ИЗМЕНЕНО: поиск по порядковому номеру в списке =====
 def find_reminder(peer, arg):
-    """
-    Ищет напоминание по аргументу.
-    Если arg — число, ищет по ПОРЯДКОВОМУ номеру в списке (1, 2, 3...),
-    а не по внутреннему ID базы.
-    Иначе ищет по названию.
-    """
     if not arg:
         return None
     arg = arg.strip()
@@ -177,7 +167,6 @@ def find_reminder(peer, arg):
         ).fetchone()
         return row
 
-
 def handle_message(peer, sender, text, reply_from, reply_text):
     if peer < 2000000000:
         return
@@ -196,7 +185,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
 
     owner = is_owner(sender, peer)
 
-    # ----- !создать -----
     if cmd == "!создать":
         if not reply_text:
             send_msg(peer, "❌ Ответьте на сообщение с текстом напоминания и введите !создать <название> <минуты>")
@@ -220,7 +208,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             except sqlite3.IntegrityError:
                 send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
 
-    # ----- !список (ИЗМЕНЕНО: порядковая нумерация) -----
     elif cmd == "!список":
         with DB_LOCK:
             rows = CONN.execute(
@@ -232,7 +219,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             return
         msg = "📋 Список напоминаний:\n\n"
         now = time.time()
-        for idx, r in enumerate(rows, 1):  # ← порядковый номер с 1
+        for idx, r in enumerate(rows, 1):
             remaining = max(0, r["next_trigger"] - now)
             mins = int(remaining // 60)
             secs = int(remaining % 60)
@@ -243,7 +230,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             msg += f"   Через: {mins} мин {secs} сек\n\n"
         send_msg(peer, msg)
 
-    # ----- !удалить -----
     elif cmd == "!удалить":
         if not args:
             send_msg(peer, "❌ Формат: !удалить <название или номер>")
@@ -258,7 +244,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             CONN.commit()
         send_msg(peer, f"✅ Напоминание «{rem['name']}» удалено.")
 
-    # ----- !редактировать -----
     elif cmd == "!редактировать":
         if len(args) < 2:
             send_msg(peer, "❌ Формат: !редактировать <название или номер> <минуты>")
@@ -279,7 +264,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             CONN.commit()
         send_msg(peer, f"✅ Напоминание «{rem['name']}» обновлено. Новый интервал: {minutes} мин.")
 
-    # ----- !отключить -----
     elif cmd == "!отключить":
         if not args:
             with DB_LOCK:
@@ -297,7 +281,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
                 CONN.commit()
             send_msg(peer, f"🔕 Напоминание «{rem['name']}» отключено.")
 
-    # ----- !включить -----
     elif cmd == "!включить":
         if not args:
             now = time.time()
@@ -323,7 +306,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
                 CONN.commit()
             send_msg(peer, f"🔔 Напоминание «{rem['name']}» включено.")
 
-    # ----- !развернуть -----
     elif cmd == "!развернуть":
         if not args:
             send_msg(peer, "❌ Формат: !развернуть <название или номер>")
@@ -335,7 +317,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             return
         send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
 
-    # ----- !помощь -----
     elif cmd == "!помощь":
         help_text = (
             "📖 Команды MD BOT:\n\n"
@@ -358,7 +339,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         )
         send_msg(peer, help_text)
 
-    # ----- !назначить -----
     elif cmd == "!назначить":
         if not owner:
             send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
@@ -380,7 +360,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         else:
             send_msg(peer, "ℹ️ Эти игроки уже являются администраторами.")
 
-    # ----- !снять -----
     elif cmd == "!снять":
         if not owner:
             send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
@@ -408,7 +387,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             parts.append("ℹ️ У этих игроков нет прав админа.")
         send_msg(peer, "\n".join(parts))
 
-    # ----- !админы -----
     elif cmd == "!админы":
         chat_owner_id = get_chat_owner(peer)
         lines = ["👥 Администраторы:\n"]
@@ -422,36 +400,38 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             lines.append("🛡 Админы: отсутствуют")
         send_msg(peer, "\n".join(lines))
 
-
 def timer_loop():
     while True:
         try:
-            time.sleep(15)
+            time.sleep(10)
             if VK is None:
                 continue
+            
             with DB_LOCK:
                 peers = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
+            
             for p in peers:
                 peer = p["peer_id"]
-                if get_setting(peer, "global_enabled", "1") != "1":
-                    continue
                 now = time.time()
+                
                 with DB_LOCK:
                     due = CONN.execute(
-                        "SELECT id, name, text, interval_minutes FROM reminders WHERE peer_id=? AND enabled=1 AND next_trigger<=?",
+                        "SELECT id, name, text, interval_minutes, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
                         (peer, now)
                     ).fetchall()
+                
                 for rem in due:
-                    msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
-                    send_msg(peer, msg)
+                    if rem["enabled"] == 1:
+                        msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
+                        send_msg(peer, msg)
+                    
                     new_trigger = now + rem["interval_minutes"] * 60
                     with DB_LOCK:
                         CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (new_trigger, rem["id"]))
                         CONN.commit()
         except Exception as e:
             print("timer error:", e)
-            time.sleep(15)
-
+            time.sleep(10)
 
 def main():
     global VK
@@ -491,7 +471,6 @@ def main():
         except Exception as e:
             print("longpoll error:", e)
             time.sleep(5)
-
 
 if __name__ == "__main__":
     main()
