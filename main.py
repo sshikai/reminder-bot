@@ -150,26 +150,27 @@ def norm(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
-# ===== НОВОЕ: поиск напоминания по номеру или названию =====
+# ===== ИЗМЕНЕНО: поиск по порядковому номеру в списке =====
 def find_reminder(peer, arg):
     """
-    Ищет напоминание в чате peer по аргументу arg.
-    Если arg — число, ищет по id.
-    Иначе ищет по названию (точное совпадение).
-    Возвращает sqlite3.Row или None.
+    Ищет напоминание по аргументу.
+    Если arg — число, ищет по ПОРЯДКОВОМУ номеру в списке (1, 2, 3...),
+    а не по внутреннему ID базы.
+    Иначе ищет по названию.
     """
     if not arg:
         return None
     arg = arg.strip()
     with DB_LOCK:
         if arg.isdigit():
-            row = CONN.execute(
-                "SELECT * FROM reminders WHERE peer_id=? AND id=?",
-                (peer, int(arg))
-            ).fetchone()
-            if row:
-                return row
-        # Пробуем по названию
+            num = int(arg)
+            rows = CONN.execute(
+                "SELECT * FROM reminders WHERE peer_id=? ORDER BY id",
+                (peer,)
+            ).fetchall()
+            if 1 <= num <= len(rows):
+                return rows[num - 1]
+            return None
         row = CONN.execute(
             "SELECT * FROM reminders WHERE peer_id=? AND name=?",
             (peer, arg)
@@ -177,7 +178,6 @@ def find_reminder(peer, arg):
         return row
 
 
-# ===== ОБРАБОТКА КОМАНД =====
 def handle_message(peer, sender, text, reply_from, reply_text):
     if peer < 2000000000:
         return
@@ -220,7 +220,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             except sqlite3.IntegrityError:
                 send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
 
-    # ----- !список -----
+    # ----- !список (ИЗМЕНЕНО: порядковая нумерация) -----
     elif cmd == "!список":
         with DB_LOCK:
             rows = CONN.execute(
@@ -232,12 +232,12 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             return
         msg = "📋 Список напоминаний:\n\n"
         now = time.time()
-        for r in rows:
+        for idx, r in enumerate(rows, 1):  # ← порядковый номер с 1
             remaining = max(0, r["next_trigger"] - now)
             mins = int(remaining // 60)
             secs = int(remaining % 60)
             status = "🟢 ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
-            msg += f"#{r['id']} {r['name']}\n"
+            msg += f"#{idx} {r['name']}\n"
             msg += f"   {status}\n"
             msg += f"   Интервал: {r['interval_minutes']} мин.\n"
             msg += f"   Через: {mins} мин {secs} сек\n\n"
@@ -256,7 +256,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         with DB_LOCK:
             CONN.execute("DELETE FROM reminders WHERE id=?", (rem["id"],))
             CONN.commit()
-        send_msg(peer, f"✅ Напоминание #{rem['id']} «{rem['name']}» удалено.")
+        send_msg(peer, f"✅ Напоминание «{rem['name']}» удалено.")
 
     # ----- !редактировать -----
     elif cmd == "!редактировать":
@@ -277,12 +277,11 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             CONN.execute("""UPDATE reminders SET interval_minutes=?, next_trigger=? WHERE id=?""",
                          (minutes, time.time() + minutes * 60, rem["id"]))
             CONN.commit()
-        send_msg(peer, f"✅ Напоминание #{rem['id']} «{rem['name']}» обновлено. Новый интервал: {minutes} мин.")
+        send_msg(peer, f"✅ Напоминание «{rem['name']}» обновлено. Новый интервал: {minutes} мин.")
 
     # ----- !отключить -----
     elif cmd == "!отключить":
         if not args:
-            # Отключаем все
             with DB_LOCK:
                 CONN.execute("UPDATE reminders SET enabled=0 WHERE peer_id=?", (peer,))
                 CONN.commit()
@@ -296,12 +295,11 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             with DB_LOCK:
                 CONN.execute("UPDATE reminders SET enabled=0 WHERE id=?", (rem["id"],))
                 CONN.commit()
-            send_msg(peer, f"🔕 Напоминание #{rem['id']} «{rem['name']}» отключено.")
+            send_msg(peer, f"🔕 Напоминание «{rem['name']}» отключено.")
 
     # ----- !включить -----
     elif cmd == "!включить":
         if not args:
-            # Включаем все
             now = time.time()
             with DB_LOCK:
                 rows = CONN.execute("SELECT id, interval_minutes, next_trigger FROM reminders WHERE peer_id=?", (peer,)).fetchall()
@@ -323,7 +321,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
             with DB_LOCK:
                 CONN.execute("UPDATE reminders SET enabled=1, next_trigger=? WHERE id=?", (new_trigger, rem["id"]))
                 CONN.commit()
-            send_msg(peer, f"🔔 Напоминание #{rem['id']} «{rem['name']}» включено.")
+            send_msg(peer, f"🔔 Напоминание «{rem['name']}» включено.")
 
     # ----- !развернуть -----
     elif cmd == "!развернуть":
@@ -335,7 +333,7 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         if not rem:
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
-        send_msg(peer, f"📝 Текст напоминания #{rem['id']} «{rem['name']}»:\n\n{rem['text']}")
+        send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
 
     # ----- !помощь -----
     elif cmd == "!помощь":
@@ -425,7 +423,6 @@ def handle_message(peer, sender, text, reply_from, reply_text):
         send_msg(peer, "\n".join(lines))
 
 
-# ===== ФОНОВЫЙ ПОТОК НАПОМИНАНИЙ =====
 def timer_loop():
     while True:
         try:
@@ -436,6 +433,8 @@ def timer_loop():
                 peers = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
             for p in peers:
                 peer = p["peer_id"]
+                if get_setting(peer, "global_enabled", "1") != "1":
+                    continue
                 now = time.time()
                 with DB_LOCK:
                     due = CONN.execute(
