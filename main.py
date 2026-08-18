@@ -40,6 +40,16 @@ def init_db():
             key TEXT,
             value TEXT,
             UNIQUE(peer_id, key))""")
+        
+        # ===== МИГРАЦИЯ: добавляем колонку attachments если её нет =====
+        try:
+            cols = [row[1] for row in CONN.execute("PRAGMA table_info(reminders)").fetchall()]
+            if "attachments" not in cols:
+                CONN.execute("ALTER TABLE reminders ADD COLUMN attachments TEXT")
+                print("✅ Миграция: добавлена колонка attachments")
+        except Exception as e:
+            print("migration error:", e)
+        
         CONN.commit()
 
 def get_setting(peer, key, default=""):
@@ -176,9 +186,8 @@ def find_reminder(peer, arg):
         return row
 
 
-# ===== ПРОСТОЕ получение reply-данных напрямую из события =====
+# ===== Получение вложений из reply-сообщения =====
 def parse_reply_attachments(reply_obj):
-    """Преобразует вложения из reply_message в строку для VK API."""
     if not reply_obj or not isinstance(reply_obj, dict):
         return ""
     attachments = reply_obj.get("attachments", []) or []
