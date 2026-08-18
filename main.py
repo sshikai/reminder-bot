@@ -27,6 +27,7 @@ def init_db():
             name TEXT,
             text TEXT,
             attachments TEXT,
+            source_message_id INTEGER DEFAULT 0,
             interval_minutes INTEGER,
             next_trigger REAL,
             enabled INTEGER DEFAULT 1,
@@ -41,12 +42,15 @@ def init_db():
             value TEXT,
             UNIQUE(peer_id, key))""")
         
-        # ===== МИГРАЦИЯ: добавляем колонку attachments если её нет =====
+        # ===== МИГРАЦИЯ: добавляем новые колонки если их нет =====
         try:
             cols = [row[1] for row in CONN.execute("PRAGMA table_info(reminders)").fetchall()]
             if "attachments" not in cols:
                 CONN.execute("ALTER TABLE reminders ADD COLUMN attachments TEXT")
                 print("✅ Миграция: добавлена колонка attachments")
+            if "source_message_id" not in cols:
+                CONN.execute("ALTER TABLE reminders ADD COLUMN source_message_id INTEGER DEFAULT 0")
+                print("✅ Миграция: добавлена колонка source_message_id")
         except Exception as e:
             print("migration error:", e)
         
@@ -112,7 +116,7 @@ def is_owner(sender, peer):
         return True
     return get_chat_owner(peer) == sender
 
-def send_msg(peer, text, attachments=None):
+def send_msg(peer, text, attachments=None, forward_id=None):
     if VK is None or not peer:
         return
     try:
@@ -123,6 +127,8 @@ def send_msg(peer, text, attachments=None):
         }
         if attachments:
             params['attachment'] = attachments
+        if forward_id:
+            params['forward_messages'] = forward_id
         VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
@@ -186,7 +192,7 @@ def find_reminder(peer, arg):
         return row
 
 
-# ===== Получение вложений из reply-сообщения =====
+# ===== Получение вложений из reply-сообщения (для старых напоминаний) =====
 def parse_reply_attachments(reply_obj):
     if not reply_obj or not isinstance(reply_obj, dict):
         return ""
@@ -250,8 +256,10 @@ def handle_message(peer, sender, text, msg_obj):
                 reply = {}
             reply_text = (reply.get("text") or "").strip()
             reply_attachments_str = parse_reply_attachments(reply)
+            # НОВОЕ: получаем ID оригинального сообщения для пересылки
+            source_message_id = int(reply.get("id", 0) or 0)
             
-            if not reply_text and not reply_attachments_str:
+            if not reply_text and not reply_attachments_str and not source_message_id:
                 send_msg(peer, "❌ Ответьте на сообщение с текстом или фото и введите !создать <название> <минуты>")
                 return
             if len(args) < 2:
@@ -266,12 +274,15 @@ def handle_message(peer, sender, text, msg_obj):
             
             with DB_LOCK:
                 try:
-                    CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, interval_minutes, next_trigger) 
-                                    VALUES(?,?,?,?,?,?)""",
-                                 (peer, name, reply_text, reply_attachments_str, minutes, time.time() + minutes * 60))
+                    CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, source_message_id, interval_minutes, next_trigger) 
+                                    VALUES(?,?,?,?,?,?,?)""",
+                                 (peer, name, reply_text, reply_attachments_str, source_message_id, minutes, time.time() + minutes * 60))
                     CONN.commit()
-                    attach_info = " + вложения" if reply_attachments_str else ""
-                    send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.{attach_info}")
+                    if source_message_id:
+                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин. (будет пересылать сообщение)")
+                    else:
+                        attach_info = " + вложения" if reply_attachments_str else ""
+                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.{attach_info}")
                 except sqlite3.IntegrityError:
                     send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
         except Exception as e:
@@ -282,7 +293,7 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "!список":
         with DB_LOCK:
             rows = CONN.execute(
-                "SELECT id, name, interval_minutes, next_trigger, enabled, attachments FROM reminders WHERE peer_id=? ORDER BY id",
+                "SELECT id, name, interval_minutes, next_trigger, enabled, attachments, source_message_id FROM reminders WHERE peer_id=? ORDER BY id",
                 (peer,)
             ).fetchall()
         if not rows:
@@ -295,8 +306,11 @@ def handle_message(peer, sender, text, msg_obj):
             mins = int(remaining // 60)
             secs = int(remaining % 60)
             status = "🟢 ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
-            attach_count = len(r["attachments"].split(",")) if r["attachments"] else 0
-            attach_info = f" + {attach_count} влож." if attach_count else ""
+            if r["source_message_id"]:
+                attach_info = " 📎 пересылка"
+            else:
+                attach_count = len(r["attachments"].split(",")) if r["attachments"] else 0
+                attach_info = f" + {attach_count} влож." if attach_count else ""
             msg += f"#{idx} {r['name']}{attach_info}\n"
             msg += f"   {status}\n"
             msg += f"   Интервал: {r['interval_minutes']} мин.\n"
@@ -393,7 +407,15 @@ def handle_message(peer, sender, text, msg_obj):
         if not rem:
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
-        send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+        # НОВОЕ: если есть source_message_id — пересылаем оригинальное сообщение (без @all)
+        if rem["source_message_id"]:
+            try:
+                send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:", forward_id=rem["source_message_id"])
+            except Exception as e:
+                print("forward error in !развернуть:", e)
+                send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+        else:
+            send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
 
     # ----- !помощь -----
     elif cmd == "!помощь":
@@ -414,7 +436,6 @@ def handle_message(peer, sender, text, msg_obj):
             "!назначить @игрок — выдать права админа\n"
             "!снять @игрок — снять права админа\n\n"
             "💡 Во всех командах вместо названия можно указывать номер из !список.\n"
-            "📎 Бот сохраняет фото и другие вложения из сообщений!\n"
             "⚠️ Все команды доступны только администраторам."
         )
         send_msg(peer, help_text)
@@ -500,15 +521,30 @@ def timer_loop():
                 
                 with DB_LOCK:
                     due = CONN.execute(
-                        "SELECT id, name, text, attachments, interval_minutes, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
+                        "SELECT id, name, text, attachments, source_message_id, interval_minutes, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
                         (peer, now)
                     ).fetchall()
                 
                 for rem in due:
                     if rem["enabled"] == 1:
-                        msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
-                        attachments = rem["attachments"] or ""
-                        send_msg(peer, msg, attachments=attachments if attachments else None)
+                        # НОВОЕ: если есть source_message_id — пересылаем оригинальное сообщение
+                        if rem["source_message_id"]:
+                            try:
+                                VK.messages.send(
+                                    peer_id=peer,
+                                    message=f"🔔 Напоминание: {rem['name']}\n\n@all",
+                                    forward_messages=rem["source_message_id"],
+                                    random_id=random.getrandbits(31)
+                                )
+                            except Exception as e:
+                                print("forward error:", e)
+                                # Fallback: если пересылка не удалась (сообщение удалено) — отправляем текст
+                                msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
+                                send_msg(peer, msg, attachments=rem["attachments"] or None)
+                        else:
+                            # Старая логика для напоминаний, созданных до обновления
+                            msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
+                            send_msg(peer, msg, attachments=rem["attachments"] or None)
                     
                     new_trigger = now + rem["interval_minutes"] * 60
                     with DB_LOCK:
