@@ -176,7 +176,73 @@ def find_reminder(peer, arg):
         ).fetchone()
         return row
 
-def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments):
+
+# ===== НОВОЕ: надёжное получение reply через API =====
+def get_reply_info(msg_obj):
+    """
+    Получает информацию о reply-сообщении.
+    Сначала смотрит в событии, если нет — делает API-запрос.
+    Возвращает (reply_from, reply_text, reply_attachments_list)
+    """
+    reply = msg_obj.get("reply_message") or {}
+    if not isinstance(reply, dict):
+        reply = {}
+    
+    reply_from = int(reply.get("from_id", 0) or 0)
+    reply_text = (reply.get("text") or "").strip()
+    reply_attachments = reply.get("attachments", []) or []
+    
+    # Если reply_from есть, но текста нет — пробуем получить через API
+    if reply_from > 0 and not reply_text and not reply_attachments:
+        try:
+            reply_id = reply.get("id", 0)
+            reply_peer = reply.get("peer_id", 0) or msg_obj.get("peer_id", 0)
+            if reply_id > 0:
+                result = VK.messages.getById(message_ids=reply_id)
+                items = result.get("items", [])
+                if items:
+                    m = items[0]
+                    reply_text = (m.get("text") or "").strip()
+                    reply_attachments = m.get("attachments", []) or []
+        except Exception as e:
+            print("reply api error:", e)
+    
+    # Преобразуем вложения в простой формат
+    attach_list = []
+    for att in reply_attachments:
+        try:
+            att_type = att.get("type", "")
+            if att_type == "photo":
+                ph = att.get("photo", {})
+                owner_id = ph.get("owner_id", 0)
+                photo_id = ph.get("id", 0)
+                if owner_id and photo_id:
+                    attach_list.append(f"photo{owner_id}_{photo_id}")
+            elif att_type == "doc":
+                d = att.get("doc", {})
+                owner_id = d.get("owner_id", 0)
+                doc_id = d.get("id", 0)
+                if owner_id and doc_id:
+                    attach_list.append(f"doc{owner_id}_{doc_id}")
+            elif att_type == "video":
+                v = att.get("video", {})
+                owner_id = v.get("owner_id", 0)
+                video_id = v.get("id", 0)
+                if owner_id and video_id:
+                    attach_list.append(f"video{owner_id}_{video_id}")
+            elif att_type == "audio":
+                a = att.get("audio", {})
+                owner_id = a.get("owner_id", 0)
+                audio_id = a.get("id", 0)
+                if owner_id and audio_id:
+                    attach_list.append(f"audio{owner_id}_{audio_id}")
+        except Exception as e:
+            print("attach parse error:", e)
+    
+    return reply_from, reply_text, attach_list
+
+
+def handle_message(peer, sender, text, msg_obj):
     if peer < 2000000000:
         return
 
@@ -196,8 +262,10 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
 
     # ----- !создать -----
     if cmd == "!создать":
+        reply_from, reply_text, reply_attachments = get_reply_info(msg_obj)
+        
         if not reply_text and not reply_attachments:
-            send_msg(peer, "❌ Ответьте на сообщение с текстом или вложением и введите !создать <название> <минуты>")
+            send_msg(peer, "❌ Ответьте на сообщение с текстом или фото и введите !создать <название> <минуты>")
             return
         if len(args) < 2:
             send_msg(peer, "❌ Формат: !создать <название> <минуты>")
@@ -209,14 +277,13 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
             send_msg(peer, "❌ Минуты должны быть числом.")
             return
         
-        # Сохраняем вложения как JSON
-        attachments_json = json.dumps(reply_attachments) if reply_attachments else ""
+        attachments_str = ",".join(reply_attachments) if reply_attachments else ""
         
         with DB_LOCK:
             try:
                 CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, interval_minutes, next_trigger) 
                                 VALUES(?,?,?,?,?,?)""",
-                             (peer, name, reply_text, attachments_json, minutes, time.time() + minutes * 60))
+                             (peer, name, reply_text, attachments_str, minutes, time.time() + minutes * 60))
                 CONN.commit()
                 attach_info = f" + {len(reply_attachments)} влож." if reply_attachments else ""
                 send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.{attach_info}")
@@ -233,14 +300,14 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
         if not rows:
             send_msg(peer, "📭 Список напоминаний пуст.")
             return
-        msg = " Список напоминаний:\n\n"
+        msg = "📋 Список напоминаний:\n\n"
         now = time.time()
-        for r in rows:
+        for idx, r in enumerate(rows, 1):
             remaining = max(0, r["next_trigger"] - now)
             mins = int(remaining // 60)
             secs = int(remaining % 60)
-            status = " ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
-            attach_count = len(json.loads(r["attachments"])) if r["attachments"] else 0
+            status = "🟢 ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
+            attach_count = len(r["attachments"].split(",")) if r["attachments"] else 0
             attach_info = f" + {attach_count} влож." if attach_count else ""
             msg += f"#{idx} {r['name']}{attach_info}\n"
             msg += f"   {status}\n"
@@ -338,7 +405,7 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
         if not rem:
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
-        send_msg(peer, f" Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+        send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
 
     # ----- !помощь -----
     elif cmd == "!помощь":
@@ -359,7 +426,7 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
             "!назначить @игрок — выдать права админа\n"
             "!снять @игрок — снять права админа\n\n"
             "💡 Во всех командах вместо названия можно указывать номер из !список.\n"
-            " Бот сохраняет фото и другие вложения из сообщений!\n"
+            "📎 Бот сохраняет фото и другие вложения из сообщений!\n"
             "⚠️ Все команды доступны только администраторам."
         )
         send_msg(peer, help_text)
@@ -369,9 +436,9 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
         if not owner:
             send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
             return
-        targets = extract_targets(text, reply_from)
+        targets = extract_targets(text, None)
         if not targets:
-            send_msg(peer, "❌ Укажите игрока: !назначить @игрок (или ответом на сообщение).")
+            send_msg(peer, "❌ Укажите игрока: !назначить @игрок")
             return
         chat_owner_id = get_chat_owner(peer)
         added = []
@@ -389,11 +456,11 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
     # ----- !снять -----
     elif cmd == "!снять":
         if not owner:
-            send_msg(peer, " Эту команду может использовать только создатель бота или владелец чата.")
+            send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
             return
-        targets = extract_targets(text, reply_from)
+        targets = extract_targets(text, None)
         if not targets:
-            send_msg(peer, " Укажите игрока: !снять @игрок (или ответом на сообщение).")
+            send_msg(peer, "❌ Укажите игрока: !снять @игрок")
             return
         chat_owner_id = get_chat_owner(peer)
         removed = []
@@ -411,16 +478,16 @@ def handle_message(peer, sender, text, reply_from, reply_text, reply_attachments
         if protected:
             parts.append("⚠️ Нельзя снять права с создателя или владельца чата.")
         if not parts:
-            parts.append("️ У этих игроков нет прав админа.")
+            parts.append("ℹ️ У этих игроков нет прав админа.")
         send_msg(peer, "\n".join(parts))
 
     # ----- !админы -----
     elif cmd == "!админы":
         chat_owner_id = get_chat_owner(peer)
-        lines = [" Администраторы:\n"]
+        lines = ["👥 Администраторы:\n"]
         if chat_owner_id:
-            lines.append(f" Владелец чата: {mention(chat_owner_id)}")
-        lines.append(f" Создатель: {mention(CREATOR_ID)}")
+            lines.append(f"👑 Владелец чата: {mention(chat_owner_id)}")
+        lines.append(f"👑 Создатель: {mention(CREATOR_ID)}")
         extras = [uid for uid in get_extra_admins(peer) if uid != chat_owner_id and uid != CREATOR_ID]
         if extras:
             lines.append("🛡 Админы: " + ", ".join(mention(uid) for uid in extras))
@@ -452,20 +519,8 @@ def timer_loop():
                 for rem in due:
                     if rem["enabled"] == 1:
                         msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
-                        
-                        # Отправляем вложения если есть
-                        attachments = rem["attachments"]
-                        if attachments:
-                            try:
-                                attach_list = json.loads(attachments)
-                                # Преобразуем вложения в формат VK API
-                                attach_str = ",".join(f"{att['type']}{att['owner_id']}_{att['id']}" for att in attach_list)
-                                send_msg(peer, msg, attachments=attach_str)
-                            except Exception as e:
-                                print("attachment error:", e)
-                                send_msg(peer, msg)
-                        else:
-                            send_msg(peer, msg)
+                        attachments = rem["attachments"] or ""
+                        send_msg(peer, msg, attachments=attachments if attachments else None)
                     
                     new_trigger = now + rem["interval_minutes"] * 60
                     with DB_LOCK:
@@ -474,6 +529,7 @@ def timer_loop():
         except Exception as e:
             print("timer error:", e)
             time.sleep(10)
+
 
 def main():
     global VK
@@ -503,17 +559,14 @@ def main():
                     peer = int(msg.get("peer_id", 0) or 0)
                     sender = int(msg.get("from_id", 0) or 0)
                     txt = (msg.get("text") or "").strip()
-                    reply = msg.get("reply_message") or {}
-                    reply_from = int(reply.get("from_id", 0) or 0) if isinstance(reply, dict) else 0
-                    reply_text = (reply.get("text") or "").strip() if isinstance(reply, dict) else ""
-                    reply_attachments = reply.get("attachments", []) if isinstance(reply, dict) else []
-                    if peer > 0 and sender > 0:
-                        handle_message(peer, sender, txt, reply_from, reply_text, reply_attachments)
+                    if peer > 0 and sender > 0 and txt:
+                        handle_message(peer, sender, txt, msg)
                 except Exception as e:
                     print("message error:", e)
         except Exception as e:
             print("longpoll error:", e)
             time.sleep(5)
+
 
 if __name__ == "__main__":
     main()
