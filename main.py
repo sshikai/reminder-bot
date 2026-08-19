@@ -5,6 +5,7 @@ import random
 import sqlite3
 import threading
 import json
+import datetime
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
@@ -22,7 +23,7 @@ OWNER_CACHE = {}
 MEMBER_CACHE = {}
 LAST_MEMBER_UPDATE = {}
 
-DEFAULT_BIRTHDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!"
+DEFAULT_BIRTHDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!🎂"
 
 def init_db():
     with DB_LOCK:
@@ -102,7 +103,6 @@ def remove_extra_admin(peer, user_id):
         CONN.commit()
 
 def get_chat_owner(peer, force_refresh=False):
-    """Получает владельца беседы двумя способами."""
     if VK is None:
         return 0
     if not force_refresh and peer in OWNER_CACHE:
@@ -110,30 +110,44 @@ def get_chat_owner(peer, force_refresh=False):
     
     oid = 0
     
-    # Способ 1: через getConversationsById
+    # Способ 1: через getConversationsById (проверяем все возможные места)
     try:
         result = VK.messages.getConversationsById(peer_ids=peer)
         items = result.get("items", [])
         if items:
             conv = items[0].get("conversation", {})
-            chat_settings = conv.get("chat_settings", {})
-            oid = int(chat_settings.get("owner_id", 0) or 0)
+            oid = conv.get("owner_id", 0)
+            if not oid:
+                chat_settings = conv.get("chat_settings", {})
+                oid = chat_settings.get("owner_id", 0)
+            print(f"DEBUG owner method 1: found oid={oid}")
     except Exception as e:
         print("owner method 1 error:", e)
     
-    # Способ 2: через участников (если первый не сработал)
+    # Способ 2: через getConversationMembers (если первый не сработал)
     if oid == 0:
         try:
-            members = VK.messages.getConversationMembers(peer_id=peer)
-            for profile in members.get("profiles", []):
-                if profile.get("is_owner"):
-                    oid = int(profile.get("id", 0))
+            members_resp = VK.messages.getConversationMembers(peer_id=peer)
+            # Ищем в items (там есть member_id и флаг is_owner)
+            for item in members_resp.get("items", []):
+                if item.get("is_owner"):
+                    oid = int(item.get("member_id", 0))
+                    print(f"DEBUG owner method 2 (items): found oid={oid}")
                     break
+            # Если нет, ищем в profiles (иногда VK кладет is_owner туда)
+            if oid == 0:
+                for profile in members_resp.get("profiles", []):
+                    if profile.get("is_owner"):
+                        oid = int(profile.get("id", 0))
+                        print(f"DEBUG owner method 2 (profiles): found oid={oid}")
+                        break
         except Exception as e:
             print("owner method 2 error:", e)
     
     if oid > 0:
         OWNER_CACHE[peer] = oid
+    else:
+        print(f"WARNING: Could not find owner for peer {peer}. Bot might not be admin or API changed.")
     return oid
 
 def is_admin(sender, peer):
@@ -267,48 +281,61 @@ def parse_reply_attachments(reply_obj):
             print("attach parse error:", e)
     return ",".join(parts)
 
-# ===== ДНИ РОЖДЕНИЯ С ОПТИМИЗАЦИЕЙ =====
-def get_birthday_from_vk(user_id):
-    try:
-        r = VK.users.get(user_ids=user_id, fields="bdate")
-        if r and len(r) > 0:
-            bdate = r[0].get("bdate", "")
-            if bdate:
-                return bdate
-    except Exception as e:
-        print("get bdate error:", e)
-    return None
-
+# ===== ДНИ РОЖДЕНИЯ (ОПТИМИЗИРОВАНО) =====
 def update_birthdays(peer):
-    """Оптимизировано: кэширование участников на 5 минут"""
+    """Оптимизировано: пакетная загрузка дат рождения, чтобы VK не блокировал запросы"""
     now = time.time()
+    
+    # 1. Получаем список участников (кэшируем на 5 минут)
     if peer in MEMBER_CACHE and (now - LAST_MEMBER_UPDATE.get(peer, 0)) < 300:
-        members = MEMBER_CACHE[peer]
+        profiles = MEMBER_CACHE[peer]
     else:
         try:
-            members = VK.messages.getConversationMembers(peer_id=peer)["profiles"]
-            MEMBER_CACHE[peer] = members
+            members_resp = VK.messages.getConversationMembers(peer_id=peer)
+            profiles = members_resp.get("profiles", [])
+            MEMBER_CACHE[peer] = profiles
             LAST_MEMBER_UPDATE[peer] = now
         except Exception as e:
-            print("get members error:", e)
+            print(f"ERROR getting members for {peer}: {e}")
             return
     
-    for member in members:
-        user_id = int(member.get("id", 0))
+    # 2. Собираем ID тех, у кого дата рождения устарела или отсутствует
+    users_to_check = []
+    for profile in profiles:
+        user_id = int(profile.get("id", 0))
         if user_id <= 0:
             continue
         
         with DB_LOCK:
             row = CONN.execute("SELECT updated_at FROM birthdays WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
+            # Обновляем раз в 7 дней
             if row and (now - row["updated_at"]) < 7 * 24 * 3600:
                 continue
         
-        bdate = get_birthday_from_vk(user_id)
-        if bdate:
-            with DB_LOCK:
-                CONN.execute("INSERT OR REPLACE INTO birthdays(user_id, peer_id, bdate, updated_at) VALUES(?,?,?,?)",
-                             (user_id, peer, bdate, int(now)))
-                CONN.commit()
+        users_to_check.append(user_id)
+    
+    if not users_to_check:
+        return
+
+    # 3. Запрашиваем даты рождения ПАКЕТОМ (до 500 человек за раз). Это не вызывает бан от VK!
+    try:
+        for i in range(0, len(users_to_check), 500):
+            chunk = users_to_check[i:i+500]
+            r = VK.users.get(user_ids=",".join(map(str, chunk)), fields="bdate")
+            if r:
+                for user_data in r:
+                    uid = user_data.get("id")
+                    bdate = user_data.get("bdate", "")
+                    if bdate:
+                        with DB_LOCK:
+                            CONN.execute(
+                                "INSERT OR REPLACE INTO birthdays(user_id, peer_id, bdate, updated_at) VALUES(?,?,?,?)",
+                                (uid, peer, bdate, int(now))
+                            )
+                        CONN.commit()
+                        print(f"DEBUG: Saved birthday for {uid}: {bdate}")
+    except Exception as e:
+        print(f"ERROR fetching birthdays in batch: {e}")
 
 def parse_bdate(bdate_str):
     parts = bdate_str.split(".")
@@ -347,7 +374,6 @@ def is_birthday_today(bdate_str):
     return today.tm_mday == parsed[0] and today.tm_mon == parsed[1]
 
 def build_birthday_page(peer, page=1):
-    """Возвращает (текст, кнопки) с callback-кнопками"""
     update_birthdays(peer)
     
     with DB_LOCK:
@@ -356,7 +382,7 @@ def build_birthday_page(peer, page=1):
             (peer,)).fetchall()]
     
     if not rows:
-        return "🎂 Дни рождения не найдены.", []
+        return "🎂 Дни рождения не найдены (у участников скрыты даты или бот не успел их загрузить).", []
     
     birthday_list = []
     for r in rows:
@@ -393,13 +419,12 @@ def build_birthday_page(peer, page=1):
     
     text = "\n".join(lines)
     
-    # Callback-кнопки (не отправляют текст в чат!)
     buttons = []
     if page > 1:
         buttons.append({
             "action": {
                 "type": "callback",
-                "label": "️Назад",
+                "label": "⬅️Назад",
                 "payload": json.dumps({"cmd": "bday_prev", "page": page - 1})
             },
             "color": "secondary"
@@ -417,7 +442,6 @@ def build_birthday_page(peer, page=1):
     return text, buttons
 
 def handle_birthday_button(event):
-    """Обработка нажатия callback-кнопок"""
     try:
         obj = event.obj
         if not isinstance(obj, dict):
@@ -451,7 +475,6 @@ def handle_birthday_button(event):
         page = int(payload.get("page", 1))
         text, buttons = build_birthday_page(peer_id, page)
         
-        # Получаем глобальный message_id
         global_msg_id = 0
         try:
             r = VK.messages.getById(
@@ -594,7 +617,7 @@ def handle_message(peer, sender, text, msg_obj):
                         attach_info = " + вложения" if reply_attachments_str else ""
                         send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин{repeat_info}{attach_info}")
                 except sqlite3.IntegrityError:
-                    send_msg(peer, f" Напоминание «{name}» уже существует.")
+                    send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
         except Exception as e:
             print("create error:", e)
             send_msg(peer, f"❌ Ошибка при создании напоминания: {e}")
@@ -608,7 +631,7 @@ def handle_message(peer, sender, text, msg_obj):
         if not rows:
             send_msg(peer, "📭 Список напоминаний пуст.")
             return
-        msg = " Список напоминаний:\n\n"
+        msg = "📋 Список напоминаний:\n\n"
         now = time.time()
         for idx, r in enumerate(rows, 1):
             remaining = max(0, r["next_trigger"] - now)
@@ -616,7 +639,7 @@ def handle_message(peer, sender, text, msg_obj):
             secs = int(remaining % 60)
             status = "🟢 ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
             if r["source_message_id"]:
-                attach_info = "  пересылка"
+                attach_info = " 📎 пересылка"
             else:
                 attach_count = len(r["attachments"].split(",")) if r["attachments"] else 0
                 attach_info = f" + {attach_count} влож." if attach_count else ""
@@ -724,11 +747,11 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
         if rem["source_message_id"]:
-            success = forward_msg(peer, f" Текст напоминания «{rem['name']}»:", rem["source_message_id"])
+            success = forward_msg(peer, f"📝 Текст напоминания «{rem['name']}»:", rem["source_message_id"])
             if not success:
-                send_msg(peer, f" Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+                send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
         else:
-            send_msg(peer, f" Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+            send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
 
     elif cmd == "!помощь":
         help_text = (
@@ -839,7 +862,7 @@ def handle_message(peer, sender, text, msg_obj):
         if protected:
             parts.append("⚠️ Нельзя снять права с создателя или владельца чата.")
         if not parts:
-            parts.append("️ У этих игроков нет прав админа.")
+            parts.append("ℹ️ У этих игроков нет прав админа.")
         send_msg(peer, "\n".join(parts))
 
     elif cmd == "!админы":
@@ -851,7 +874,7 @@ def handle_message(peer, sender, text, msg_obj):
             lines.append("👑 Владелец: не определён")
         extras = [uid for uid in get_extra_admins(peer) if uid != chat_owner_id and uid != CREATOR_ID]
         if extras:
-            lines.append(" Админы: " + ", ".join(mention(uid) for uid in extras))
+            lines.append("🛡 Админы: " + ", ".join(mention(uid) for uid in extras))
         else:
             lines.append("🛡 Админы: отсутствуют")
         lines.append(f"👑 chatbot creator: {mention(CREATOR_ID)}")
@@ -939,7 +962,6 @@ def main():
             print("MD BOT started, group id:", group_id)
 
             for event in longpoll.listen():
-                # Обработка нажатий callback-кнопок
                 if event.type == VkBotEventType.MESSAGE_EVENT:
                     handle_birthday_button(event)
                     continue
