@@ -5,7 +5,6 @@ import random
 import sqlite3
 import threading
 import json
-import datetime
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
@@ -23,7 +22,7 @@ OWNER_CACHE = {}
 MEMBER_CACHE = {}
 LAST_MEMBER_UPDATE = {}
 
-DEFAULT_BIRTHDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!🎂"
+DEFAULT_BIRTHDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!"
 
 def init_db():
     with DB_LOCK:
@@ -103,6 +102,7 @@ def remove_extra_admin(peer, user_id):
         CONN.commit()
 
 def get_chat_owner(peer, force_refresh=False):
+    """Получает владельца беседы двумя способами."""
     if VK is None:
         return 0
     if not force_refresh and peer in OWNER_CACHE:
@@ -121,7 +121,7 @@ def get_chat_owner(peer, force_refresh=False):
     except Exception as e:
         print("owner method 1 error:", e)
     
-    # Способ 2: через участников (fallback)
+    # Способ 2: через участников (если первый не сработал)
     if oid == 0:
         try:
             members = VK.messages.getConversationMembers(peer_id=peer)
@@ -155,7 +155,7 @@ def is_owner(sender, peer):
         return True
     return get_chat_owner(peer) == sender
 
-def send_msg(peer, text, attachments=None):
+def send_msg(peer, text, attachments=None, keyboard=None):
     if VK is None or not peer:
         return
     try:
@@ -166,6 +166,8 @@ def send_msg(peer, text, attachments=None):
         }
         if attachments:
             params['attachment'] = attachments
+        if keyboard:
+            params['keyboard'] = json.dumps(keyboard)
         VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
@@ -354,7 +356,7 @@ def build_birthday_page(peer, page=1):
             (peer,)).fetchall()]
     
     if not rows:
-        return " Дни рождения не найдены.", []
+        return "🎂 Дни рождения не найдены.", []
     
     birthday_list = []
     for r in rows:
@@ -363,7 +365,7 @@ def build_birthday_page(peer, page=1):
             birthday_list.append((r["user_id"], days))
     
     if not birthday_list:
-        return " Дни рождения не найдены.", []
+        return "🎂 Дни рождения не найдены.", []
     
     birthday_list.sort(key=lambda x: x[1])
     
@@ -397,7 +399,7 @@ def build_birthday_page(peer, page=1):
         buttons.append({
             "action": {
                 "type": "callback",
-                "label": "⬅️Назад",
+                "label": "️Назад",
                 "payload": json.dumps({"cmd": "bday_prev", "page": page - 1})
             },
             "color": "secondary"
@@ -442,7 +444,7 @@ def handle_birthday_button(event):
                 event_id=obj.get("event_id"),
                 user_id=user_id,
                 peer_id=peer_id,
-                event_data=json.dumps({"type": "show_snackbar", "text": " Только для админов"})
+                event_data=json.dumps({"type": "show_snackbar", "text": "🚫 Только для админов"})
             )
             return
         
@@ -592,7 +594,7 @@ def handle_message(peer, sender, text, msg_obj):
                         attach_info = " + вложения" if reply_attachments_str else ""
                         send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин{repeat_info}{attach_info}")
                 except sqlite3.IntegrityError:
-                    send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
+                    send_msg(peer, f" Напоминание «{name}» уже существует.")
         except Exception as e:
             print("create error:", e)
             send_msg(peer, f"❌ Ошибка при создании напоминания: {e}")
@@ -604,9 +606,9 @@ def handle_message(peer, sender, text, msg_obj):
                 (peer,)
             ).fetchall()
         if not rows:
-            send_msg(peer, " Список напоминаний пуст.")
+            send_msg(peer, "📭 Список напоминаний пуст.")
             return
-        msg = "📋 Список напоминаний:\n\n"
+        msg = " Список напоминаний:\n\n"
         now = time.time()
         for idx, r in enumerate(rows, 1):
             remaining = max(0, r["next_trigger"] - now)
@@ -614,7 +616,7 @@ def handle_message(peer, sender, text, msg_obj):
             secs = int(remaining % 60)
             status = "🟢 ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
             if r["source_message_id"]:
-                attach_info = " 📎 пересылка"
+                attach_info = "  пересылка"
             else:
                 attach_count = len(r["attachments"].split(",")) if r["attachments"] else 0
                 attach_info = f" + {attach_count} влож." if attach_count else ""
@@ -627,7 +629,7 @@ def handle_message(peer, sender, text, msg_obj):
 
     elif cmd == "!удалить":
         if not args:
-            send_msg(peer, " Формат: !удалить <название или номер>")
+            send_msg(peer, "❌ Формат: !удалить <название или номер>")
             return
         arg = " ".join(args)
         rem = find_reminder(peer, arg)
@@ -722,15 +724,15 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
         if rem["source_message_id"]:
-            success = forward_msg(peer, f"📝 Текст напоминания «{rem['name']}»:", rem["source_message_id"])
+            success = forward_msg(peer, f" Текст напоминания «{rem['name']}»:", rem["source_message_id"])
             if not success:
-                send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+                send_msg(peer, f" Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
         else:
-            send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
+            send_msg(peer, f" Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
 
     elif cmd == "!помощь":
         help_text = (
-            " Команды MD BOT:\n\n"
+            "📖 Команды MD BOT:\n\n"
             "!создать <название> <минуты> [количество] — создать напоминание (ответом на сообщение)\n"
             "!список — список всех напоминаний с номерами и статусами\n"
             "!удалить <название или номер> — удалить напоминание\n"
@@ -750,8 +752,8 @@ def handle_message(peer, sender, text, msg_obj):
             "!текст_др — установить/посмотреть текст поздравления с ДР\n\n"
             "💡 Во всех командах вместо названия можно указывать номер из !список.\n"
             "📎 Бот пересылает оригинальное сообщение (сохраняет фото и вложения)!\n"
-            " Параметр 'количество' указывает, сколько раз отправить напоминание за раз.\n"
-            "️ Все команды доступны только администраторам."
+            "🔁 Параметр 'количество' указывает, сколько раз отправить напоминание за раз.\n"
+            "⚠️ Все команды доступны только администраторам."
         )
         send_msg(peer, help_text)
 
@@ -837,7 +839,7 @@ def handle_message(peer, sender, text, msg_obj):
         if protected:
             parts.append("⚠️ Нельзя снять права с создателя или владельца чата.")
         if not parts:
-            parts.append("ℹ️ У этих игроков нет прав админа.")
+            parts.append("️ У этих игроков нет прав админа.")
         send_msg(peer, "\n".join(parts))
 
     elif cmd == "!админы":
@@ -849,7 +851,7 @@ def handle_message(peer, sender, text, msg_obj):
             lines.append("👑 Владелец: не определён")
         extras = [uid for uid in get_extra_admins(peer) if uid != chat_owner_id and uid != CREATOR_ID]
         if extras:
-            lines.append("🛡 Админы: " + ", ".join(mention(uid) for uid in extras))
+            lines.append(" Админы: " + ", ".join(mention(uid) for uid in extras))
         else:
             lines.append("🛡 Админы: отсутствуют")
         lines.append(f"👑 chatbot creator: {mention(CREATOR_ID)}")
