@@ -150,7 +150,7 @@ def is_owner(sender, peer):
         return True
     return get_chat_owner(peer) == sender
 
-def send_msg(peer, text, attachments=None, keyboard=None):
+def send_msg(peer, text, attachments=None):
     if VK is None or not peer:
         return
     try:
@@ -161,8 +161,6 @@ def send_msg(peer, text, attachments=None, keyboard=None):
         }
         if attachments:
             params['attachment'] = attachments
-        if keyboard:
-            params['keyboard'] = json.dumps(keyboard)
         VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
@@ -373,9 +371,9 @@ def is_birthday_today(bdate_str):
     return today.tm_mday == day and today.tm_mon == month
 
 
-# ===== ИЗМЕНЕНО: формирует текст и inline-кнопки для ДР =====
+# ===== Формирует текст страницы и список кнопок =====
 def build_birthday_page(peer, page=1):
-    """Возвращает (текст, список_кнопок). Даты убраны — только имя и сколько дней."""
+    """Возвращает (текст, кнопки). Только имя + сколько дней осталось."""
     update_birthdays(peer)
     
     with DB_LOCK:
@@ -391,6 +389,9 @@ def build_birthday_page(peer, page=1):
         days = days_until_birthday(r["bdate"])
         if days is not None:
             birthday_list.append((r["user_id"], days))
+    
+    if not birthday_list:
+        return "🎂 Дни рождения не найдены.", []
     
     birthday_list.sort(key=lambda x: x[1])
     
@@ -420,7 +421,7 @@ def build_birthday_page(peer, page=1):
     
     text = "\n".join(lines)
     
-    # Inline-кнопки: Назад слева, Вперёд справа
+    # Inline-кнопки
     buttons = []
     if page > 1:
         buttons.append({
@@ -444,56 +445,103 @@ def build_birthday_page(peer, page=1):
     return text, buttons
 
 
-# ===== НОВОЕ: отправка или редактирование сообщения со списком ДР =====
-def send_or_edit_birthday(peer, page, edit_msg_id=None):
-    """
-    Если edit_msg_id=None — отправляет новое сообщение.
-    Если edit_msg_id указан — редактирует существующее на месте.
-    """
-    text, buttons = build_birthday_page(peer, page)
-    
-    # Формируем inline-клавиатуру
-    if buttons:
-        keyboard = {"inline": True, "buttons": [buttons]}
-    else:
-        keyboard = {"inline": True, "buttons": [[]]}  # пустая клавиатура
-    
-    if edit_msg_id:
-        # Редактируем существующее сообщение
-        try:
-            params = {
-                "peer_id": peer,
-                "message_id": edit_msg_id,
-                "message": text,
-                "keyboard": json.dumps(keyboard)
-            }
-            VK.messages.edit(**params)
-            return edit_msg_id
-        except Exception as e:
-            print("edit error:", e)
-            # Fallback: если редактирование не удалось — отправляем новое
-            try:
-                return VK.messages.send(
-                    peer_id=peer,
-                    message=text,
-                    keyboard=json.dumps(keyboard),
-                    random_id=random.getrandbits(31)
-                )
-            except Exception as e2:
-                print("send fallback error:", e2)
-                return None
-    else:
-        # Отправляем новое сообщение
-        try:
-            return VK.messages.send(
+# ===== Отправка нового сообщения со списком ДР =====
+def send_birthday(peer, page=1):
+    try:
+        text, buttons = build_birthday_page(peer, page)
+        if buttons:
+            keyboard = {"inline": True, "buttons": [buttons]}
+            VK.messages.send(
                 peer_id=peer,
                 message=text,
                 keyboard=json.dumps(keyboard),
                 random_id=random.getrandbits(31)
             )
+        else:
+            send_msg(peer, text)
+    except Exception as e:
+        print("send birthday error:", e)
+        # Fallback: отправляем без кнопок
+        try:
+            text, _ = build_birthday_page(peer, page)
+            send_msg(peer, text)
+        except Exception as e2:
+            print("birthday fallback error:", e2)
+            send_msg(peer, f"❌ Ошибка при показе дней рождения: {e2}")
+
+
+# ===== НОВОЕ: обработка нажатий inline-кнопок =====
+def handle_event(event):
+    """Обрабатывает нажатия inline-кнопок (MESSAGE_EVENT)."""
+    try:
+        obj = event.obj
+        if not isinstance(obj, dict):
+            return
+        
+        peer = int(obj.get("peer_id", 0) or 0)
+        user_id = int(obj.get("user_id", 0) or 0)
+        conv_msg_id = int(obj.get("conversation_message_id", 0) or 0)
+        
+        event_data = obj.get("event_data", {}) or {}
+        payload = event_data.get("payload", {})
+        
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except:
+                return
+        
+        if not isinstance(payload, dict):
+            return
+        
+        cmd = payload.get("cmd", "")
+        if cmd not in ("bday_next", "bday_prev"):
+            return
+        
+        if peer < 2000000000:
+            return
+        
+        if not is_admin(user_id, peer):
+            return
+        
+        page = int(payload.get("page", 1))
+        
+        # Получаем глобальный message_id из conversation_message_id
+        global_msg_id = 0
+        try:
+            r = VK.messages.getById(
+                peer_id=peer,
+                conversation_message_ids=[conv_msg_id]
+            )
+            items = r.get("items", [])
+            if items:
+                global_msg_id = int(items[0].get("id", 0))
         except Exception as e:
-            print("send birthday error:", e)
-            return None
+            print("getById error:", e)
+        
+        if not global_msg_id:
+            return
+        
+        # Формируем новую страницу
+        text, buttons = build_birthday_page(peer, page)
+        
+        if buttons:
+            keyboard = {"inline": True, "buttons": [buttons]}
+        else:
+            keyboard = {"inline": True, "buttons": []}
+        
+        # Редактируем сообщение на месте
+        try:
+            VK.messages.edit(
+                peer_id=peer,
+                message_id=global_msg_id,
+                message=text,
+                keyboard=json.dumps(keyboard)
+            )
+        except Exception as e:
+            print("edit error:", e)
+    except Exception as e:
+        print("event handler error:", e)
 
 
 def get_birthday_text(peer):
@@ -550,28 +598,6 @@ def check_birthdays(peer):
 def handle_message(peer, sender, text, msg_obj):
     if peer < 2000000000:
         return
-
-    # ===== Обработка нажатий inline-кнопок =====
-    payload_raw = msg_obj.get("payload")
-    if payload_raw:
-        try:
-            if isinstance(payload_raw, str):
-                payload = json.loads(payload_raw)
-            else:
-                payload = payload_raw
-            
-            if payload.get("cmd") in ("bday_next", "bday_prev"):
-                if not is_admin(sender, peer):
-                    send_msg(peer, "⛔ Эта команда доступна только администраторам.")
-                    return
-                page = int(payload.get("page", 1))
-                # Получаем conversation_message_id сообщения, в котором нажали кнопку
-                conv_msg_id = msg_obj.get("conversation_message_id")
-                # Редактируем сообщение на месте
-                send_or_edit_birthday(peer, page, edit_msg_id=conv_msg_id)
-                return
-        except Exception as e:
-            print("payload error:", e)
 
     first = norm(text.split("\n")[0])
     if not first or not first.startswith("!"):
@@ -785,7 +811,7 @@ def handle_message(peer, sender, text, msg_obj):
             "!включить — включить все напоминания\n"
             "!включить <название или номер> — включить одно напоминание\n"
             "!развернуть <название или номер> — показать текст напоминания\n"
-            "!др — дни рождения участников\n"
+            "!др — дни рождения участников (кнопки листают страницы)\n"
             "!админы — список руководителей чата\n"
             "!обновить_владельца — обновить информацию о владельце чата\n"
             "!помощь — эта справка\n\n"
@@ -800,12 +826,12 @@ def handle_message(peer, sender, text, msg_obj):
         )
         send_msg(peer, help_text)
 
-    # ----- !др (ИЗМЕНЕНО: inline-кнопки) -----
+    # ----- !др (с inline-кнопками) -----
     elif cmd == "!др":
         page = 1
         if args and args[0].isdigit():
             page = int(args[0])
-        send_or_edit_birthday(peer, page)
+        send_birthday(peer, page)
 
     # ----- !текст_др -----
     elif cmd == "!текст_др":
@@ -974,6 +1000,11 @@ def main():
             print("MD BOT started, group id:", group_id)
 
             for event in longpoll.listen():
+                # НОВОЕ: обрабатываем нажатия inline-кнопок
+                if event.type == VkBotEventType.MESSAGE_EVENT:
+                    handle_event(event)
+                    continue
+                
                 if event.type != VkBotEventType.MESSAGE_NEW:
                     continue
                 try:
