@@ -30,6 +30,7 @@ def init_db():
             attachments TEXT,
             source_message_id INTEGER DEFAULT 0,
             interval_minutes INTEGER,
+            repeat_count INTEGER DEFAULT 1,
             next_trigger REAL,
             enabled INTEGER DEFAULT 1,
             UNIQUE(peer_id, name))""")
@@ -50,6 +51,8 @@ def init_db():
                 CONN.execute("ALTER TABLE reminders ADD COLUMN attachments TEXT")
             if "source_message_id" not in cols:
                 CONN.execute("ALTER TABLE reminders ADD COLUMN source_message_id INTEGER DEFAULT 0")
+            if "repeat_count" not in cols:
+                CONN.execute("ALTER TABLE reminders ADD COLUMN repeat_count INTEGER DEFAULT 1")
         except Exception as e:
             print("migration error:", e)
         
@@ -87,11 +90,16 @@ def get_chat_owner(peer):
         return OWNER_CACHE[peer]
     oid = 0
     try:
-        r = VK.messages.getConversationsById(peer_ids=peer)
-        items = r.get("items", [])
+        # Пробуем получить информацию о беседе
+        result = VK.messages.getConversationsById(peer_ids=peer)
+        items = result.get("items", [])
         if items:
-            cs = items[0].get("conversation", {}).get("chat_settings", {})
-            oid = int(cs.get("owner_id", 0) or 0)
+            conv = items[0].get("conversation", {})
+            chat_settings = conv.get("chat_settings", {})
+            oid = int(chat_settings.get("owner_id", 0) or 0)
+            if oid == 0:
+                # Fallback: пробуем другой путь
+                oid = int(conv.get("owner_id", 0) or 0)
     except Exception as e:
         print("owner error:", e)
     OWNER_CACHE[peer] = oid
@@ -102,7 +110,8 @@ def is_admin(sender, peer):
         return False
     if sender == CREATOR_ID:
         return True
-    if sender == get_chat_owner(peer):
+    owner = get_chat_owner(peer)
+    if sender == owner:
         return True
     if sender in get_extra_admins(peer):
         return True
@@ -135,7 +144,6 @@ def forward_msg(peer, text, source_message_id):
     if VK is None or not peer or not source_message_id:
         return False
     try:
-        # Используем forward в формате JSON (новый способ)
         forward_json = json.dumps({
             "peer_id": peer,
             "conversation_message_ids": [source_message_id]
@@ -149,7 +157,6 @@ def forward_msg(peer, text, source_message_id):
         return True
     except Exception as e:
         print("forward error (conversation_message_ids):", e)
-        # Fallback: пробуем через message_ids
         try:
             forward_json = json.dumps({
                 "message_ids": [source_message_id]
@@ -288,29 +295,38 @@ def handle_message(peer, sender, text, msg_obj):
             source_message_id = int(reply.get("conversation_message_id", 0) or reply.get("id", 0) or 0)
             
             if not reply_text and not reply_attachments_str and not source_message_id:
-                send_msg(peer, "❌ Ответьте на сообщение с текстом или фото и введите !создать <название> <минуты>")
+                send_msg(peer, "❌ Ответьте на сообщение с текстом или фото и введите !создать <название> <минуты> [количество]")
                 return
             if len(args) < 2:
-                send_msg(peer, "❌ Формат: !создать <название> <минуты>")
+                send_msg(peer, "❌ Формат: !создать <название> <минуты> [количество]")
                 return
+            
+            # Парсим количество (необязательный параметр)
+            repeat_count = 1
             try:
-                minutes = int(args[-1])
-                name = " ".join(args[:-1])
+                if len(args) >= 3 and args[-1].isdigit():
+                    repeat_count = int(args[-1])
+                    minutes = int(args[-2])
+                    name = " ".join(args[:-2])
+                else:
+                    minutes = int(args[-1])
+                    name = " ".join(args[:-1])
             except ValueError:
-                send_msg(peer, "❌ Минуты должны быть числом.")
+                send_msg(peer, "❌ Минуты и количество должны быть числами.")
                 return
             
             with DB_LOCK:
                 try:
-                    CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, source_message_id, interval_minutes, next_trigger) 
-                                    VALUES(?,?,?,?,?,?,?)""",
-                                 (peer, name, reply_text, reply_attachments_str, source_message_id, minutes, time.time() + minutes * 60))
+                    CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, source_message_id, interval_minutes, repeat_count, next_trigger) 
+                                    VALUES(?,?,?,?,?,?,?,?)""",
+                                 (peer, name, reply_text, reply_attachments_str, source_message_id, minutes, repeat_count, time.time() + minutes * 60))
                     CONN.commit()
+                    repeat_info = f", повтор: {repeat_count} раз" if repeat_count > 1 else ""
                     if source_message_id:
-                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин. (будет пересылать сообщение)")
+                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин{repeat_info} (будет пересылать сообщение)")
                     else:
                         attach_info = " + вложения" if reply_attachments_str else ""
-                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин.{attach_info}")
+                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин{repeat_info}{attach_info}")
                 except sqlite3.IntegrityError:
                     send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
         except Exception as e:
@@ -321,7 +337,7 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "!список":
         with DB_LOCK:
             rows = CONN.execute(
-                "SELECT id, name, interval_minutes, next_trigger, enabled, attachments, source_message_id FROM reminders WHERE peer_id=? ORDER BY id",
+                "SELECT id, name, interval_minutes, repeat_count, next_trigger, enabled, attachments, source_message_id FROM reminders WHERE peer_id=? ORDER BY id",
                 (peer,)
             ).fetchall()
         if not rows:
@@ -339,7 +355,8 @@ def handle_message(peer, sender, text, msg_obj):
             else:
                 attach_count = len(r["attachments"].split(",")) if r["attachments"] else 0
                 attach_info = f" + {attach_count} влож." if attach_count else ""
-            msg += f"#{idx} {r['name']}{attach_info}\n"
+            repeat_info = f", повтор: {r['repeat_count']} раз" if r["repeat_count"] > 1 else ""
+            msg += f"#{idx} {r['name']}{attach_info}{repeat_info}\n"
             msg += f"   {status}\n"
             msg += f"   Интервал: {r['interval_minutes']} мин.\n"
             msg += f"   Через: {mins} мин {secs} сек\n\n"
@@ -363,23 +380,34 @@ def handle_message(peer, sender, text, msg_obj):
     # ----- !редактировать -----
     elif cmd == "!редактировать":
         if len(args) < 2:
-            send_msg(peer, "❌ Формат: !редактировать <название или номер> <минуты>")
+            send_msg(peer, "❌ Формат: !редактировать <название или номер> <минуты> [количество]")
             return
         try:
-            minutes = int(args[-1])
-            arg = " ".join(args[:-1])
+            repeat_count = None
+            if len(args) >= 3 and args[-1].isdigit():
+                repeat_count = int(args[-1])
+                minutes = int(args[-2])
+                arg = " ".join(args[:-2])
+            else:
+                minutes = int(args[-1])
+                arg = " ".join(args[:-1])
         except ValueError:
-            send_msg(peer, "❌ Минуты должны быть числом.")
+            send_msg(peer, "❌ Минуты и количество должны быть числами.")
             return
         rem = find_reminder(peer, arg)
         if not rem:
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
         with DB_LOCK:
-            CONN.execute("""UPDATE reminders SET interval_minutes=?, next_trigger=? WHERE id=?""",
-                         (minutes, time.time() + minutes * 60, rem["id"]))
+            if repeat_count is not None:
+                CONN.execute("""UPDATE reminders SET interval_minutes=?, repeat_count=?, next_trigger=? WHERE id=?""",
+                             (minutes, repeat_count, time.time() + minutes * 60, rem["id"]))
+            else:
+                CONN.execute("""UPDATE reminders SET interval_minutes=?, next_trigger=? WHERE id=?""",
+                             (minutes, time.time() + minutes * 60, rem["id"]))
             CONN.commit()
-        send_msg(peer, f"✅ Напоминание «{rem['name']}» обновлено. Новый интервал: {minutes} мин.")
+        repeat_info = f", повтор: {repeat_count} раз" if repeat_count else ""
+        send_msg(peer, f"✅ Напоминание «{rem['name']}» обновлено. Новый интервал: {minutes} мин{repeat_info}.")
 
     # ----- !отключить -----
     elif cmd == "!отключить":
@@ -435,7 +463,6 @@ def handle_message(peer, sender, text, msg_obj):
         if not rem:
             send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
             return
-        # Пересылаем оригинальное сообщение (без @all)
         if rem["source_message_id"]:
             success = forward_msg(peer, f"📝 Текст напоминания «{rem['name']}»:", rem["source_message_id"])
             if not success:
@@ -447,10 +474,10 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "!помощь":
         help_text = (
             "📖 Команды MD BOT:\n\n"
-            "!создать <название> <минуты> — создать напоминание (ответом на сообщение с текстом/фото)\n"
+            "!создать <название> <минуты> [количество] — создать напоминание (ответом на сообщение)\n"
             "!список — список всех напоминаний с номерами и статусами\n"
             "!удалить <название или номер> — удалить напоминание\n"
-            "!редактировать <название или номер> <минуты> — изменить интервал\n"
+            "!редактировать <название или номер> <минуты> [количество] — изменить интервал\n"
             "!отключить — отключить все напоминания\n"
             "!отключить <название или номер> — отключить одно напоминание\n"
             "!включить — включить все напоминания\n"
@@ -463,6 +490,7 @@ def handle_message(peer, sender, text, msg_obj):
             "!снять @игрок — снять права админа\n\n"
             "💡 Во всех командах вместо названия можно указывать номер из !список.\n"
             "📎 Бот пересылает оригинальное сообщение (сохраняет фото и вложения)!\n"
+            "🔁 Параметр 'количество' указывает, сколько раз отправить напоминание за раз.\n"
             "⚠️ Все команды доступны только администраторам."
         )
         send_msg(peer, help_text)
@@ -522,13 +550,15 @@ def handle_message(peer, sender, text, msg_obj):
         chat_owner_id = get_chat_owner(peer)
         lines = ["👥 Администраторы:\n"]
         if chat_owner_id:
-            lines.append(f"👑 Владелец чата: {mention(chat_owner_id)}")
-        lines.append(f"👑 Создатель: {mention(CREATOR_ID)}")
+            lines.append(f"👑 Владелец: {mention(chat_owner_id)}")
+        else:
+            lines.append("👑 Владелец: не определён")
         extras = [uid for uid in get_extra_admins(peer) if uid != chat_owner_id and uid != CREATOR_ID]
         if extras:
             lines.append("🛡 Админы: " + ", ".join(mention(uid) for uid in extras))
         else:
             lines.append("🛡 Админы: отсутствуют")
+        lines.append(f"👑 chatbot creator: {mention(CREATOR_ID)}")
         send_msg(peer, "\n".join(lines))
 
 
@@ -548,23 +578,23 @@ def timer_loop():
                 
                 with DB_LOCK:
                     due = CONN.execute(
-                        "SELECT id, name, text, attachments, source_message_id, interval_minutes, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
+                        "SELECT id, name, text, attachments, source_message_id, interval_minutes, repeat_count, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
                         (peer, now)
                     ).fetchall()
                 
                 for rem in due:
                     if rem["enabled"] == 1:
-                        # Пересылаем оригинальное сообщение если есть source_message_id
-                        if rem["source_message_id"]:
-                            success = forward_msg(peer, f"🔔 Напоминание: {rem['name']}\n\n@all", rem["source_message_id"])
-                            if not success:
-                                # Fallback: отправляем текст
+                        repeat_count = rem["repeat_count"] or 1
+                        for _ in range(repeat_count):
+                            if rem["source_message_id"]:
+                                success = forward_msg(peer, f"🔔 Напоминание: {rem['name']}\n\n@all", rem["source_message_id"])
+                                if not success:
+                                    msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
+                                    send_msg(peer, msg, attachments=rem["attachments"] or None)
+                            else:
                                 msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
                                 send_msg(peer, msg, attachments=rem["attachments"] or None)
-                        else:
-                            # Старая логика для напоминаний без пересылки
-                            msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
-                            send_msg(peer, msg, attachments=rem["attachments"] or None)
+                            time.sleep(0.5)  # Небольшая задержка между повторами
                     
                     new_trigger = now + rem["interval_minutes"] * 60
                     with DB_LOCK:
