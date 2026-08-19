@@ -20,18 +20,8 @@ DB_LOCK = threading.Lock()
 VK = None
 NAME_CACHE = {}
 OWNER_CACHE = {}
-BIRTHDAY_CACHE = {}
 
-BIRTHDAY_CONGRATS_TEXT = (
-"Дорогой участник Million Dollars! 💫\n"
-"\n"
-"{mention}\n"
-"От всей души поздравляем тебя с днём рождения! 🎉\n"
-"В честь этого праздника мы дарим тебе 5 000 000! 🎁\n"
-"Напиши любому из заместителей, чтобы получить доступ к подарку.\n"
-"\n"
-"Желаем невероятного успеха и непрерывного развития вместе с MILLION DOLLARS! 🚀"
-)
+DEFAULT_BIRTHDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!🎂"
 
 def init_db():
     with DB_LOCK:
@@ -68,6 +58,9 @@ def init_db():
             year INTEGER,
             congratulated_at INTEGER,
             PRIMARY KEY(user_id, peer_id, year))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS birthday_text (
+            peer_id INTEGER PRIMARY KEY,
+            text TEXT)""")
         
         # Миграция
         try:
@@ -147,7 +140,7 @@ def is_owner(sender, peer):
         return True
     return get_chat_owner(peer) == sender
 
-def send_msg(peer, text, attachments=None):
+def send_msg(peer, text, attachments=None, keyboard=None):
     if VK is None or not peer:
         return
     try:
@@ -158,6 +151,8 @@ def send_msg(peer, text, attachments=None):
         }
         if attachments:
             params['attachment'] = attachments
+        if keyboard:
+            params['keyboard'] = json.dumps(keyboard)
         VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
@@ -387,7 +382,7 @@ def birthday_text_page(peer, page=1):
     birthday_list.sort(key=lambda x: x[2])
     
     per_page = 20
-    total_pages = (len(birthday_list) + per_page - 1) // per_page
+    total_pages = max(1, (len(birthday_list) + per_page - 1) // per_page)
     if page < 1:
         page = 1
     if page > total_pages:
@@ -397,7 +392,7 @@ def birthday_text_page(peer, page=1):
     end = start + per_page
     page_items = birthday_list[start:end]
     
-    lines = ["🎂 Дни рождения участников:\n"]
+    lines = [f"🎂 Дни рождения участников (стр. {page}/{total_pages}):\n"]
     for user_id, bdate, days in page_items:
         name = mention(user_id).split("|")[1].rstrip("]")
         parsed = parse_bdate(bdate)
@@ -417,6 +412,7 @@ def birthday_text_page(peer, page=1):
     
     text = "\n".join(lines)
     
+    # Клавиатура
     buttons = []
     if page > 1:
         buttons.append({
@@ -434,6 +430,26 @@ def birthday_text_page(peer, page=1):
         keyboard = {"one_time": False, "buttons": [buttons]}
     
     return text, keyboard
+
+# ===== НОВОЕ: работа с кастомным текстом поздравления =====
+def get_birthday_text(peer):
+    with DB_LOCK:
+        row = CONN.execute("SELECT text FROM birthday_text WHERE peer_id=?", (peer,)).fetchone()
+        return row["text"] if row else None
+
+def set_birthday_text(peer, text):
+    with DB_LOCK:
+        CONN.execute("INSERT OR REPLACE INTO birthday_text(peer_id, text) VALUES(?,?)", (peer, text))
+        CONN.commit()
+
+def build_birthday_congrats(peer, user_id):
+    """Строит текст поздравления с упоминанием в конце."""
+    mention_str = mention(user_id)
+    custom = get_birthday_text(peer)
+    if custom:
+        return custom.rstrip() + "\n\n" + mention_str
+    else:
+        return DEFAULT_BIRTHDAY_TEXT.format(mention=mention_str)
 
 def check_birthdays(peer):
     today = time.localtime()
@@ -458,7 +474,7 @@ def check_birthdays(peer):
             if row:
                 continue
         
-        text = BIRTHDAY_CONGRATS_TEXT.format(mention=mention(user_id))
+        text = build_birthday_congrats(peer, user_id)
         send_msg(peer, text)
         
         with DB_LOCK:
@@ -467,9 +483,30 @@ def check_birthdays(peer):
                 (user_id, peer, current_year, int(time.time())))
             CONN.commit()
 
+
 def handle_message(peer, sender, text, msg_obj):
     if peer < 2000000000:
         return
+
+    # ===== Обработка нажатий кнопок (ДР) =====
+    payload_raw = msg_obj.get("payload")
+    if payload_raw:
+        try:
+            if isinstance(payload_raw, str):
+                payload = json.loads(payload_raw)
+            else:
+                payload = payload_raw
+            
+            if payload.get("cmd") in ("bday_next", "bday_prev"):
+                if not is_admin(sender, peer):
+                    send_msg(peer, "⛔ Эта команда доступна только администраторам.")
+                    return
+                page = int(payload.get("page", 1))
+                text_out, keyboard = birthday_text_page(peer, page)
+                send_msg(peer, text_out, keyboard=keyboard)
+                return
+        except Exception as e:
+            print("payload error:", e)
 
     first = norm(text.split("\n")[0])
     if not first or not first.startswith("!"):
@@ -688,7 +725,8 @@ def handle_message(peer, sender, text, msg_obj):
             "!помощь — эта справка\n\n"
             "🛡 Команды владельца/создателя:\n"
             "!назначить @игрок — выдать права админа\n"
-            "!снять @игрок — снять права админа\n\n"
+            "!снять @игрок — снять права админа\n"
+            "!текст_др — установить/посмотреть текст поздравления с ДР\n\n"
             "💡 Во всех командах вместо названия можно указывать номер из !список.\n"
             "📎 Бот пересылает оригинальное сообщение (сохраняет фото и вложения)!\n"
             "🔁 Параметр 'количество' указывает, сколько раз отправить напоминание за раз.\n"
@@ -701,20 +739,27 @@ def handle_message(peer, sender, text, msg_obj):
         page = 1
         if args and args[0].isdigit():
             page = int(args[0])
-        text, keyboard = birthday_text_page(peer, page)
-        if keyboard:
-            try:
-                VK.messages.send(
-                    peer_id=peer,
-                    message=text,
-                    keyboard=json.dumps(keyboard),
-                    random_id=random.getrandbits(31)
-                )
-            except Exception as e:
-                print("send birthday error:", e)
-                send_msg(peer, text)
-        else:
-            send_msg(peer, text)
+        text_out, keyboard = birthday_text_page(peer, page)
+        send_msg(peer, text_out, keyboard=keyboard)
+
+    # ----- !текст_др (НОВОЕ) -----
+    elif cmd == "!текст_др":
+        reply = msg_obj.get("reply_message") or {}
+        if not isinstance(reply, dict):
+            reply = {}
+        reply_text = (reply.get("text") or "").strip()
+        
+        if not reply_text:
+            # Показать текущий текст
+            current = get_birthday_text(peer)
+            if current:
+                send_msg(peer, f"📝 Текущий текст поздравления в этой беседе:\n\n{current}\n\n---\n(в конце автоматически добавится @именинника)")
+            else:
+                send_msg(peer, "📝 Текст поздравления не установлен. Используется стандартный:\n\nПоздравляем @именинника. У него сегодня день рождения!🎂\n\n💡 Чтобы установить свой текст — напиши его в чат, ответь на него и напиши !текст_др")
+            return
+        
+        set_birthday_text(peer, reply_text)
+        send_msg(peer, f"✅ Текст поздравления сохранён для этой беседы.\n\nПример того, как будет выглядеть:\n\n{reply_text}\n\n[Имя Фамилия именинника]\n\n💡 Чтобы изменить — ответь на новый текст и снова напиши !текст_др")
 
     # ----- !назначить -----
     elif cmd == "!назначить":
@@ -792,12 +837,13 @@ def timer_loop():
             
             with DB_LOCK:
                 peers = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
+                bday_peers = CONN.execute("SELECT DISTINCT peer_id FROM birthdays").fetchall()
             
+            # Напоминания
             for p in peers:
                 peer = p["peer_id"]
                 now = time.time()
                 
-                # Проверка напоминаний
                 with DB_LOCK:
                     due = CONN.execute(
                         "SELECT id, name, text, attachments, source_message_id, interval_minutes, repeat_count, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
@@ -822,9 +868,12 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (new_trigger, rem["id"]))
                         CONN.commit()
-                
-                # Проверка дней рождения (раз в час)
+            
+            # Дни рождения (раз в час)
+            for p in bday_peers:
+                peer = p["peer_id"]
                 last_bday_check = int(get_setting(peer, "last_birthday_check", "0") or 0)
+                now = time.time()
                 if now - last_bday_check >= 3600:
                     check_birthdays(peer)
                     set_setting(peer, "last_birthday_check", str(int(now)))
@@ -861,7 +910,7 @@ def main():
                     peer = int(msg.get("peer_id", 0) or 0)
                     sender = int(msg.get("from_id", 0) or 0)
                     txt = (msg.get("text") or "").strip()
-                    if peer > 0 and sender > 0 and txt:
+                    if peer > 0 and sender > 0:
                         handle_message(peer, sender, txt, msg)
                 except Exception as e:
                     print("message error:", e)
