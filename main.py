@@ -101,12 +101,18 @@ def remove_extra_admin(peer, user_id):
         CONN.execute("DELETE FROM extra_admins WHERE peer_id=? AND user_id=?", (peer, user_id))
         CONN.commit()
 
-def get_chat_owner(peer):
+
+# ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ =====
+def get_chat_owner(peer, force_refresh=False):
+    """Получает владельца беседы двумя способами."""
     if VK is None:
         return 0
-    if peer in OWNER_CACHE:
+    if not force_refresh and peer in OWNER_CACHE:
         return OWNER_CACHE[peer]
+    
     oid = 0
+    
+    # СПОСОБ 1: через getConversationsById
     try:
         result = VK.messages.getConversationsById(peer_ids=peer)
         items = result.get("items", [])
@@ -114,12 +120,37 @@ def get_chat_owner(peer):
             conv = items[0].get("conversation", {})
             chat_settings = conv.get("chat_settings", {})
             oid = int(chat_settings.get("owner_id", 0) or 0)
-            if oid == 0:
-                oid = int(conv.get("owner_id", 0) or 0)
+            print(f"owner method 1: {oid}")
     except Exception as e:
-        print("owner error:", e)
-    OWNER_CACHE[peer] = oid
+        print("owner method 1 error:", e)
+    
+    # СПОСОБ 2: через getConversationMembers (если первый не сработал)
+    if oid == 0:
+        try:
+            members = VK.messages.getConversationMembers(peer_id=peer)
+            # Проверяем profiles
+            for profile in members.get("profiles", []):
+                if profile.get("is_owner"):
+                    oid = int(profile.get("id", 0))
+                    print(f"owner method 2 (profile): {oid}")
+                    break
+            # Проверяем items (иногда owner там)
+            if oid == 0:
+                for item in members.get("items", []):
+                    member = item.get("member_id", 0)
+                    if member > 0 and item.get("is_owner"):
+                        oid = int(member)
+                        print(f"owner method 2 (item): {oid}")
+                        break
+        except Exception as e:
+            print("owner method 2 error:", e)
+    
+    # Кэшируем только если нашли
+    if oid > 0:
+        OWNER_CACHE[peer] = oid
+    
     return oid
+
 
 def is_admin(sender, peer):
     if sender <= 0:
@@ -412,7 +443,6 @@ def birthday_text_page(peer, page=1):
     
     text = "\n".join(lines)
     
-    # Клавиатура
     buttons = []
     if page > 1:
         buttons.append({
@@ -431,7 +461,6 @@ def birthday_text_page(peer, page=1):
     
     return text, keyboard
 
-# ===== НОВОЕ: работа с кастомным текстом поздравления =====
 def get_birthday_text(peer):
     with DB_LOCK:
         row = CONN.execute("SELECT text FROM birthday_text WHERE peer_id=?", (peer,)).fetchone()
@@ -443,7 +472,6 @@ def set_birthday_text(peer, text):
         CONN.commit()
 
 def build_birthday_congrats(peer, user_id):
-    """Строит текст поздравления с упоминанием в конце."""
     mention_str = mention(user_id)
     custom = get_birthday_text(peer)
     if custom:
@@ -488,7 +516,7 @@ def handle_message(peer, sender, text, msg_obj):
     if peer < 2000000000:
         return
 
-    # ===== Обработка нажатий кнопок (ДР) =====
+    # Обработка нажатий кнопок (ДР)
     payload_raw = msg_obj.get("payload")
     if payload_raw:
         try:
@@ -722,6 +750,7 @@ def handle_message(peer, sender, text, msg_obj):
             "!развернуть <название или номер> — показать текст напоминания\n"
             "!др — дни рождения участников\n"
             "!админы — список руководителей чата\n"
+            "!обновить_владельца — обновить информацию о владельце чата\n"
             "!помощь — эта справка\n\n"
             "🛡 Команды владельца/создателя:\n"
             "!назначить @игрок — выдать права админа\n"
@@ -742,7 +771,7 @@ def handle_message(peer, sender, text, msg_obj):
         text_out, keyboard = birthday_text_page(peer, page)
         send_msg(peer, text_out, keyboard=keyboard)
 
-    # ----- !текст_др (НОВОЕ) -----
+    # ----- !текст_др -----
     elif cmd == "!текст_др":
         reply = msg_obj.get("reply_message") or {}
         if not isinstance(reply, dict):
@@ -750,7 +779,6 @@ def handle_message(peer, sender, text, msg_obj):
         reply_text = (reply.get("text") or "").strip()
         
         if not reply_text:
-            # Показать текущий текст
             current = get_birthday_text(peer)
             if current:
                 send_msg(peer, f"📝 Текущий текст поздравления в этой беседе:\n\n{current}\n\n---\n(в конце автоматически добавится @именинника)")
@@ -811,9 +839,9 @@ def handle_message(peer, sender, text, msg_obj):
             parts.append("ℹ️ У этих игроков нет прав админа.")
         send_msg(peer, "\n".join(parts))
 
-    # ----- !админы -----
+    # ----- !админы (ИСПРАВЛЕНО: принудительное обновление владельца) -----
     elif cmd == "!админы":
-        chat_owner_id = get_chat_owner(peer)
+        chat_owner_id = get_chat_owner(peer, force_refresh=True)
         lines = ["👥 Администраторы:\n"]
         if chat_owner_id:
             lines.append(f"👑 Владелец: {mention(chat_owner_id)}")
@@ -827,6 +855,16 @@ def handle_message(peer, sender, text, msg_obj):
         lines.append(f"👑 chatbot creator: {mention(CREATOR_ID)}")
         send_msg(peer, "\n".join(lines))
 
+    # ----- !обновить_владельца (НОВОЕ) -----
+    elif cmd == "!обновить_владельца":
+        if peer in OWNER_CACHE:
+            del OWNER_CACHE[peer]
+        chat_owner_id = get_chat_owner(peer, force_refresh=True)
+        if chat_owner_id:
+            send_msg(peer, f"✅ Владелец чата обновлён: {mention(chat_owner_id)}")
+        else:
+            send_msg(peer, "❌ Не удалось определить владельца чата. Убедитесь, что бот — администратор беседы.")
+
 
 def timer_loop():
     while True:
@@ -839,7 +877,6 @@ def timer_loop():
                 peers = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
                 bday_peers = CONN.execute("SELECT DISTINCT peer_id FROM birthdays").fetchall()
             
-            # Напоминания
             for p in peers:
                 peer = p["peer_id"]
                 now = time.time()
@@ -869,7 +906,7 @@ def timer_loop():
                         CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (new_trigger, rem["id"]))
                         CONN.commit()
             
-            # Дни рождения (раз в час)
+            # Дни рождения
             for p in bday_peers:
                 peer = p["peer_id"]
                 last_bday_check = int(get_setting(peer, "last_birthday_check", "0") or 0)
