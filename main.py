@@ -273,7 +273,6 @@ def parse_reply_attachments(reply_obj):
 
 # ===== ДНИ РОЖДЕНИЯ (СУПЕР-ОПТИМИЗИРОВАНО) =====
 def update_birthdays(peer):
-    """Фоновое обновление дат рождения. Работает быстро благодаря одному запросу к БД."""
     now = int(time.time())
     
     if peer in MEMBER_CACHE and (now - LAST_MEMBER_UPDATE.get(peer, 0)) < 300:
@@ -288,7 +287,6 @@ def update_birthdays(peer):
             print(f"ERROR getting members for {peer}: {e}")
             return
 
-    # ОДИН быстрый запрос вместо 143 отдельных
     with DB_LOCK:
         existing = {row["user_id"]: row["updated_at"] for row in CONN.execute(
             "SELECT user_id, updated_at FROM birthdays WHERE peer_id=?", (peer,)
@@ -325,7 +323,6 @@ def update_birthdays(peer):
         print(f"ERROR fetching birthdays in batch: {e}")
 
 def trigger_background_update(peer):
-    """Запускает обновление в фоне, не блокируя ответ бота."""
     threading.Thread(target=update_birthdays, args=(peer,), daemon=True).start()
 
 def parse_bdate(bdate_str):
@@ -365,7 +362,6 @@ def is_birthday_today(bdate_str):
     return today.tm_mday == parsed[0] and today.tm_mon == parsed[1]
 
 def build_birthday_page(peer, page=1):
-    """Только читает из БД, НЕ обновляет. Работает мгновенно (<0.1 сек)."""
     with DB_LOCK:
         rows = [dict(r) for r in CONN.execute(
             "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL",
@@ -432,7 +428,7 @@ def build_birthday_page(peer, page=1):
     return text, buttons
 
 def handle_birthday_button(event):
-    """Мгновенная обработка кнопок без задержек."""
+    """Мгновенная обработка кнопок с надежным fallback"""
     try:
         obj = event.obj
         if not isinstance(obj, dict):
@@ -465,7 +461,7 @@ def handle_birthday_button(event):
         
         page = int(payload.get("page", 1))
         
-        # Мгновенное чтение из БД (без update_birthdays!)
+        # Мгновенное чтение из БД (без API запросов!)
         with DB_LOCK:
             rows = [dict(r) for r in CONN.execute(
                 "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL",
@@ -509,22 +505,52 @@ def handle_birthday_button(event):
         
         keyboard = {"inline": True, "buttons": [buttons]} if buttons else {"inline": True, "buttons": []}
         
+        # ИСПРАВЛЕНО: Правильный метод для получения ID сообщения
+        global_msg_id = 0
         try:
-            # Используем conversation_message_id для мгновенного редактирования
-            VK.messages.edit(
+            r = VK.messages.getByConversationMessageId(
                 peer_id=peer_id,
-                conversation_message_id=conversation_message_id,
-                message=text,
-                keyboard=json.dumps(keyboard)
+                conversation_message_ids=str(conversation_message_id)
             )
-            VK.messages.sendMessageEventAnswer(
-                event_id=obj.get("event_id"),
-                user_id=user_id,
-                peer_id=peer_id,
-                event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"})
-            )
+            items = r.get("items", [])
+            if items:
+                global_msg_id = int(items[0].get("id", 0))
         except Exception as e:
-            print("edit error:", e)
+            print("getByConvMsgId error:", e)
+        
+        success = False
+        if global_msg_id > 0:
+            try:
+                VK.messages.edit(
+                    peer_id=peer_id,
+                    message_id=global_msg_id,
+                    message=text,
+                    keyboard=json.dumps(keyboard)
+                )
+                success = True
+            except Exception as e:
+                print("edit error:", e)
+        
+        # FALLBACK: Если редактирование не удалось, отправляем новое сообщение
+        if not success:
+            try:
+                VK.messages.send(
+                    peer_id=peer_id,
+                    message=text + "\n\n(Не удалось обновить сообщение, отправлено новое)",
+                    keyboard=json.dumps(keyboard),
+                    random_id=random.getrandbits(31)
+                )
+            except Exception as e:
+                print("send fallback error:", e)
+        
+        # Снимаем анимацию загрузки с кнопки в ЛЮБОМ случае
+        VK.messages.sendMessageEventAnswer(
+            event_id=obj.get("event_id"),
+            user_id=user_id,
+            peer_id=peer_id,
+            event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"})
+        )
+            
     except Exception as e:
         print("button handler error:", e)
 
@@ -802,9 +828,7 @@ def handle_message(peer, sender, text, msg_obj):
         send_msg(peer, help_text)
 
     elif cmd == "!др":
-        # 1. Запускаем обновление в фоне (не блокирует ответ)
         trigger_background_update(peer)
-        # 2. Мгновенно показываем то, что уже есть в базе
         page = 1
         if args and args[0].isdigit():
             page = int(args[0])
