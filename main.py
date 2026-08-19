@@ -109,8 +109,6 @@ def get_chat_owner(peer, force_refresh=False):
         return OWNER_CACHE[peer]
     
     oid = 0
-    
-    # Способ 1: через getConversationsById (проверяем все возможные места)
     try:
         result = VK.messages.getConversationsById(peer_ids=peer)
         items = result.get("items", [])
@@ -120,34 +118,26 @@ def get_chat_owner(peer, force_refresh=False):
             if not oid:
                 chat_settings = conv.get("chat_settings", {})
                 oid = chat_settings.get("owner_id", 0)
-            print(f"DEBUG owner method 1: found oid={oid}")
     except Exception as e:
         print("owner method 1 error:", e)
     
-    # Способ 2: через getConversationMembers (если первый не сработал)
     if oid == 0:
         try:
             members_resp = VK.messages.getConversationMembers(peer_id=peer)
-            # Ищем в items (там есть member_id и флаг is_owner)
             for item in members_resp.get("items", []):
                 if item.get("is_owner"):
                     oid = int(item.get("member_id", 0))
-                    print(f"DEBUG owner method 2 (items): found oid={oid}")
                     break
-            # Если нет, ищем в profiles (иногда VK кладет is_owner туда)
             if oid == 0:
                 for profile in members_resp.get("profiles", []):
                     if profile.get("is_owner"):
                         oid = int(profile.get("id", 0))
-                        print(f"DEBUG owner method 2 (profiles): found oid={oid}")
                         break
         except Exception as e:
             print("owner method 2 error:", e)
     
     if oid > 0:
         OWNER_CACHE[peer] = oid
-    else:
-        print(f"WARNING: Could not find owner for peer {peer}. Bot might not be admin or API changed.")
     return oid
 
 def is_admin(sender, peer):
@@ -281,12 +271,11 @@ def parse_reply_attachments(reply_obj):
             print("attach parse error:", e)
     return ",".join(parts)
 
-# ===== ДНИ РОЖДЕНИЯ (ОПТИМИЗИРОВАНО) =====
+# ===== ДНИ РОЖДЕНИЯ (СУПЕР-ОПТИМИЗИРОВАНО) =====
 def update_birthdays(peer):
-    """Оптимизировано: пакетная загрузка дат рождения, чтобы VK не блокировал запросы"""
-    now = time.time()
+    """Фоновое обновление дат рождения. Работает быстро благодаря одному запросу к БД."""
+    now = int(time.time())
     
-    # 1. Получаем список участников (кэшируем на 5 минут)
     if peer in MEMBER_CACHE and (now - LAST_MEMBER_UPDATE.get(peer, 0)) < 300:
         profiles = MEMBER_CACHE[peer]
     else:
@@ -298,44 +287,46 @@ def update_birthdays(peer):
         except Exception as e:
             print(f"ERROR getting members for {peer}: {e}")
             return
-    
-    # 2. Собираем ID тех, у кого дата рождения устарела или отсутствует
+
+    # ОДИН быстрый запрос вместо 143 отдельных
+    with DB_LOCK:
+        existing = {row["user_id"]: row["updated_at"] for row in CONN.execute(
+            "SELECT user_id, updated_at FROM birthdays WHERE peer_id=?", (peer,)
+        ).fetchall()}
+
     users_to_check = []
     for profile in profiles:
         user_id = int(profile.get("id", 0))
         if user_id <= 0:
             continue
-        
-        with DB_LOCK:
-            row = CONN.execute("SELECT updated_at FROM birthdays WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
-            # Обновляем раз в 7 дней
-            if row and (now - row["updated_at"]) < 7 * 24 * 3600:
-                continue
-        
-        users_to_check.append(user_id)
-    
+        last_update = existing.get(user_id, 0)
+        if (now - last_update) >= 7 * 24 * 3600:
+            users_to_check.append(user_id)
+
     if not users_to_check:
         return
 
-    # 3. Запрашиваем даты рождения ПАКЕТОМ (до 500 человек за раз). Это не вызывает бан от VK!
     try:
         for i in range(0, len(users_to_check), 500):
             chunk = users_to_check[i:i+500]
             r = VK.users.get(user_ids=",".join(map(str, chunk)), fields="bdate")
             if r:
-                for user_data in r:
-                    uid = user_data.get("id")
-                    bdate = user_data.get("bdate", "")
-                    if bdate:
-                        with DB_LOCK:
+                with DB_LOCK:
+                    for user_data in r:
+                        uid = user_data.get("id")
+                        bdate = user_data.get("bdate", "")
+                        if bdate:
                             CONN.execute(
                                 "INSERT OR REPLACE INTO birthdays(user_id, peer_id, bdate, updated_at) VALUES(?,?,?,?)",
-                                (uid, peer, bdate, int(now))
+                                (uid, peer, bdate, now)
                             )
-                        CONN.commit()
-                        print(f"DEBUG: Saved birthday for {uid}: {bdate}")
+                    CONN.commit()
     except Exception as e:
         print(f"ERROR fetching birthdays in batch: {e}")
+
+def trigger_background_update(peer):
+    """Запускает обновление в фоне, не блокируя ответ бота."""
+    threading.Thread(target=update_birthdays, args=(peer,), daemon=True).start()
 
 def parse_bdate(bdate_str):
     parts = bdate_str.split(".")
@@ -374,15 +365,14 @@ def is_birthday_today(bdate_str):
     return today.tm_mday == parsed[0] and today.tm_mon == parsed[1]
 
 def build_birthday_page(peer, page=1):
-    update_birthdays(peer)
-    
+    """Только читает из БД, НЕ обновляет. Работает мгновенно (<0.1 сек)."""
     with DB_LOCK:
         rows = [dict(r) for r in CONN.execute(
-            "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL ORDER BY user_id",
+            "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL",
             (peer,)).fetchall()]
     
     if not rows:
-        return "🎂 Дни рождения не найдены (у участников скрыты даты или бот не успел их загрузить).", []
+        return "🎂 Дни рождения не найдены (бот обновляет данные в фоне, попробуйте через минуту).", []
     
     birthday_list = []
     for r in rows:
@@ -442,6 +432,7 @@ def build_birthday_page(peer, page=1):
     return text, buttons
 
 def handle_birthday_button(event):
+    """Мгновенная обработка кнопок без задержек."""
     try:
         obj = event.obj
         if not isinstance(obj, dict):
@@ -473,37 +464,67 @@ def handle_birthday_button(event):
             return
         
         page = int(payload.get("page", 1))
-        text, buttons = build_birthday_page(peer_id, page)
         
-        global_msg_id = 0
+        # Мгновенное чтение из БД (без update_birthdays!)
+        with DB_LOCK:
+            rows = [dict(r) for r in CONN.execute(
+                "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL",
+                (peer_id,)).fetchall()]
+        
+        if not rows:
+            text = "🎂 Дни рождения не найдены."
+            buttons = []
+        else:
+            birthday_list = []
+            for r in rows:
+                days = days_until_birthday(r["bdate"])
+                if days is not None:
+                    birthday_list.append((r["user_id"], days))
+            
+            birthday_list.sort(key=lambda x: x[1])
+            per_page = 20
+            total_pages = max(1, (len(birthday_list) + per_page - 1) // per_page)
+            if page < 1: page = 1
+            if page > total_pages: page = total_pages
+            
+            start = (page - 1) * per_page
+            end = start + per_page
+            page_items = birthday_list[start:end]
+            
+            lines = [f"🎂 Дни рождения участников (стр. {page}/{total_pages}):\n"]
+            for uid, days in page_items:
+                name = get_user_name(uid)
+                if days == 0: days_str = "сегодня! 🎉"
+                elif days == 1: days_str = "завтра"
+                else: days_str = f"осталось {days} дн."
+                lines.append(f"{name} — {days_str}")
+            
+            text = "\n".join(lines)
+            
+            buttons = []
+            if page > 1:
+                buttons.append({"action": {"type": "callback", "label": "⬅️Назад", "payload": json.dumps({"cmd": "bday_prev", "page": page - 1})}, "color": "secondary"})
+            if page < total_pages:
+                buttons.append({"action": {"type": "callback", "label": "Вперёд➡️", "payload": json.dumps({"cmd": "bday_next", "page": page + 1})}, "color": "secondary"})
+        
+        keyboard = {"inline": True, "buttons": [buttons]} if buttons else {"inline": True, "buttons": []}
+        
         try:
-            r = VK.messages.getById(
+            # Используем conversation_message_id для мгновенного редактирования
+            VK.messages.edit(
                 peer_id=peer_id,
-                conversation_message_ids=[conversation_message_id]
+                conversation_message_id=conversation_message_id,
+                message=text,
+                keyboard=json.dumps(keyboard)
             )
-            items = r.get("items", [])
-            if items:
-                global_msg_id = int(items[0].get("id", 0))
+            VK.messages.sendMessageEventAnswer(
+                event_id=obj.get("event_id"),
+                user_id=user_id,
+                peer_id=peer_id,
+                event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"})
+            )
         except Exception as e:
-            print("getById error:", e)
-        
-        if global_msg_id:
-            keyboard = {"inline": True, "buttons": [buttons]} if buttons else {"inline": True, "buttons": []}
-            try:
-                VK.messages.edit(
-                    peer_id=peer_id,
-                    message_id=global_msg_id,
-                    message=text,
-                    keyboard=json.dumps(keyboard)
-                )
-                VK.messages.sendMessageEventAnswer(
-                    event_id=obj.get("event_id"),
-                    user_id=user_id,
-                    peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"})
-                )
-            except Exception as e:
-                print("edit error:", e)
+            print("edit error:", e)
     except Exception as e:
         print("button handler error:", e)
 
@@ -781,6 +802,9 @@ def handle_message(peer, sender, text, msg_obj):
         send_msg(peer, help_text)
 
     elif cmd == "!др":
+        # 1. Запускаем обновление в фоне (не блокирует ответ)
+        trigger_background_update(peer)
+        # 2. Мгновенно показываем то, что уже есть в базе
         page = 1
         if args and args[0].isdigit():
             page = int(args[0])
