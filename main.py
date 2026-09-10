@@ -39,7 +39,7 @@ DEFAULT_BDAY_TEXT = "Поздравляем {mention}. У него сегодн�
 VALID_COMMANDS = [
     "помощь", "админы", "участник", "ники", "ник", "парк", "прем", "чат",
     "пред", "-пред", "лимит_предов", "кд_предов", "старт_контроль", "стоп_контроль",
-    "время_опросов", "защита", "-защита", "бан", "адмчат", "admg",
+    "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
     "назначить", "снять", "голоса"
 ]
@@ -414,15 +414,12 @@ def handle_message(peer, sender, text, msg_obj):
         user_id = action.get("member_id")
         if not user_id: return
         
-        # ИСПРАВЛЕНО: Сохраняем ник при возврате после бана
         with DB_LOCK:
             row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
             if row:
-                # Пользователь уже был в базе (вернулся после бана). Сохраняем ник, обнуляем преды.
                 CONN.execute("""UPDATE members SET join_time=?, warnings=0, warn_durations='', warn_expiry=0 
                                 WHERE user_id=? AND peer_id=?""", (int(time.time()), user_id, peer))
             else:
-                # Совершенно новый пользователь
                 CONN.execute("""INSERT INTO members(user_id, peer_id, join_time, warnings, warn_durations, warn_expiry) 
                                 VALUES(?,?,?,0,'',0)""", (user_id, peer, int(time.time())))
             CONN.commit()
@@ -473,6 +470,7 @@ def handle_message(peer, sender, text, msg_obj):
             "`Мд админы` — список руководителей чата\n"
             "`Мд участник` [@юз] — твоя статистика (админ может смотреть чужую)\n"
             "`Мд ники` — список ников и предупреждений\n"
+            "`Мд номер чата` — узнать ID текущего чата\n"
             "`Мд парк` — информация об автопарке\n"
             "`Мд прем` — информация о премиях и зарплатах\n"
             "`Мд чат` — ссылка на чат для отчетов\n\n"
@@ -501,7 +499,7 @@ def handle_message(peer, sender, text, msg_obj):
             "👑 Для владельца/создателя:\n"
             "`Мд старт контроль` — включить систему опросов и контроля\n"
             "`Мд стоп контроль` — выключить систему опросов\n"
-            "`Мд время опросов` <начало> <конец> — время опросов (напр. 10 22)\n"
+            "`Мд время опросов` <ЧЧ:ММ> <ЧЧ:ММ> — время опросов (напр. 10:20 23:20)\n"
             "`Мд адмчат` <id> — установить чат для отчетов о банах\n"
             "`Мд лимит предов` <число> — макс. количество предов до кика (по умолч. 3)\n"
             "`Мд кд предов` <дней> — изменить срок дефолтного преда\n"
@@ -554,12 +552,12 @@ def handle_message(peer, sender, text, msg_obj):
         send_msg(peer, msg)
 
     elif cmd == "ники":
+        print(f"DEBUG: Команда 'ники' вызвана пользователем {sender} в чате {peer}")
         try:
             if not admin:
                 send_msg(peer, "⛔ Только администраторы могут смотреть полный список.")
                 return
             
-            # Синхронизация в фоне, чтобы не блокировать ответ
             threading.Thread(target=sync_members, args=(peer,), daemon=True).start()
             
             page = int(args[0]) if args and args[0].isdigit() else 1
@@ -755,7 +753,6 @@ def handle_message(peer, sender, text, msg_obj):
                     
                     VK.messages.removeChatUser(chat_id=chat_id, member_id=t_id)
                     
-                    # ИСПРАВЛЕНО: Не удаляем пользователя из БД, а обнуляем преды, сохраняя ник и серию!
                     with DB_LOCK:
                         CONN.execute("UPDATE members SET warnings=0, warn_durations='', warn_expiry=0 WHERE user_id=? AND peer_id=?", (t_id, peer))
                         CONN.commit()
@@ -786,7 +783,7 @@ def handle_message(peer, sender, text, msg_obj):
                             send_msg(peer, f"⚠️ Игрок {mention(t_id)} исключен, но **не удалось** отправить отчет в адм-чат ({report_peer}). Ошибка: {e}")
                     else:
                         print(f"Адм-чат не настроен или некорректен: '{admin_chat_raw}'")
-                        send_msg(peer, f"⚠️ Игрок {mention(t_id)} исключен, но **адм-чат не настроен** или ID некорректен ('{admin_chat_raw}'). Используйте `Мд адмчат 2000000690`")
+                        send_msg(peer, f"⚠️ Игрок {mention(t_id)} исключен, но **адм-чат не настроен** или ID некорректен ('{admin_chat_raw}'). Используйте `Мд адмчат <id>`")
                 except Exception as e:
                     print("Kick error:", e)
                     send_msg(peer, f"❌ Не удалось исключить {mention(t_id)}: {e}")
@@ -843,7 +840,6 @@ def handle_message(peer, sender, text, msg_obj):
                 
                 VK.messages.removeChatUser(chat_id=chat_id, member_id=t_id)
                 
-                # ИСПРАВЛЕНО: Не удаляем, а обнуляем преды, сохраняя ник
                 with DB_LOCK:
                     CONN.execute("UPDATE members SET warnings=0, warn_durations='', warn_expiry=0 WHERE user_id=? AND peer_id=?", (t_id, peer))
                     CONN.commit()
@@ -867,7 +863,7 @@ def handle_message(peer, sender, text, msg_obj):
                         send_msg(peer, f"⚠️ Игрок {mention(t_id)} забанен, но **не удалось** отправить отчет в адм-чат ({report_peer}). Ошибка: {e}")
                 else:
                     print(f"Адм-чат не настроен или некорректен: '{admin_chat_raw}'")
-                    send_msg(peer, f"⚠️ Игрок {mention(t_id)} забанен, но **адм-чат не настроен** или ID некорректен ('{admin_chat_raw}'). Используйте `Мд адмчат 2000000690`")
+                    send_msg(peer, f"⚠️ Игрок {mention(t_id)} забанен, но **адм-чат не настроен** или ID некорректен ('{admin_chat_raw}'). Используйте `Мд адмчат <id>`")
             except Exception as e:
                 send_msg(peer, f"❌ Не удалось забанить {mention(t_id)}: {e}")
 
@@ -877,9 +873,23 @@ def handle_message(peer, sender, text, msg_obj):
             return
         if not args or not args[0].isdigit():
             current = get_setting(peer, "admin_report_chat", "Не установлена")
-            return send_msg(peer, f"📌 Текущий чат для отчетов о банах: {current}\n\nИспользуйте: `Мд адмчат <id_беседы>` (например, 2000000690)")
-        set_setting(peer, "admin_report_chat", args[0])
-        send_msg(peer, f"✅ Чат для отчетов и банов успешно установлен: {args[0]}")
+            return send_msg(peer, f"📌 Текущий чат для отчетов: {current}\n\nИспользуйте: `Мд адмчат <id_чата>`")
+        
+        target_chat = int(args[0])
+        set_setting(peer, "admin_report_chat", str(target_chat))
+        
+        # Отправляем тестовое сообщение в целевой чат, как у "Кая"
+        test_text = f"✅ Жалобы и отчеты из чата {peer} теперь будут отправляться сюда."
+        try:
+            send_msg(target_chat, test_text)
+            send_msg(peer, f"✅ Репорты из чата {peer} будут отправляться в чат {target_chat}. (Тестовое сообщение отправлено)")
+        except Exception as e:
+            send_msg(peer, f"⚠️ Настройка сохранена, но не удалось отправить тестовое сообщение в чат {target_chat}. Проверьте, что бот там есть и имеет права. Ошибка: {e}")
+
+    elif cmd == "номер_чата":
+        chat_owner_id = get_chat_owner(peer)
+        owner_name = mention(chat_owner_id) if chat_owner_id else "Не определён"
+        send_msg(peer, f"📌 Номер чата: {peer}\nСоздатель: {owner_name}")
 
     elif cmd == "лимит_предов":
         if not owner:
@@ -913,12 +923,20 @@ def handle_message(peer, sender, text, msg_obj):
 
     elif cmd == "время_опросов":
         if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
-        if len(args) >= 2 and args[0].isdigit() and args[1].isdigit():
-            set_setting(peer, "poll_start", args[0])
-            set_setting(peer, "poll_end", args[1])
-            send_msg(peer, f"✅ Время опросов изменено: с {args[0]}:25 до {args[1]}:25")
+        if len(args) >= 2:
+            try:
+                start_h, start_m = map(int, args[0].split(":"))
+                end_h, end_m = map(int, args[1].split(":"))
+                if start_m != end_m:
+                    return send_msg(peer, "❌ Минуты начала и конца опроса должны совпадать (например, 10:20 23:20).")
+                set_setting(peer, "poll_start", str(start_h))
+                set_setting(peer, "poll_end", str(end_h))
+                set_setting(peer, "poll_minute", str(start_m))
+                send_msg(peer, f"✅ Время опросов изменено: каждый час в {start_m} минут, с {start_h}:00 до {end_h}:00")
+            except ValueError:
+                send_msg(peer, "❌ Формат: `Мд время опросов ЧЧ:ММ ЧЧ:ММ` (например, 10:20 23:20)")
         else:
-            send_msg(peer, "❌ Формат: `Мд время опросов <начало> <конец>` (например, 10 22)")
+            send_msg(peer, "❌ Формат: `Мд время опросов ЧЧ:ММ ЧЧ:ММ` (например, 10:20 23:20)")
 
     elif cmd == "защита":
         if not admin: return send_msg(peer, "⛔ Только администраторы.")
@@ -1139,6 +1157,17 @@ def timer_loop():
                         with DB_LOCK:
                             CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (now + rem["interval_minutes"] * 60, rem["id"]))
                             CONN.commit()
+                
+                # Удаление опроса через 10 минут
+                last_poll_msg_id = get_setting(peer, "last_poll_msg_id", "")
+                last_poll_time = int(get_setting(peer, "last_poll_time", "0"))
+                if last_poll_msg_id and (time.time() - last_poll_time) > 600:
+                    try:
+                        VK.messages.delete(peer_id=peer, message_ids=last_poll_msg_id, delete_for_all=1)
+                    except Exception as e:
+                        print(f"Не удалось удалить опрос: {e}")
+                    set_setting(peer, "last_poll_msg_id", "")
+                    set_setting(peer, "last_poll_time", "0")
             
             if now_msk.hour == 0 and now_msk.minute == 0:
                 for p in bday_peers:
@@ -1148,14 +1177,28 @@ def timer_loop():
                 peer = p["peer_id"]
                 start_hour = int(get_setting(peer, "poll_start", "10"))
                 end_hour = int(get_setting(peer, "poll_end", "22"))
-                last_poll_hour = int(get_setting(peer, "last_poll_hour", "-1"))
-                if now_msk.minute == 25 and start_hour <= now_msk.hour <= end_hour and last_poll_hour != now_msk.hour:
-                    keyboard = {
-                        "inline": True,
-                        "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote"})}, "color": "positive"}]]
-                    }
-                    send_msg(peer, "📊 Опрос: Кто заходит на этот кд?", keyboard=keyboard)
-                    set_setting(peer, "last_poll_hour", str(now_msk.hour))
+                poll_minute = int(get_setting(peer, "poll_minute", "25"))
+                
+                if now_msk.minute == poll_minute and start_hour <= now_msk.hour <= end_hour:
+                    last_poll_key = f"last_poll_{now_msk.hour}_{poll_minute}"
+                    if get_setting(peer, last_poll_key, "0") != "1":
+                        keyboard = {
+                            "inline": True,
+                            "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote"})}, "color": "positive"}]]
+                        }
+                        try:
+                            msg_id = VK.messages.send(
+                                peer_id=peer, 
+                                message="📊 Опрос: Кто заходит на этот кд?", 
+                                keyboard=json.dumps(keyboard), 
+                                random_id=random.getrandbits(31)
+                            )
+                            set_setting(peer, last_poll_key, "1")
+                            set_setting(peer, "last_poll_msg_id", str(msg_id))
+                            set_setting(peer, "last_poll_time", str(int(time.time())))
+                        except Exception as e:
+                            print(f"Ошибка отправки опроса: {e}")
+                
                 if now_msk.hour == 23 and now_msk.minute == 0:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
