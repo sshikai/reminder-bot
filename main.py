@@ -58,14 +58,15 @@ def init_db():
             user_id INTEGER, peer_id INTEGER, nickname TEXT DEFAULT '', warnings INTEGER DEFAULT 0,
             warn_durations TEXT DEFAULT '', warn_expiry INTEGER DEFAULT 0, last_active TEXT DEFAULT '', 
             streak INTEGER DEFAULT 0, poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0, 
-            last_vote_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
+            last_vote_time INTEGER DEFAULT 0, last_vote_warn_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS poll_votes (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, peer_id INTEGER, date TEXT)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS info_blocks (peer_id INTEGER, key TEXT, text TEXT, PRIMARY KEY(peer_id, key))""")
         
         migrations = [
             "ALTER TABLE members ADD COLUMN warn_durations TEXT DEFAULT ''",
-            "ALTER TABLE members ADD COLUMN last_vote_time INTEGER DEFAULT 0"
+            "ALTER TABLE members ADD COLUMN last_vote_time INTEGER DEFAULT 0",
+            "ALTER TABLE members ADD COLUMN last_vote_warn_time INTEGER DEFAULT 0"
         ]
         for sql in migrations:
             try:
@@ -271,38 +272,64 @@ def handle_event(event):
                 payload = {}
         cmd = payload.get("cmd", "")
 
+        # ИСПРАВЛЕНО 1 и 4: Обработка голосования с защитой от спама и проверкой времени
         if cmd == "poll_vote":
+            now_ts = int(time.time())
+            last_poll_time_str = get_setting(peer_id, "last_poll_time", "0")
+            last_poll_time = int(last_poll_time_str) if last_poll_time_str.isdigit() else 0
+            
+            # Проверка: прошло ли 10 минут с создания опроса
+            if last_poll_time > 0 and (now_ts - last_poll_time) > 600:
+                VK.messages.sendMessageEventAnswer(
+                    event_id=event_id, user_id=user_id, peer_id=peer_id,
+                    event_data=json.dumps({"type": "show_snackbar", "text": "⏰ Время голосования вышло!"})
+                )
+                return
+
             try:
                 VK.messages.sendMessageEventAnswer(
-                    event_id=event_id, 
-                    user_id=user_id, 
-                    peer_id=peer_id, 
+                    event_id=event_id, user_id=user_id, peer_id=peer_id,
                     event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметился!"})
                 )
             except Exception as e:
                 print("Event answer error:", e)
             
             today_str = get_msk_now().strftime("%Y-%m-%d")
-            now_ts = int(time.time())
             
             try:
                 with DB_LOCK:
-                    row = CONN.execute("SELECT last_vote_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
+                    row = CONN.execute("SELECT last_vote_time, last_vote_warn_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
                     last_vote = row["last_vote_time"] if row and row["last_vote_time"] else 0
-                    can_spam = (now_ts - last_vote) >= 3600
+                    last_warn = row["last_vote_warn_time"] if row and row["last_vote_warn_time"] else 0
                     
-                    # ИСПРАВЛЕНО 2: INSERT OR IGNORE предотвращает ошибку UNIQUE constraint failed при двойном клике
+                    can_vote_msg = (now_ts - last_vote) >= 3600
+                    
                     CONN.execute("INSERT OR IGNORE INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
-                    if can_spam:
+                    if can_vote_msg:
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
+                    
+                    # Защита от спама предупреждением: отправляем сообщение в чат только 1 раз в час
+                    if not can_vote_msg:
+                        if (now_ts - last_warn) >= 3600:
+                            send_msg(peer_id, f"⚠️ {mention(user_id)}, вы уже голосовали в последний час. Следующий голос будет учтен позже.")
+                            CONN.execute("UPDATE members SET last_vote_warn_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
+                    
                     CONN.commit()
                 
-                if can_spam:
+                if can_vote_msg:
                     send_msg(peer_id, f"✅ {mention(user_id)} Зайдет на этот кд!")
-                else:
-                    send_msg(peer_id, "⚠️ Вы уже голосовали в последний час. Следующий голос будет учтен позже.")
             except Exception as e:
                 send_msg(peer_id, f"❌ Ошибка при обработке голоса: {e}")
+            return
+
+        # ИСПРАВЛЕНО 3: Кнопка номера страницы теперь callback и не спамит
+        if cmd == "page_info":
+            page = payload.get("page", 1)
+            total = payload.get("total", 1)
+            VK.messages.sendMessageEventAnswer(
+                event_id=event_id, user_id=user_id, peer_id=peer_id,
+                event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page} из {total}"})
+            )
             return
 
         if cmd in ["niki_prev", "niki_next"]:
@@ -346,21 +373,24 @@ def handle_event(event):
             
             buttons = []
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
-            buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
+            # ИСПРАВЛЕНО 3: type изменен на callback, чтобы не отправлять текст в чат
+            buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
             niki_msg_key = f"niki_msg_id_{peer_id}"
-            saved_msg_id = int(get_setting(peer_id, niki_msg_key, "0") or "0")
+            saved_msg_id_str = get_setting(peer_id, niki_msg_key, "0")
+            saved_msg_id = int(saved_msg_id_str) if saved_msg_id_str.isdigit() else 0
             
             success = False
+            # ИСПРАВЛЕНО 2: Приоритет всегда отдается редактированию существующего сообщения
             if saved_msg_id > 0:
                 try:
                     VK.messages.edit(peer_id=peer_id, message_id=saved_msg_id, message="\n".join(lines), keyboard=keyboard_json)
                     success = True
                 except Exception as e:
-                    print("Edit saved msg error:", e)
+                    print(f"Edit saved msg error: {e}. Пробуем отправить новое.")
             
             if not success:
                 try:
@@ -386,7 +416,6 @@ def handle_event(event):
 def handle_message(peer, sender, text, msg_obj):
     clean_text = text.strip()
     
-    # ИСПРАВЛЕНО 1: Строгое сравнение int(sender). Если не совпадает - молча выходим (return), без сообщений в чат.
     if clean_text.lower() in ["!!чаты", "!!тест"]:
         if int(sender) != CREATOR_ID:
             return 
@@ -609,13 +638,14 @@ def handle_message(peer, sender, text, msg_obj):
             
             buttons = []
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
-            buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
+            buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
             niki_msg_key = f"niki_msg_id_{peer}"
-            saved_msg_id = int(get_setting(peer, niki_msg_key, "0") or "0")
+            saved_msg_id_str = get_setting(peer, niki_msg_key, "0")
+            saved_msg_id = int(saved_msg_id_str) if saved_msg_id_str.isdigit() else 0
             
             success = False
             if saved_msg_id > 0:
@@ -1180,12 +1210,12 @@ def timer_loop():
                             CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (now + rem["interval_minutes"] * 60, rem["id"]))
                             CONN.commit()
                 
-                # ИСПРАВЛЕНО 3: Корректное получение времени как числа и передача ID сообщения в виде списка для VK API
+                # ИСПРАВЛЕНО 4: Надежное удаление опроса через 10 минут
                 last_poll_msg_id = get_setting(peer, "last_poll_msg_id", "")
                 last_poll_time_str = get_setting(peer, "last_poll_time", "0")
                 last_poll_time = int(last_poll_time_str) if last_poll_time_str.isdigit() else 0
                 
-                if last_poll_msg_id and (time.time() - last_poll_time) > 600:
+                if last_poll_msg_id and last_poll_msg_id.isdigit() and (time.time() - last_poll_time) > 600:
                     try:
                         VK.messages.delete(peer_id=peer, message_ids=[int(last_poll_msg_id)], delete_for_all=1)
                         print(f"Успешно удален опрос {last_poll_msg_id} в беседе {peer}")
