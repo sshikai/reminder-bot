@@ -376,7 +376,6 @@ def handle_event(event):
             saved_msg_id_str = get_setting(peer_id, niki_msg_key, "0")
             
             success = False
-            # ИСПРАВЛЕНО: Используем conversation_message_id для надежного редактирования
             if saved_msg_id_str and saved_msg_id_str != "0":
                 try:
                     if saved_msg_id_str.startswith("conv_"):
@@ -387,15 +386,15 @@ def handle_event(event):
                         VK.messages.edit(peer_id=peer_id, message_id=msg_id, message="\n".join(lines), keyboard=keyboard_json)
                     success = True
                 except Exception as e:
-                    print(f"Edit saved msg error: {e}. Пробуем отправить новое.")
+                    print(f"Edit saved msg error: {e}.")
             
             if not success:
                 try:
                     msg_id = VK.messages.send(peer_id=peer_id, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
-                    
                     try:
-                        msg_data = VK.messages.getById(message_ids=[msg_id])
-                        if msg_data.get('items'):
+                        # ИСПРАВЛЕНО: добавлен peer_id для корректного получения conversation_message_id в беседах
+                        msg_data = VK.messages.getById(message_ids=[msg_id], peer_id=peer_id)
+                        if msg_data.get('items') and len(msg_data['items']) > 0:
                             conv_msg_id = msg_data['items'][0].get('conversation_message_id')
                             if conv_msg_id:
                                 set_setting(peer_id, niki_msg_key, f"conv_{conv_msg_id}")
@@ -403,9 +402,9 @@ def handle_event(event):
                                 set_setting(peer_id, niki_msg_key, str(msg_id))
                         else:
                             set_setting(peer_id, niki_msg_key, str(msg_id))
-                    except:
+                    except Exception as e:
+                        print(f"getById error: {e}")
                         set_setting(peer_id, niki_msg_key, str(msg_id))
-                        
                 except Exception as e:
                     print("Send new msg error:", e)
             
@@ -670,10 +669,10 @@ def handle_message(peer, sender, text, msg_obj):
                 try:
                     msg_id = VK.messages.send(peer_id=peer, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
                     
-                    # ИСПРАВЛЕНО: Получаем conversation_message_id для корректного редактирования в будущем
+                    # ИСПРАВЛЕНО: добавлен peer_id для корректного получения conversation_message_id в беседах
                     try:
-                        msg_data = VK.messages.getById(message_ids=[msg_id])
-                        if msg_data.get('items'):
+                        msg_data = VK.messages.getById(message_ids=[msg_id], peer_id=peer)
+                        if msg_data.get('items') and len(msg_data['items']) > 0:
                             conv_msg_id = msg_data['items'][0].get('conversation_message_id')
                             if conv_msg_id:
                                 set_setting(peer, niki_msg_key, f"conv_{conv_msg_id}")
