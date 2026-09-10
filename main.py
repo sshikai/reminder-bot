@@ -147,7 +147,7 @@ def send_msg(peer, text, attachments=None, keyboard=None):
     try:
         params = {'peer_id': peer, 'message': text, 'random_id': random.getrandbits(31)}
         if attachments: params['attachment'] = attachments
-        if keyboard: params['keyboard'] = json.dumps(keyboard) # Гарантируем JSON строку
+        if keyboard: params['keyboard'] = json.dumps(keyboard)
         VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
@@ -271,9 +271,7 @@ def handle_event(event):
                 payload = {}
         cmd = payload.get("cmd", "")
 
-        # ИСПРАВЛЕНО 2: Надежная обработка голосования с отладкой
         if cmd == "poll_vote":
-            print(f"DEBUG poll_vote: user={user_id}, peer={peer_id}")
             try:
                 VK.messages.sendMessageEventAnswer(
                     event_id=event_id, 
@@ -282,7 +280,7 @@ def handle_event(event):
                     event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметился!"})
                 )
             except Exception as e:
-                print("Event answer error:", e)
+                send_msg(peer_id, f"❌ Ошибка интерфейса: {e}")
             
             today_str = get_msk_now().strftime("%Y-%m-%d")
             now_ts = int(time.time())
@@ -297,14 +295,13 @@ def handle_event(event):
                     if can_spam:
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                     CONN.commit()
-                    print(f"DEBUG: Vote recorded. can_spam={can_spam}")
                 
                 if can_spam:
-                    print(f"DEBUG: Attempting to send message for {user_id} in {peer_id}")
-                    send_msg(peer_id, f"{mention(user_id)} Зайдет на этот кд!")
-                    print("DEBUG: Message sent successfully")
+                    send_msg(peer_id, f"✅ {mention(user_id)} Зайдет на этот кд!")
+                else:
+                    send_msg(peer_id, "⚠️ Вы уже голосовали в последний час. Следующий голос будет учтен позже.")
             except Exception as e:
-                print(f"DEBUG poll_vote DB/Send error: {e}")
+                send_msg(peer_id, f"❌ Ошибка при обработке голоса: {e}")
             return
 
         if cmd in ["niki_prev", "niki_next"]:
@@ -351,7 +348,6 @@ def handle_event(event):
             buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
-            # ИСПРАВЛЕНО 1: json.dumps для keyboard
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
             niki_msg_key = f"niki_msg_id_{peer_id}"
@@ -387,12 +383,17 @@ def handle_event(event):
 
 
 def handle_message(peer, sender, text, msg_obj):
-    # ИСПРАВЛЕНО 3: Поддержка !!Чаты и !!Тест, нечувствительная к регистру
     clean_text = text.strip()
-    if clean_text.lower() in ["!!чаты", "!!тест"] and sender == CREATOR_ID:
+    
+    # ИСПРАВЛЕНО: Строгая проверка ID создателя с выводом в чат, если ID не совпадает
+    if clean_text.lower() in ["!!чаты", "!!тест"]:
+        if sender != CREATOR_ID:
+            send_msg(peer, f"⛔ Эта команда доступна только создателю бота. Ваш текущий ID: {sender} (требуется: {CREATOR_ID})")
+            return
+        
         print(f"DEBUG: !!Чаты triggered by {sender}")
+        send_msg(CREATOR_ID, "⏳ Загрузка списка бесед...")
         with DB_LOCK:
-            # Ищем чаты и в members, и в reminders на всякий случай
             peers_members = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()]
             peers_reminders = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()]
             peers = list(set(peers_members + peers_reminders))
@@ -420,7 +421,7 @@ def handle_message(peer, sender, text, msg_obj):
                     send_msg(CREATOR_ID, msg_text[i:i+4000])
             else:
                 send_msg(CREATOR_ID, msg_text)
-        return # Важно: прерываем выполнение, чтобы не идти дальше
+        return
 
     if peer < 2000000000: return
 
@@ -611,7 +612,6 @@ def handle_message(peer, sender, text, msg_obj):
             buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
-            # ИСПРАВЛЕНО 1: json.dumps для keyboard
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
             niki_msg_key = f"niki_msg_id_{peer}"
@@ -1218,7 +1218,7 @@ def timer_loop():
                         try:
                             msg_id = VK.messages.send(
                                 peer_id=peer, 
-                                message="📊 Опрос: Кто заходит на этот кд?", 
+                                message="📊 Опрос: Кто заходит на этот кд? @all", # ИСПРАВЛЕНО: добавлен @all
                                 keyboard=keyboard_json, 
                                 random_id=random.getrandbits(31)
                             )
