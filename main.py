@@ -11,6 +11,11 @@ from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
 VK_TOKEN = os.environ.get("VK_TOKEN", "").strip()
 CREATOR_ID = 479753606
+LEADER_ID = 639963159
+
+MSK_TZ = datetime.timezone(datetime.timedelta(hours=3))
+def get_msk_now():
+    return datetime.datetime.now(MSK_TZ)
 
 DATA_DIR = "/app/data" if os.path.isdir("/app/data") else os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(DATA_DIR, "bot.db")
@@ -20,61 +25,48 @@ DB_LOCK = threading.Lock()
 VK = None
 NAME_CACHE = {}
 OWNER_CACHE = {}
-MEMBER_CACHE = {}
-LAST_MEMBER_UPDATE = {}
 
-DEFAULT_BIRTHDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!🎂"
+LEADER_BDAY_TEXT = (
+    "Дорогой лидер Million Dollars🎉🎂\n"
+    "От лица всего состава поздравляю тебя с днем рождения!🎁\n\n"
+    "Спасибо за твой огромный вклад в развитие Million Dollars🚀 и за то, что собрал под одним крылом таких крутых ребят.\n\n"
+    "Желаем тебе железобетонного терпения, преданных замов, огромного онлайна и чтобы никто не портил тебе настроение. "
+    "Пусть наша семья гремит по всему серверу! 💰👑\n\n{mention}"
+)
+DEFAULT_BDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!🎂"
+
+VALID_COMMANDS = [
+    "помощь", "админы", "участник", "ники", "ник", "парк", "прем", "чат",
+    "пред", "-пред", "лимит_предов", "кд_предов", "старт_контроль", "стоп_контроль", 
+    "время_опросов", "защита", "-защита", "бан", "адмчат", "admg",
+    "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть"
+]
 
 def init_db():
     with DB_LOCK:
         CONN.execute("""CREATE TABLE IF NOT EXISTS reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            peer_id INTEGER,
-            name TEXT,
-            text TEXT,
-            attachments TEXT,
-            source_message_id INTEGER DEFAULT 0,
-            interval_minutes INTEGER,
-            repeat_count INTEGER DEFAULT 1,
-            next_trigger REAL,
-            enabled INTEGER DEFAULT 1,
-            UNIQUE(peer_id, name))""")
-        CONN.execute("""CREATE TABLE IF NOT EXISTS extra_admins (
-            peer_id INTEGER,
-            user_id INTEGER,
-            UNIQUE(peer_id, user_id))""")
-        CONN.execute("""CREATE TABLE IF NOT EXISTS settings (
-            peer_id INTEGER,
-            key TEXT,
-            value TEXT,
-            UNIQUE(peer_id, key))""")
-        CONN.execute("""CREATE TABLE IF NOT EXISTS birthdays (
-            user_id INTEGER,
-            peer_id INTEGER,
-            bdate TEXT,
-            updated_at INTEGER,
-            PRIMARY KEY(user_id, peer_id))""")
-        CONN.execute("""CREATE TABLE IF NOT EXISTS birthday_congratulated (
-            user_id INTEGER,
-            peer_id INTEGER,
-            year INTEGER,
-            congratulated_at INTEGER,
-            PRIMARY KEY(user_id, peer_id, year))""")
-        CONN.execute("""CREATE TABLE IF NOT EXISTS birthday_text (
-            peer_id INTEGER PRIMARY KEY,
-            text TEXT)""")
+            id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id INTEGER, name TEXT, text TEXT,
+            attachments TEXT, source_message_id INTEGER DEFAULT 0, interval_minutes INTEGER,
+            repeat_count INTEGER DEFAULT 1, next_trigger REAL, enabled INTEGER DEFAULT 1, UNIQUE(peer_id, name))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS extra_admins (peer_id INTEGER, user_id INTEGER, UNIQUE(peer_id, user_id))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS settings (peer_id INTEGER, key TEXT, value TEXT, UNIQUE(peer_id, key))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS birthdays (user_id INTEGER, peer_id INTEGER, bdate TEXT, updated_at INTEGER, PRIMARY KEY(user_id, peer_id))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS birthday_congratulated (user_id INTEGER, peer_id INTEGER, year INTEGER, congratulated_at INTEGER, PRIMARY KEY(user_id, peer_id, year))""")
+        
+        CONN.execute("""CREATE TABLE IF NOT EXISTS members (
+            user_id INTEGER, peer_id INTEGER, nickname TEXT DEFAULT '', warnings INTEGER DEFAULT 0,
+            warn_expiry INTEGER DEFAULT 0, last_active TEXT DEFAULT '', streak INTEGER DEFAULT 0,
+            poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS poll_votes (user_id INTEGER, peer_id INTEGER, date TEXT, PRIMARY KEY(user_id, peer_id, date))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS info_blocks (peer_id INTEGER, key TEXT, text TEXT, PRIMARY KEY(peer_id, key))""")
         
         try:
             cols = [row[1] for row in CONN.execute("PRAGMA table_info(reminders)").fetchall()]
-            if "attachments" not in cols:
-                CONN.execute("ALTER TABLE reminders ADD COLUMN attachments TEXT")
-            if "source_message_id" not in cols:
-                CONN.execute("ALTER TABLE reminders ADD COLUMN source_message_id INTEGER DEFAULT 0")
-            if "repeat_count" not in cols:
-                CONN.execute("ALTER TABLE reminders ADD COLUMN repeat_count INTEGER DEFAULT 1")
+            if "attachments" not in cols: CONN.execute("ALTER TABLE reminders ADD COLUMN attachments TEXT")
+            if "source_message_id" not in cols: CONN.execute("ALTER TABLE reminders ADD COLUMN source_message_id INTEGER DEFAULT 0")
+            if "repeat_count" not in cols: CONN.execute("ALTER TABLE reminders ADD COLUMN repeat_count INTEGER DEFAULT 1")
         except Exception as e:
             print("migration error:", e)
-        
         CONN.commit()
 
 def get_setting(peer, key, default=""):
@@ -89,8 +81,7 @@ def set_setting(peer, key, value):
 
 def get_extra_admins(peer):
     with DB_LOCK:
-        rows = CONN.execute("SELECT user_id FROM extra_admins WHERE peer_id=?", (peer,)).fetchall()
-        return [int(r["user_id"]) for r in rows]
+        return [int(r["user_id"]) for r in CONN.execute("SELECT user_id FROM extra_admins WHERE peer_id=?", (peer,)).fetchall()]
 
 def add_extra_admin(peer, user_id):
     with DB_LOCK:
@@ -102,840 +93,772 @@ def remove_extra_admin(peer, user_id):
         CONN.execute("DELETE FROM extra_admins WHERE peer_id=? AND user_id=?", (peer, user_id))
         CONN.commit()
 
-def get_chat_owner(peer, force_refresh=False):
-    if VK is None:
-        return 0
-    if not force_refresh and peer in OWNER_CACHE:
-        return OWNER_CACHE[peer]
-    
+def get_chat_owner(peer):
+    if VK is None or peer in OWNER_CACHE:
+        return OWNER_CACHE.get(peer, 0)
     oid = 0
     try:
-        result = VK.messages.getConversationsById(peer_ids=peer)
-        items = result.get("items", [])
+        r = VK.messages.getConversationsById(peer_ids=peer)
+        items = r.get("items", [])
         if items:
-            conv = items[0].get("conversation", {})
-            oid = conv.get("owner_id", 0)
-            if not oid:
-                chat_settings = conv.get("chat_settings", {})
-                oid = chat_settings.get("owner_id", 0)
-    except Exception as e:
-        print("owner method 1 error:", e)
-    
-    if oid == 0:
-        try:
-            members_resp = VK.messages.getConversationMembers(peer_id=peer)
-            for item in members_resp.get("items", []):
-                if item.get("is_owner"):
-                    oid = int(item.get("member_id", 0))
-                    break
+            oid = items[0].get("conversation", {}).get("chat_settings", {}).get("owner_id", 0) or 0
             if oid == 0:
-                for profile in members_resp.get("profiles", []):
-                    if profile.get("is_owner"):
-                        oid = int(profile.get("id", 0))
-                        break
-        except Exception as e:
-            print("owner method 2 error:", e)
-    
-    if oid > 0:
-        OWNER_CACHE[peer] = oid
+                oid = items[0].get("conversation", {}).get("owner_id", 0) or 0
+    except Exception as e:
+        print("owner error:", e)
+    OWNER_CACHE[peer] = oid
     return oid
 
 def is_admin(sender, peer):
-    if sender <= 0:
-        return False
-    if sender == CREATOR_ID:
-        return True
-    owner = get_chat_owner(peer)
-    if sender == owner:
-        return True
-    if sender in get_extra_admins(peer):
-        return True
-    return False
+    return sender > 0 and (sender == CREATOR_ID or sender == get_chat_owner(peer) or sender in get_extra_admins(peer))
 
 def is_owner(sender, peer):
-    if sender <= 0:
-        return False
-    if sender == CREATOR_ID:
-        return True
-    return get_chat_owner(peer) == sender
+    return sender > 0 and (sender == CREATOR_ID or sender == get_chat_owner(peer))
 
 def send_msg(peer, text, attachments=None, keyboard=None):
-    if VK is None or not peer:
-        return
+    if VK is None or not peer: return
     try:
-        params = {
-            'peer_id': peer,
-            'message': text,
-            'random_id': random.getrandbits(31)
-        }
-        if attachments:
-            params['attachment'] = attachments
-        if keyboard:
-            params['keyboard'] = json.dumps(keyboard)
+        params = {'peer_id': peer, 'message': text, 'random_id': random.getrandbits(31)}
+        if attachments: params['attachment'] = attachments
+        if keyboard: params['keyboard'] = json.dumps(keyboard)
         VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
 
-def forward_msg(peer, text, source_message_id):
-    if VK is None or not peer or not source_message_id:
-        return False
-    try:
-        forward_json = json.dumps({
-            "peer_id": peer,
-            "conversation_message_ids": [source_message_id]
-        })
-        VK.messages.send(
-            peer_id=peer,
-            message=text,
-            forward=forward_json,
-            random_id=random.getrandbits(31)
-        )
-        return True
-    except Exception as e:
-        print("forward error:", e)
-        return False
-
 def get_user_name(user_id):
-    if user_id in NAME_CACHE:
-        return NAME_CACHE[user_id]
+    if user_id in NAME_CACHE: return NAME_CACHE[user_id]
     name = "Пользователь"
     try:
         r = VK.users.get(user_ids=user_id)
-        if r:
-            name = f"{r[0].get('first_name', '')} {r[0].get('last_name', '')}".strip() or "Пользователь"
-    except Exception:
-        pass
+        if r: name = f"{r[0].get('first_name', '')} {r[0].get('last_name', '')}".strip() or "Пользователь"
+    except: pass
     NAME_CACHE[user_id] = name
     return name
 
-def mention(user_id):
-    return f"[id{user_id}|{get_user_name(user_id)}]"
+def mention(user_id): return f"[id{user_id}|{get_user_name(user_id)}]"
 
 def extract_targets(text, reply_from):
     ids = []
-    for m in re.finditer(r"\[id(\d+)\|", text, re.I):
-        ids.append(int(m.group(1)))
-    for m in re.finditer(r"[@\*]id(\d+)", text, re.I):
-        ids.append(int(m.group(1)))
-    for m in re.finditer(r"\b(\d{5,})\b", text):
-        ids.append(int(m.group(1)))
+    for m in re.finditer(r"\[id(\d+)\|", text, re.I): ids.append(int(m.group(1)))
+    for m in re.finditer(r"[@\*]id(\d+)", text, re.I): ids.append(int(m.group(1)))
+    for m in re.finditer(r"\b(\d{5,})\b", text): ids.append(int(m.group(1)))
     seen, result = set(), []
     for v in ids:
-        if v not in seen:
-            seen.add(v)
-            result.append(v)
-    if not result and reply_from and reply_from > 0:
-        result = [reply_from]
+        if v not in seen: seen.add(v); result.append(v)
+    if not result and reply_from and reply_from > 0: result = [reply_from]
     return result
 
-def norm(s):
-    s = s.strip().lower()
-    s = s.rstrip(".,;:!?")
-    return re.sub(r"\s+", " ", s).strip()
-
-def find_reminder(peer, arg):
-    if not arg:
-        return None
-    arg = arg.strip()
-    with DB_LOCK:
-        if arg.isdigit():
-            num = int(arg)
-            rows = CONN.execute(
-                "SELECT * FROM reminders WHERE peer_id=? ORDER BY id",
-                (peer,)
-            ).fetchall()
-            if 1 <= num <= len(rows):
-                return rows[num - 1]
-            return None
-        row = CONN.execute(
-            "SELECT * FROM reminders WHERE peer_id=? AND name=?",
-            (peer, arg)
-        ).fetchone()
-        return row
+def norm(s): return re.sub(r"\s+", " ", s.strip().lower().rstrip(".,;:!?")).strip()
 
 def parse_reply_attachments(reply_obj):
-    if not reply_obj or not isinstance(reply_obj, dict):
-        return ""
-    attachments = reply_obj.get("attachments", []) or []
+    if not reply_obj or not isinstance(reply_obj, dict): return ""
     parts = []
-    for att in attachments:
-        try:
-            att_type = att.get("type", "")
-            if att_type == "photo":
-                ph = att.get("photo", {})
-                owner_id = ph.get("owner_id", 0)
-                photo_id = ph.get("id", 0)
-                if owner_id and photo_id:
-                    parts.append(f"photo{owner_id}_{photo_id}")
-        except Exception as e:
-            print("attach parse error:", e)
+    for att in reply_obj.get("attachments", []) or []:
+        if att.get("type") == "photo":
+            ph = att.get("photo", {})
+            if ph.get("owner_id") and ph.get("id"): parts.append(f"photo{ph['owner_id']}_{ph['id']}")
     return ",".join(parts)
 
-# ===== ДНИ РОЖДЕНИЯ (СУПЕР-ОПТИМИЗИРОВАНО) =====
-def update_birthdays(peer):
-    now = int(time.time())
-    
-    if peer in MEMBER_CACHE and (now - LAST_MEMBER_UPDATE.get(peer, 0)) < 300:
-        profiles = MEMBER_CACHE[peer]
-    else:
-        try:
-            members_resp = VK.messages.getConversationMembers(peer_id=peer)
-            profiles = members_resp.get("profiles", [])
-            MEMBER_CACHE[peer] = profiles
-            LAST_MEMBER_UPDATE[peer] = now
-        except Exception as e:
-            print(f"ERROR getting members for {peer}: {e}")
-            return
-
+def update_member_activity(peer, user_id):
+    today = get_msk_now().strftime("%Y-%m-%d")
     with DB_LOCK:
-        existing = {row["user_id"]: row["updated_at"] for row in CONN.execute(
-            "SELECT user_id, updated_at FROM birthdays WHERE peer_id=?", (peer,)
-        ).fetchall()}
+        row = CONN.execute("SELECT last_active, streak FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
+        if row:
+            last_active, streak = row["last_active"], row["streak"]
+            if last_active != today:
+                yesterday = (get_msk_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+                new_streak = streak + 1 if last_active == yesterday else 1
+                CONN.execute("UPDATE members SET last_active=?, streak=? WHERE user_id=? AND peer_id=?", (today, new_streak, user_id, peer))
+        else:
+            CONN.execute("INSERT INTO members(user_id, peer_id, last_active, streak) VALUES(?,?,?,?)", (user_id, peer, today, 1))
+        CONN.commit()
 
-    users_to_check = []
-    for profile in profiles:
-        user_id = int(profile.get("id", 0))
-        if user_id <= 0:
-            continue
-        last_update = existing.get(user_id, 0)
-        if (now - last_update) >= 7 * 24 * 3600:
-            users_to_check.append(user_id)
+def get_streak_emoji(streak):
+    if streak >= 50: return "👑"
+    if streak >= 40: return "🤑"
+    if streak >= 30: return "😈"
+    if streak >= 20: return "🤠"
+    if streak >= 10: return "😇"
+    if streak >= 5: return "😎"
+    return "🤓"
 
-    if not users_to_check:
+def check_birthdays(peer):
+    now_msk = get_msk_now()
+    today_str = now_msk.strftime("%Y-%m-%d")
+    current_year = now_msk.year
+    
+    last_check = get_setting(peer, "last_bday_check_date", "")
+    if last_check == today_str:
         return
-
-    try:
-        for i in range(0, len(users_to_check), 500):
-            chunk = users_to_check[i:i+500]
-            r = VK.users.get(user_ids=",".join(map(str, chunk)), fields="bdate")
-            if r:
-                with DB_LOCK:
-                    for user_data in r:
-                        uid = user_data.get("id")
-                        bdate = user_data.get("bdate", "")
-                        if bdate:
-                            CONN.execute(
-                                "INSERT OR REPLACE INTO birthdays(user_id, peer_id, bdate, updated_at) VALUES(?,?,?,?)",
-                                (uid, peer, bdate, now)
-                            )
-                    CONN.commit()
-    except Exception as e:
-        print(f"ERROR fetching birthdays in batch: {e}")
-
-def trigger_background_update(peer):
-    threading.Thread(target=update_birthdays, args=(peer,), daemon=True).start()
-
-def parse_bdate(bdate_str):
-    parts = bdate_str.split(".")
-    if len(parts) == 3:
-        return int(parts[0]), int(parts[1]), int(parts[2])
-    elif len(parts) == 2:
-        return int(parts[0]), int(parts[1]), None
-    return None
-
-def days_until_birthday(bdate_str):
-    parsed = parse_bdate(bdate_str)
-    if not parsed:
-        return None
     
-    day, month = parsed[0], parsed[1]
-    today = time.localtime()
-    current_year = today.tm_year
-    
-    try:
-        bday_this_year = datetime.date(current_year, month, day)
-        today_date = datetime.date(current_year, today.tm_mon, today.tm_mday)
-        
-        if bday_this_year >= today_date:
-            return (bday_this_year - today_date).days
-        else:
-            bday_next_year = datetime.date(current_year + 1, month, day)
-            return (bday_next_year - today_date).days
-    except:
-        return None
-
-def is_birthday_today(bdate_str):
-    parsed = parse_bdate(bdate_str)
-    if not parsed:
-        return False
-    today = time.localtime()
-    return today.tm_mday == parsed[0] and today.tm_mon == parsed[1]
-
-def build_birthday_page(peer, page=1):
     with DB_LOCK:
-        rows = [dict(r) for r in CONN.execute(
-            "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL",
-            (peer,)).fetchall()]
+        rows = [dict(r) for r in CONN.execute("SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL", (peer,)).fetchall()]
     
-    if not rows:
-        return "🎂 Дни рождения не найдены (бот обновляет данные в фоне, попробуйте через минуту).", []
-    
-    birthday_list = []
     for r in rows:
-        days = days_until_birthday(r["bdate"])
-        if days is not None:
-            birthday_list.append((r["user_id"], days))
+        user_id, bdate = r["user_id"], r["bdate"]
+        parts = bdate.split(".")
+        if len(parts) >= 2 and int(parts[0]) == now_msk.day and int(parts[1]) == now_msk.month:
+            with DB_LOCK:
+                row = CONN.execute("SELECT 1 FROM birthday_congratulated WHERE user_id=? AND peer_id=? AND year=?", (user_id, peer, current_year)).fetchone()
+                if row: continue
+            
+            if user_id == LEADER_ID:
+                text = LEADER_BDAY_TEXT.format(mention=mention(user_id))
+            else:
+                custom_row = CONN.execute("SELECT value FROM settings WHERE peer_id=? AND key='birthday_text'", (peer,)).fetchone()
+                custom = custom_row["value"] if custom_row else None
+                text = (custom.rstrip() + "\n\n" + mention(user_id)) if custom else DEFAULT_BDAY_TEXT.format(mention=mention(user_id))
+            
+            send_msg(peer, text)
+            with DB_LOCK:
+                CONN.execute("INSERT OR REPLACE INTO birthday_congratulated(user_id, peer_id, year, congratulated_at) VALUES(?,?,?,?)", (user_id, peer, current_year, int(time.time())))
+                CONN.commit()
     
-    if not birthday_list:
-        return "🎂 Дни рождения не найдены.", []
-    
-    birthday_list.sort(key=lambda x: x[1])
-    
-    per_page = 20
-    total_pages = max(1, (len(birthday_list) + per_page - 1) // per_page)
-    if page < 1:
-        page = 1
-    if page > total_pages:
-        page = total_pages
-    
-    start = (page - 1) * per_page
-    end = start + per_page
-    page_items = birthday_list[start:end]
-    
-    lines = [f"🎂 Дни рождения участников (стр. {page}/{total_pages}):\n"]
-    for user_id, days in page_items:
-        name = get_user_name(user_id)
-        if days == 0:
-            days_str = "сегодня! 🎉"
-        elif days == 1:
-            days_str = "завтра"
-        else:
-            days_str = f"осталось {days} дн."
-        lines.append(f"{name} — {days_str}")
-    
-    text = "\n".join(lines)
-    
-    buttons = []
-    if page > 1:
-        buttons.append({
-            "action": {
-                "type": "callback",
-                "label": "⬅️Назад",
-                "payload": json.dumps({"cmd": "bday_prev", "page": page - 1})
-            },
-            "color": "secondary"
-        })
-    if page < total_pages:
-        buttons.append({
-            "action": {
-                "type": "callback",
-                "label": "Вперёд➡️",
-                "payload": json.dumps({"cmd": "bday_next", "page": page + 1})
-            },
-            "color": "secondary"
-        })
-    
-    return text, buttons
+    set_setting(peer, "last_bday_check_date", today_str)
 
-def handle_birthday_button(event):
-    """Мгновенная обработка кнопок с надежным fallback"""
+def handle_event(event):
     try:
         obj = event.obj
-        if not isinstance(obj, dict):
-            return
+        if not isinstance(obj, dict): return
         
         peer_id = int(obj.get("peer_id", 0))
         user_id = int(obj.get("user_id", 0))
-        conversation_message_id = int(obj.get("conversation_message_id", 0))
+        conv_msg_id = int(obj.get("conversation_message_id", 0))
         
         event_data = obj.get("event_data", {})
-        if isinstance(event_data, str):
-            event_data = json.loads(event_data)
-        
+        if isinstance(event_data, str): event_data = json.loads(event_data)
         payload = event_data.get("payload", {})
-        if isinstance(payload, str):
-            payload = json.loads(payload)
+        if isinstance(payload, str): payload = json.loads(payload)
         
         cmd = payload.get("cmd", "")
-        if cmd not in ("bday_next", "bday_prev"):
+        
+        if cmd == "poll_vote":
+            today_str = get_msk_now().strftime("%Y-%m-%d")
+            with DB_LOCK:
+                CONN.execute("INSERT OR IGNORE INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+                CONN.commit()
+            VK.messages.sendMessageEventAnswer(event_id=obj.get("event_id"), user_id=user_id, peer_id=peer_id, event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметилcя!"}))
             return
         
-        if not is_admin(user_id, peer_id):
-            VK.messages.sendMessageEventAnswer(
-                event_id=obj.get("event_id"),
-                user_id=user_id,
-                peer_id=peer_id,
-                event_data=json.dumps({"type": "show_snackbar", "text": "🚫 Только для админов"})
-            )
-            return
-        
-        page = int(payload.get("page", 1))
-        
-        # Мгновенное чтение из БД (без API запросов!)
-        with DB_LOCK:
-            rows = [dict(r) for r in CONN.execute(
-                "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL",
-                (peer_id,)).fetchall()]
-        
-        if not rows:
-            text = "🎂 Дни рождения не найдены."
-            buttons = []
-        else:
-            birthday_list = []
-            for r in rows:
-                days = days_until_birthday(r["bdate"])
-                if days is not None:
-                    birthday_list.append((r["user_id"], days))
+        if cmd in ["niki_prev", "niki_next"]:
+            if not is_admin(user_id, peer_id):
+                VK.messages.sendMessageEventAnswer(event_id=obj.get("event_id"), user_id=user_id, peer_id=peer_id, event_data=json.dumps({"type": "show_snackbar", "text": "🚫 Только для админов"}))
+                return
             
-            birthday_list.sort(key=lambda x: x[1])
-            per_page = 20
-            total_pages = max(1, (len(birthday_list) + per_page - 1) // per_page)
-            if page < 1: page = 1
-            if page > total_pages: page = total_pages
+            page = int(payload.get("page", 1))
+            with DB_LOCK:
+                total = CONN.execute("SELECT COUNT(*) FROM members WHERE peer_id=?", (peer_id,)).fetchone()[0]
+                rows = CONN.execute("SELECT user_id, nickname, warnings, warn_expiry FROM members WHERE peer_id=? ORDER BY user_id LIMIT 40 OFFSET ?", (peer_id, (page - 1) * 40)).fetchall()
             
-            start = (page - 1) * per_page
-            end = start + per_page
-            page_items = birthday_list[start:end]
+            per_page = 40
+            total_pages = max(1, (total + per_page - 1) // per_page)
+            page = max(1, min(page, total_pages))
             
-            lines = [f"🎂 Дни рождения участников (стр. {page}/{total_pages}):\n"]
-            for uid, days in page_items:
-                name = get_user_name(uid)
-                if days == 0: days_str = "сегодня! 🎉"
-                elif days == 1: days_str = "завтра"
-                else: days_str = f"осталось {days} дн."
-                lines.append(f"{name} — {days_str}")
+            lines = [f"📝 **Ники пользователей чата** (страница {page} из {total_pages}):\n"]
+            max_warns = int(get_setting(peer_id, "max_warns", "3"))
             
-            text = "\n".join(lines)
+            for idx, r in enumerate(rows, (page - 1) * per_page + 1):
+                name = get_user_name(r["user_id"])
+                nick = r["nickname"] or "Не установлен"
+                warns = r["warnings"]
+                days_str = "∞" if r["warn_expiry"] > time.time() + (365 * 86400) else str(max(0, int((r["warn_expiry"] - time.time()) // 86400))) if r["warn_expiry"] > 0 else "0"
+                warn_icon = "⚠️" if warns > 0 else "✅"
+                lines.append(f"{idx}. {name} - \"{nick}\" ({warns}/{max_warns}) ({days_str} дн.) {warn_icon}")
             
             buttons = []
-            if page > 1:
-                buttons.append({"action": {"type": "callback", "label": "⬅️Назад", "payload": json.dumps({"cmd": "bday_prev", "page": page - 1})}, "color": "secondary"})
-            if page < total_pages:
-                buttons.append({"action": {"type": "callback", "label": "Вперёд➡️", "payload": json.dumps({"cmd": "bday_next", "page": page + 1})}, "color": "secondary"})
-        
-        keyboard = {"inline": True, "buttons": [buttons]} if buttons else {"inline": True, "buttons": []}
-        
-        # ИСПРАВЛЕНО: Правильный метод для получения ID сообщения
-        global_msg_id = 0
-        try:
-            r = VK.messages.getByConversationMessageId(
-                peer_id=peer_id,
-                conversation_message_ids=str(conversation_message_id)
-            )
-            items = r.get("items", [])
-            if items:
-                global_msg_id = int(items[0].get("id", 0))
-        except Exception as e:
-            print("getByConvMsgId error:", e)
-        
-        success = False
-        if global_msg_id > 0:
-            try:
-                VK.messages.edit(
-                    peer_id=peer_id,
-                    message_id=global_msg_id,
-                    message=text,
-                    keyboard=json.dumps(keyboard)
-                )
-                success = True
-            except Exception as e:
-                print("edit error:", e)
-        
-        # FALLBACK: Если редактирование не удалось, отправляем новое сообщение
-        if not success:
-            try:
-                VK.messages.send(
-                    peer_id=peer_id,
-                    message=text + "\n\n(Не удалось обновить сообщение, отправлено новое)",
-                    keyboard=json.dumps(keyboard),
-                    random_id=random.getrandbits(31)
-                )
-            except Exception as e:
-                print("send fallback error:", e)
-        
-        # Снимаем анимацию загрузки с кнопки в ЛЮБОМ случае
-        VK.messages.sendMessageEventAnswer(
-            event_id=obj.get("event_id"),
-            user_id=user_id,
-            peer_id=peer_id,
-            event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"})
-        )
+            if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
+            buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
+            if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
+            global_msg_id = 0
+            try:
+                r = VK.messages.getByConversationMessageId(peer_id=peer_id, conversation_message_ids=str(conv_msg_id))
+                if r.get("items"): global_msg_id = int(r["items"][0].get("id", 0))
+            except: pass
+            
+            if global_msg_id > 0:
+                try:
+                    VK.messages.edit(peer_id=peer_id, message_id=global_msg_id, message="\n".join(lines), keyboard={"inline": True, "buttons": [buttons]})
+                    success = True
+                except: success = False
+            else: success = False
+            
+            if not success:
+                VK.messages.send(peer_id=peer_id, message="\n".join(lines) + "\n\n(Не удалось обновить, отправлено новое)", keyboard={"inline": True, "buttons": [buttons]}, random_id=random.getrandbits(31))
+            
+            VK.messages.sendMessageEventAnswer(event_id=obj.get("event_id"), user_id=user_id, peer_id=peer_id, event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"}))
     except Exception as e:
-        print("button handler error:", e)
-
-def get_birthday_text(peer):
-    with DB_LOCK:
-        row = CONN.execute("SELECT text FROM birthday_text WHERE peer_id=?", (peer,)).fetchone()
-        return row["text"] if row else None
-
-def set_birthday_text(peer, text):
-    with DB_LOCK:
-        CONN.execute("INSERT OR REPLACE INTO birthday_text(peer_id, text) VALUES(?,?)", (peer, text))
-        CONN.commit()
-
-def build_birthday_congrats(peer, user_id):
-    mention_str = mention(user_id)
-    custom = get_birthday_text(peer)
-    if custom:
-        return custom.rstrip() + "\n\n" + mention_str
-    else:
-        return DEFAULT_BIRTHDAY_TEXT.format(mention=mention_str)
-
-def check_birthdays(peer):
-    today = time.localtime()
-    current_year = today.tm_year
-    
-    with DB_LOCK:
-        rows = [dict(r) for r in CONN.execute(
-            "SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL",
-            (peer,)).fetchall()]
-    
-    for r in rows:
-        user_id = r["user_id"]
-        bdate = r["bdate"]
-        
-        if not is_birthday_today(bdate):
-            continue
-        
-        with DB_LOCK:
-            row = CONN.execute(
-                "SELECT congratulated_at FROM birthday_congratulated WHERE user_id=? AND peer_id=? AND year=?",
-                (user_id, peer, current_year)).fetchone()
-            if row:
-                continue
-        
-        text = build_birthday_congrats(peer, user_id)
-        send_msg(peer, text)
-        
-        with DB_LOCK:
-            CONN.execute(
-                "INSERT OR REPLACE INTO birthday_congratulated(user_id, peer_id, year, congratulated_at) VALUES(?,?,?,?)",
-                (user_id, peer, current_year, int(time.time())))
-            CONN.commit()
+        print("event error:", e)
 
 def handle_message(peer, sender, text, msg_obj):
-    if peer < 2000000000:
+    if peer < 2000000000: return
+    
+    # СЕКРЕТНАЯ КОМАНДА ДЛЯ СОЗДАТЕЛЯ
+    if text.strip() == "!!Чаты" and sender == CREATOR_ID:
+        with DB_LOCK:
+            peers = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()]
+        
+        if not peers:
+            send_msg(CREATOR_ID, "📭 Бот пока не зафиксировал ни одной беседы в базе.")
+        else:
+            lines = ["📊 **Список бесед с ботом:**\n"]
+            for i in range(0, len(peers), 100):
+                chunk = peers[i:i+100]
+                try:
+                    convos = VK.messages.getConversationsById(peer_ids=chunk)
+                    for item in convos.get("items", []):
+                        p_id = item.get("peer", {}).get("id", 0)
+                        title = item.get("chat_settings", {}).get("title", "Личные сообщения или недоступно")
+                        owner = item.get("chat_settings", {}).get("owner_id", 0)
+                        owner_name = get_user_name(owner) if owner > 0 else "Нет/ЛС"
+                        lines.append(f"• ID: {p_id} | Название: {title} | Владелец: {owner_name} ({owner})")
+                except Exception as e:
+                    lines.append(f"• Ошибка получения данных для части чатов: {e}")
+            
+            msg_text = "\n".join(lines)
+            if len(msg_text) > 4000:
+                for i in range(0, len(msg_text), 4000):
+                    send_msg(CREATOR_ID, msg_text[i:i+4000])
+            else:
+                send_msg(CREATOR_ID, msg_text)
         return
+
+    action = msg_obj.get("action", {})
+    if action.get("type") == "chat_invite_user":
+        user_id = action.get("member_id")
+        if get_setting(peer, "control_active") == "1":
+            send_msg(peer, f"Добро пожаловать, {mention(user_id)}! 🎉\nПожалуйста, установи свой ник с помощью команды:\n`Мд ник <твой_ник>`")
+            with DB_LOCK:
+                CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id, join_time) VALUES(?,?,?)", (user_id, peer, int(time.time())))
+                CONN.commit()
+        return
+
+    update_member_activity(peer, sender)
 
     first = norm(text.split("\n")[0])
-    if not first or not first.startswith("!"):
+    if not first.startswith("мд "):
         return
 
-    cmd = first.split(" ", 1)[0]
-    args_str = first[len(cmd):].strip()
-    args = args_str.split() if args_str else []
-
-    if not is_admin(sender, peer):
-        send_msg(peer, "⛔ Эта команда доступна только администраторам.")
+    parts = first[3:].strip().split()
+    if not parts:
+        send_msg(peer, "Меня кто то звал?🧐 «Мд помощь» список команд.")
+        return
+    
+    cmd = parts[0].lower().replace(" ", "_")
+    args = parts[1:]
+    
+    if cmd not in VALID_COMMANDS:
+        send_msg(peer, "Меня кто то звал?🧐 «Мд помощь» список команд.")
         return
 
     owner = is_owner(sender, peer)
+    admin = is_admin(sender, peer)
 
-    if cmd == "!создать":
-        try:
-            reply = msg_obj.get("reply_message") or {}
-            if not isinstance(reply, dict):
-                reply = {}
-            reply_text = (reply.get("text") or "").strip()
-            reply_attachments_str = parse_reply_attachments(reply)
-            source_message_id = int(reply.get("conversation_message_id", 0) or reply.get("id", 0) or 0)
-            
-            if not reply_text and not reply_attachments_str and not source_message_id:
-                send_msg(peer, "❌ Ответьте на сообщение с текстом или фото и введите !создать <название> <минуты> [количество]")
-                return
-            if len(args) < 2:
-                send_msg(peer, "❌ Формат: !создать <название> <минуты> [количество]")
-                return
-            
-            repeat_count = 1
-            try:
-                if len(args) >= 3 and args[-1].isdigit():
-                    repeat_count = int(args[-1])
-                    minutes = int(args[-2])
-                    name = " ".join(args[:-2])
-                else:
-                    minutes = int(args[-1])
-                    name = " ".join(args[:-1])
-            except ValueError:
-                send_msg(peer, "❌ Минуты и количество должны быть числами.")
-                return
-            
-            with DB_LOCK:
-                try:
-                    CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, source_message_id, interval_minutes, repeat_count, next_trigger) 
-                                    VALUES(?,?,?,?,?,?,?,?)""",
-                                 (peer, name, reply_text, reply_attachments_str, source_message_id, minutes, repeat_count, time.time() + minutes * 60))
-                    CONN.commit()
-                    repeat_info = f", повтор: {repeat_count} раз" if repeat_count > 1 else ""
-                    if source_message_id:
-                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин{repeat_info} (будет пересылать сообщение)")
-                    else:
-                        attach_info = " + вложения" if reply_attachments_str else ""
-                        send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин{repeat_info}{attach_info}")
-                except sqlite3.IntegrityError:
-                    send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
-        except Exception as e:
-            print("create error:", e)
-            send_msg(peer, f"❌ Ошибка при создании напоминания: {e}")
-
-    elif cmd == "!список":
-        with DB_LOCK:
-            rows = CONN.execute(
-                "SELECT id, name, interval_minutes, repeat_count, next_trigger, enabled, attachments, source_message_id FROM reminders WHERE peer_id=? ORDER BY id",
-                (peer,)
-            ).fetchall()
-        if not rows:
-            send_msg(peer, "📭 Список напоминаний пуст.")
-            return
-        msg = "📋 Список напоминаний:\n\n"
-        now = time.time()
-        for idx, r in enumerate(rows, 1):
-            remaining = max(0, r["next_trigger"] - now)
-            mins = int(remaining // 60)
-            secs = int(remaining % 60)
-            status = "🟢 ВКЛЮЧЕНО" if r["enabled"] else "🔴 ОТКЛЮЧЕНО"
-            if r["source_message_id"]:
-                attach_info = " 📎 пересылка"
-            else:
-                attach_count = len(r["attachments"].split(",")) if r["attachments"] else 0
-                attach_info = f" + {attach_count} влож." if attach_count else ""
-            repeat_info = f", повтор: {r['repeat_count']} раз" if r["repeat_count"] > 1 else ""
-            msg += f"#{idx} {r['name']}{attach_info}{repeat_info}\n"
-            msg += f"   {status}\n"
-            msg += f"   Интервал: {r['interval_minutes']} мин.\n"
-            msg += f"   Через: {mins} мин {secs} сек\n\n"
-        send_msg(peer, msg)
-
-    elif cmd == "!удалить":
-        if not args:
-            send_msg(peer, "❌ Формат: !удалить <название или номер>")
-            return
-        arg = " ".join(args)
-        rem = find_reminder(peer, arg)
-        if not rem:
-            send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
-            return
-        with DB_LOCK:
-            CONN.execute("DELETE FROM reminders WHERE id=?", (rem["id"],))
-            CONN.commit()
-        send_msg(peer, f"✅ Напоминание «{rem['name']}» удалено.")
-
-    elif cmd == "!редактировать":
-        if len(args) < 2:
-            send_msg(peer, "❌ Формат: !редактировать <название или номер> <минуты> [количество]")
-            return
-        try:
-            repeat_count = None
-            if len(args) >= 3 and args[-1].isdigit():
-                repeat_count = int(args[-1])
-                minutes = int(args[-2])
-                arg = " ".join(args[:-2])
-            else:
-                minutes = int(args[-1])
-                arg = " ".join(args[:-1])
-        except ValueError:
-            send_msg(peer, "❌ Минуты и количество должны быть числами.")
-            return
-        rem = find_reminder(peer, arg)
-        if not rem:
-            send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
-            return
-        with DB_LOCK:
-            if repeat_count is not None:
-                CONN.execute("""UPDATE reminders SET interval_minutes=?, repeat_count=?, next_trigger=? WHERE id=?""",
-                             (minutes, repeat_count, time.time() + minutes * 60, rem["id"]))
-            else:
-                CONN.execute("""UPDATE reminders SET interval_minutes=?, next_trigger=? WHERE id=?""",
-                             (minutes, time.time() + minutes * 60, rem["id"]))
-            CONN.commit()
-        repeat_info = f", повтор: {repeat_count} раз" if repeat_count else ""
-        send_msg(peer, f"✅ Напоминание «{rem['name']}» обновлено. Новый интервал: {minutes} мин{repeat_info}.")
-
-    elif cmd == "!отключить":
-        if not args:
-            with DB_LOCK:
-                CONN.execute("UPDATE reminders SET enabled=0 WHERE peer_id=?", (peer,))
-                CONN.commit()
-            send_msg(peer, "🔕 Все напоминания отключены.")
-        else:
-            arg = " ".join(args)
-            rem = find_reminder(peer, arg)
-            if not rem:
-                send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
-                return
-            with DB_LOCK:
-                CONN.execute("UPDATE reminders SET enabled=0 WHERE id=?", (rem["id"],))
-                CONN.commit()
-            send_msg(peer, f"🔕 Напоминание «{rem['name']}» отключено.")
-
-    elif cmd == "!включить":
-        if not args:
-            now = time.time()
-            with DB_LOCK:
-                rows = CONN.execute("SELECT id, interval_minutes, next_trigger FROM reminders WHERE peer_id=?", (peer,)).fetchall()
-                for r in rows:
-                    if r["next_trigger"] < now:
-                        new_trigger = now + r["interval_minutes"] * 60
-                        CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (new_trigger, r["id"]))
-                CONN.execute("UPDATE reminders SET enabled=1 WHERE peer_id=?", (peer,))
-                CONN.commit()
-            send_msg(peer, "🔔 Все напоминания включены.")
-        else:
-            arg = " ".join(args)
-            rem = find_reminder(peer, arg)
-            if not rem:
-                send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
-                return
-            now = time.time()
-            new_trigger = now + rem["interval_minutes"] * 60
-            with DB_LOCK:
-                CONN.execute("UPDATE reminders SET enabled=1, next_trigger=? WHERE id=?", (new_trigger, rem["id"]))
-                CONN.commit()
-            send_msg(peer, f"🔔 Напоминание «{rem['name']}» включено.")
-
-    elif cmd == "!развернуть":
-        if not args:
-            send_msg(peer, "❌ Формат: !развернуть <название или номер>")
-            return
-        arg = " ".join(args)
-        rem = find_reminder(peer, arg)
-        if not rem:
-            send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
-            return
-        if rem["source_message_id"]:
-            success = forward_msg(peer, f"📝 Текст напоминания «{rem['name']}»:", rem["source_message_id"])
-            if not success:
-                send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
-        else:
-            send_msg(peer, f"📝 Текст напоминания «{rem['name']}»:\n\n{rem['text']}")
-
-    elif cmd == "!помощь":
+    if cmd == "помощь":
         help_text = (
-            "📖 Команды MD BOT:\n\n"
-            "!создать <название> <минуты> [количество] — создать напоминание (ответом на сообщение)\n"
-            "!список — список всех напоминаний с номерами и статусами\n"
-            "!удалить <название или номер> — удалить напоминание\n"
-            "!редактировать <название или номер> <минуты> [количество] — изменить интервал\n"
-            "!отключить — отключить все напоминания\n"
-            "!отключить <название или номер> — отключить одно напоминание\n"
-            "!включить — включить все напоминания\n"
-            "!включить <название или номер> — включить одно напоминание\n"
-            "!развернуть <название или номер> — показать текст напоминания\n"
-            "!др — дни рождения участников (кнопки листают страницы)\n"
-            "!админы — список руководителей чата\n"
-            "!обновить_владельца — обновить информацию о владельце чата\n"
-            "!помощь — эта справка\n\n"
-            "🛡 Команды владельца/создателя:\n"
-            "!назначить @игрок — выдать права админа\n"
-            "!снять @игрок — снять права админа\n"
-            "!текст_др — установить/посмотреть текст поздравления с ДР\n\n"
-            "💡 Во всех командах вместо названия можно указывать номер из !список.\n"
-            "📎 Бот пересылает оригинальное сообщение (сохраняет фото и вложения)!\n"
-            "🔁 Параметр 'количество' указывает, сколько раз отправить напоминание за раз.\n"
-            "⚠️ Все команды доступны только администраторам."
+            "📖 **Команды MD BOT**\n\n"
+            "👥 **Для всех участников:**\n"
+            "• `Мд помощь` — эта справка\n"
+            "• `Мд админы` — список руководителей чата\n"
+            "• `Мд участник` [@юз] — твоя статистика (админ может смотреть чужую)\n"
+            "• `Мд ники` — список ников и предупреждений\n"
+            "• `Мд парк` / `Мд прем` / `Мд чат` — информационные блоки\n\n"
+            "🛡 **Для администраторов:**\n"
+            "• `Мд ник <имя>` — установить ник участнику (или через ответ)\n"
+            "• `Мд пред [@юз]` — выдать пред (по умолчанию на 7 дн.)\n"
+            "• `Мд пред <дней> [@юз]` — выдать пред на N дней\n"
+            "• `Мд пред навсегда [@юз]` — выдать вечный пред\n"
+            "• `Мд -пред [@юз]` — снять предупреждение\n"
+            "• `Мд бан [@юз]` — забанить участника (отчет уйдет в адм-чат)\n"
+            "• `Мд лимит предов <число>` — макс. количество предов до кика (по умолч. 3)\n"
+            "• `Мд кд предов <дней>` — изменить срок дефолтного преда\n"
+            "• `Мд защита [@юз]` — добавить/убрать защиту от опросов\n"
+            "• `Мд назначить @игрок` / `Мд снять @игрок`\n\n"
+            "⚙️ **Система контроля:**\n"
+            "• `Мд старт контроль` / `Мд стоп контроль`\n"
+            "• `Мд время опросов <начало> <конец>` (часы, напр. 10 22)\n"
+            "• `Мд адмчат <id>` — установить чат для отчетов о банах\n\n"
+            "🔔 **Напоминания:**\n"
+            "• `Мд создать <название> <мин> [кол-во]` (ответом на сообщение)\n"
+            "• `Мд список` / `Мд удалить` / `Мд редактировать`\n"
+            "• `Мд включить` / `Мд отключить` / `Мд развернуть`\n"
+            "• `Мд текст др` — установить текст поздравления с ДР"
         )
         send_msg(peer, help_text)
 
-    elif cmd == "!др":
-        trigger_background_update(peer)
-        page = 1
-        if args and args[0].isdigit():
-            page = int(args[0])
-        try:
-            text, buttons = build_birthday_page(peer, page)
-            if buttons:
-                keyboard = {"inline": True, "buttons": [buttons]}
-                VK.messages.send(
-                    peer_id=peer,
-                    message=text,
-                    keyboard=json.dumps(keyboard),
-                    random_id=random.getrandbits(31)
-                )
-            else:
-                send_msg(peer, text)
-        except Exception as e:
-            print("birthday error:", e)
-            send_msg(peer, f"❌ Ошибка при показе дней рождения: {e}")
-
-    elif cmd == "!текст_др":
-        reply = msg_obj.get("reply_message") or {}
-        if not isinstance(reply, dict):
-            reply = {}
-        reply_text = (reply.get("text") or "").strip()
-        
-        if not reply_text:
-            current = get_birthday_text(peer)
-            if current:
-                send_msg(peer, f"📝 Текущий текст поздравления в этой беседе:\n\n{current}\n\n---\n(в конце автоматически добавится @именинника)")
-            else:
-                send_msg(peer, "📝 Текст поздравления не установлен. Используется стандартный:\n\nПоздравляем @именинника. У него сегодня день рождения!🎂\n\n💡 Чтобы установить свой текст — напиши его в чат, ответь на него и напиши !текст_др")
-            return
-        
-        set_birthday_text(peer, reply_text)
-        send_msg(peer, f"✅ Текст поздравления сохранён для этой беседы.\n\nПример того, как будет выглядеть:\n\n{reply_text}\n\n[Имя Фамилия именинника]\n\n💡 Чтобы изменить — ответь на новый текст и снова напиши !текст_др")
-
-    elif cmd == "!назначить":
-        if not owner:
-            send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
-            return
-        targets = extract_targets(text, None)
-        if not targets:
-            send_msg(peer, "❌ Укажите игрока: !назначить @игрок")
-            return
+    elif cmd == "админы":
         chat_owner_id = get_chat_owner(peer)
-        added = []
-        for t in targets:
-            if t == CREATOR_ID or t == chat_owner_id or t in get_extra_admins(peer):
-                continue
-            add_extra_admin(peer, t)
-            added.append(t)
-        if added:
-            names = ", ".join(mention(x) for x in added)
-            send_msg(peer, f"✅ Назначены админами: {names}")
-        else:
-            send_msg(peer, "ℹ️ Эти игроки уже являются администраторами.")
-
-    elif cmd == "!снять":
-        if not owner:
-            send_msg(peer, "⛔ Эту команду может использовать только создатель бота или владелец чата.")
-            return
-        targets = extract_targets(text, None)
-        if not targets:
-            send_msg(peer, "❌ Укажите игрока: !снять @игрок")
-            return
-        chat_owner_id = get_chat_owner(peer)
-        removed = []
-        protected = 0
-        for t in targets:
-            if t == CREATOR_ID or t == chat_owner_id:
-                protected += 1
-                continue
-            if t in get_extra_admins(peer):
-                remove_extra_admin(peer, t)
-                removed.append(t)
-        parts = []
-        if removed:
-            parts.append(f"✅ Сняты права админа: {', '.join(mention(x) for x in removed)}")
-        if protected:
-            parts.append("⚠️ Нельзя снять права с создателя или владельца чата.")
-        if not parts:
-            parts.append("ℹ️ У этих игроков нет прав админа.")
-        send_msg(peer, "\n".join(parts))
-
-    elif cmd == "!админы":
-        chat_owner_id = get_chat_owner(peer, force_refresh=True)
-        lines = ["👥 Администраторы:\n"]
-        if chat_owner_id:
-            lines.append(f"👑 Владелец: {mention(chat_owner_id)}")
-        else:
-            lines.append("👑 Владелец: не определён")
+        lines = ["👥 **Администраторы:**\n"]
+        if chat_owner_id: lines.append(f"👑 Владелец: {mention(chat_owner_id)}")
+        else: lines.append("👑 Владелец: не определён")
         extras = [uid for uid in get_extra_admins(peer) if uid != chat_owner_id and uid != CREATOR_ID]
-        if extras:
-            lines.append("🛡 Админы: " + ", ".join(mention(uid) for uid in extras))
-        else:
-            lines.append("🛡 Админы: отсутствуют")
+        if extras: lines.append(f"🛡 Админы: {', '.join(mention(uid) for uid in extras)}")
+        else: lines.append("🛡 Админы: отсутствуют")
         lines.append(f"👑 chatbot creator: {mention(CREATOR_ID)}")
         send_msg(peer, "\n".join(lines))
 
-    elif cmd == "!обновить_владельца":
-        if peer in OWNER_CACHE:
-            del OWNER_CACHE[peer]
-        chat_owner_id = get_chat_owner(peer, force_refresh=True)
-        if chat_owner_id:
-            send_msg(peer, f"✅ Владелец чата обновлён: {mention(chat_owner_id)}")
+    elif cmd == "участник":
+        target_id = sender
+        if admin and args:
+            targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
+            if targets: target_id = targets[0]
+        
+        with DB_LOCK:
+            row = CONN.execute("SELECT nickname, warnings, warn_expiry, streak FROM members WHERE user_id=? AND peer_id=?", (target_id, peer)).fetchone()
+        
+        if not row:
+            send_msg(peer, f"ℹ️ Участник {mention(target_id)} еще не проявлял активность в системе.")
+            return
+        
+        nick = row["nickname"] or "Не установлен"
+        warns = row["warnings"]
+        max_warns = int(get_setting(peer, "max_warns", "3"))
+        
+        if row["warn_expiry"] > 0:
+            days_left = max(0, int((row["warn_expiry"] - time.time()) // 86400))
+            days_str = "∞" if days_left > 365 else str(days_left)
         else:
-            send_msg(peer, "❌ Не удалось определить владельца чата. Убедитесь, что бот — администратор беседы.")
+            days_str = "0"
+        
+        streak = row["streak"]
+        emoji = get_streak_emoji(streak)
+        
+        msg = (
+            f"👥 **Участник** {mention(target_id)}:\n"
+            f"🎮 **Ник:** {nick}\n"
+            f"⚠️ **Предупреждений:** {warns}/{max_warns} ({days_str} дн.)\n"
+            f"🔥 **Серия посещения:** {streak} дн. {emoji}"
+        )
+        send_msg(peer, msg)
+
+    elif cmd == "ники":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы могут смотреть полный список.")
+            return
+        page = int(args[0]) if args and args[0].isdigit() else 1
+        with DB_LOCK:
+            total = CONN.execute("SELECT COUNT(*) FROM members WHERE peer_id=?", (peer,)).fetchone()[0]
+            rows = CONN.execute("SELECT user_id, nickname, warnings, warn_expiry FROM members WHERE peer_id=? ORDER BY user_id LIMIT 40 OFFSET ?", (peer, (page - 1) * 40)).fetchall()
+        
+        if not rows:
+            send_msg(peer, "📝 Список участников пуст.")
+            return
+        
+        per_page = 40
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = max(1, min(page, total_pages))
+        
+        lines = [f"📝 **Ники пользователей чата** (страница {page} из {total_pages}):\n"]
+        max_warns = int(get_setting(peer, "max_warns", "3"))
+        
+        for idx, r in enumerate(rows, (page - 1) * per_page + 1):
+            name = get_user_name(r["user_id"])
+            nick = r["nickname"] or "Не установлен"
+            warns = r["warnings"]
+            days_str = "∞" if r["warn_expiry"] > time.time() + (365 * 86400) else str(max(0, int((r["warn_expiry"] - time.time()) // 86400))) if r["warn_expiry"] > 0 else "0"
+            warn_icon = "⚠️" if warns > 0 else "✅"
+            lines.append(f"{idx}. {name} - \"{nick}\" ({warns}/{max_warns}) ({days_str} дн.) {warn_icon}")
+        
+        buttons = []
+        if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
+        buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
+        if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
+        
+        send_msg(peer, "\n".join(lines), keyboard={"inline": True, "buttons": [buttons]})
+
+    elif cmd == "ник":
+        if not args:
+            send_msg(peer, "❌ Формат: `Мд ник <ваш_ник>`")
+            return
+        new_nick = " ".join(args)
+        with DB_LOCK:
+            CONN.execute("INSERT OR REPLACE INTO members(user_id, peer_id, nickname) VALUES(?,?,?)", (sender, peer, new_nick))
+            CONN.commit()
+        send_msg(peer, f"✅ Твой ник установлен: **{new_nick}**")
+
+    elif cmd in ["парк", "прем", "чат"]:
+        block_names = {"парк": "park", "прем": "prem", "чат": "chat"}
+        key = block_names[cmd]
+        reply = msg_obj.get("reply_message", {})
+        
+        if reply and isinstance(reply, dict) and reply.get("text"):
+            if not admin:
+                send_msg(peer, "⛔ Только администраторы могут изменять этот блок.")
+                return
+            with DB_LOCK:
+                CONN.execute("INSERT OR REPLACE INTO info_blocks(peer_id, key, text) VALUES(?,?,?)", (peer, key, reply["text"].strip()))
+                CONN.commit()
+            send_msg(peer, f"✅ Информация '{cmd}' обновлена.")
+        else:
+            with DB_LOCK:
+                row = CONN.execute("SELECT text FROM info_blocks WHERE peer_id=? AND key=?", (peer, key)).fetchone()
+            if row and row["text"]:
+                send_msg(peer, f"📌 **Информация ({cmd.capitalize()}):**\n\n{row['text']}")
+            else:
+                send_msg(peer, f"ℹ️ Информация '{cmd}' пока не установлена. Администратор может установить её, ответив на сообщение с текстом командой `Мд {cmd}`.")
+
+    elif cmd == "пред":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы могут выдавать предупреждения.")
+            return
+        
+        targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets:
+            send_msg(peer, "❌ Укажите пользователя: `Мд пред @игрок` или `Мд пред 5 @игрок` или `Мд пред навсегда @игрок`")
+            return
+        
+        duration_days = int(get_setting(peer, "default_warn_days", "7"))
+        filter_args = []
+        for arg in args:
+            if arg.isdigit():
+                duration_days = int(arg)
+            elif arg.lower() == "навсегда":
+                duration_days = 9999
+            else:
+                filter_args.append(arg)
+        
+        targets = extract_targets(" ".join(filter_args), msg_obj.get("reply_message", {}).get("from_id", 0))
+        max_warns = int(get_setting(peer, "max_warns", "3"))
+        now = time.time()
+        expiry = now + (duration_days * 86400) if duration_days < 9999 else now + (36500 * 86400)
+        
+        for t_id in targets:
+            if t_id == CREATOR_ID or t_id == get_chat_owner(peer):
+                continue
+            
+            with DB_LOCK:
+                row = CONN.execute("SELECT warnings FROM members WHERE user_id=? AND peer_id=?", (t_id, peer)).fetchone()
+                current_warns = row["warnings"] + 1 if row else 1
+                
+                CONN.execute("""INSERT OR REPLACE INTO members(user_id, peer_id, warnings, warn_expiry) 
+                                VALUES(?,?,?,?)""", (t_id, peer, current_warns, expiry))
+                CONN.commit()
+            
+            days_str = "навсегда" if duration_days >= 9999 else f"на {duration_days} дн."
+            send_msg(peer, f"⚠️ {mention(t_id)} получает предупреждение ({current_warns}/{max_warns}) {days_str}.")
+            
+            if current_warns >= max_warns:
+                try:
+                    VK.messages.removeChatUser(peer_id=peer, member_id=t_id)
+                    if get_setting(peer, "control_active") == "1":
+                        admin_chat = get_setting(peer, "admin_report_chat")
+                        # ИСПРАВЛЕНО: Отправляем отчет ТОЛЬКО если адм-чат явно установлен
+                        if admin_chat and admin_chat.isdigit():
+                            report_peer = int(admin_chat)
+                            
+                            chat_name = VK.messages.getConversationsById(peer_ids=peer)["items"][0].get("chat_settings", {}).get("title", "беседы")
+                            with DB_LOCK:
+                                nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (t_id, peer)).fetchone()
+                            nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(t_id)
+                            
+                            report_text = (
+                                f"🚨 **ВНИМАНИЕ!**\n\n"
+                                f"Игрок {nick} был исключен из беседы '{chat_name}' за превышение лимита предупреждений ({max_warns}).\n"
+                                f"Прошу принять меры и исключить его из семьи в игре.\n\n"
+                                f"🔗 https://vk.ru/im/convo/2000000690?entrypoint=vkcom_right_column_menu"
+                            )
+                            send_msg(report_peer, report_text)
+                except Exception as e:
+                    print("Kick error:", e)
+
+    elif cmd == "-пред":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы могут снимать предупреждения.")
+            return
+        targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets:
+            send_msg(peer, "❌ Укажите пользователя: `Мд -пред @игрок`")
+            return
+        
+        for t_id in targets:
+            with DB_LOCK:
+                row = CONN.execute("SELECT warnings FROM members WHERE user_id=? AND peer_id=?", (t_id, peer)).fetchone()
+                if row and row["warnings"] > 0:
+                    CONN.execute("UPDATE members SET warnings = warnings - 1 WHERE user_id=? AND peer_id=?", (t_id, peer))
+                    CONN.commit()
+                    send_msg(peer, f"✅ С {mention(t_id)} снято предупреждение.")
+                else:
+                    send_msg(peer, f"ℹ️ У {mention(t_id)} нет предупреждений.")
+
+    elif cmd == "бан":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы могут банить.")
+            return
+        targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets:
+            send_msg(peer, "❌ Укажите пользователя: `Мд бан @игрок`")
+            return
+        
+        chat_name = "Неизвестная беседа"
+        try:
+            chat_name = VK.messages.getConversationsById(peer_ids=peer)["items"][0].get("chat_settings", {}).get("title", "Неизвестная беседа")
+        except: pass
+
+        for t_id in targets:
+            try:
+                VK.messages.removeChatUser(peer_id=peer, member_id=t_id)
+                
+                # ИСПРАВЛЕНО: Отчет ТОЛЬКО если включена система опросов И установлен адм-чат
+                if get_setting(peer, "control_active") == "1":
+                    admin_chat = get_setting(peer, "admin_report_chat")
+                    if admin_chat and admin_chat.isdigit():
+                        report_peer = int(admin_chat)
+                        
+                        with DB_LOCK:
+                            nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (t_id, peer)).fetchone()
+                        nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(t_id)
+                        
+                        report_text = (
+                            f"🚨 **РУЧНОЙ БАН**\n\n"
+                            f"Администратор {mention(sender)} забанил участника {nick} в беседе '{chat_name}'.\n"
+                            f"Прошу принять меры и исключить его из семьи в игре.\n\n"
+                            f"🔗 https://vk.ru/im/convo/2000000690?entrypoint=vkcom_right_column_menu"
+                        )
+                        send_msg(report_peer, report_text)
+                        
+            except Exception as e:
+                send_msg(peer, f"❌ Не удалось забанить {mention(t_id)} (возможно, он уже вышел или у бота нет прав).")
+
+    elif cmd in ["адмчат", "admg"]:
+        if not owner:
+            send_msg(peer, "⛔ Только владелец или создатель может менять чат для отчетов.")
+            return
+        if not args or not args[0].isdigit():
+            current = get_setting(peer, "admin_report_chat", "Не установлена")
+            return send_msg(peer, f"📌 Текущий чат для отчетов о банах: `{current}`\n\nИспользуйте: `Мд адмчат <id_беседы>` (например, 2000000001)")
+        
+        set_setting(peer, "admin_report_chat", args[0])
+        send_msg(peer, f"✅ Чат для отчетов и банов успешно установлен: {args[0]}")
+
+    elif cmd == "лимит_предов":
+        if not owner:
+            send_msg(peer, "⛔ Только владелец или создатель может менять лимит.")
+            return
+        if not args or not args[0].isdigit():
+            send_msg(peer, "❌ Формат: `Мд лимит предов <число>`")
+            return
+        set_setting(peer, "max_warns", args[0])
+        send_msg(peer, f"✅ Максимальное количество предупреждений установлено: {args[0]}")
+
+    elif cmd == "кд_предов":
+        if not owner:
+            send_msg(peer, "⛔ Только владелец или создатель может менять КД.")
+            return
+        if not args or not args[0].isdigit():
+            send_msg(peer, "❌ Формат: `Мд кд предов <дней>`")
+            return
+        set_setting(peer, "default_warn_days", args[0])
+        send_msg(peer, f"✅ Срок предупреждения по умолчанию: {args[0]} дн.")
+
+    elif cmd == "старт_контроль":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        set_setting(peer, "control_active", "1")
+        send_msg(peer, "✅ Система контроля активности включена.")
+
+    elif cmd == "стоп_контроль":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        set_setting(peer, "control_active", "0")
+        send_msg(peer, "❌ Система контроля активности выключена.")
+
+    elif cmd == "время_опросов":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        if len(args) >= 2 and args[0].isdigit() and args[1].isdigit():
+            set_setting(peer, "poll_start", args[0])
+            set_setting(peer, "poll_end", args[1])
+            send_msg(peer, f"✅ Время опросов изменено: с {args[0]}:25 до {args[1]}:25")
+        else:
+            send_msg(peer, "❌ Формат: `Мд время опросов <начало> <конец>` (например, 10 22)")
+
+    elif cmd == "защита":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets:
+            with DB_LOCK:
+                protected = [int(r["user_id"]) for r in CONN.execute("SELECT user_id FROM members WHERE peer_id=? AND poll_protected=1", (peer,)).fetchall()]
+            if protected:
+                send_msg(peer, "🛡 Защищенные от опросов: " + ", ".join(mention(x) for x in protected))
+            else:
+                send_msg(peer, "🛡 Защищенных участников нет.")
+            return
+        
+        for t_id in targets:
+            with DB_LOCK:
+                CONN.execute("INSERT OR REPLACE INTO members(user_id, peer_id, poll_protected) VALUES(?,?,1)", (t_id, peer))
+                CONN.commit()
+            send_msg(peer, f"🛡 {mention(t_id)} добавлен в защиту от опросов.")
+
+    elif cmd == "-защита":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets:
+            send_msg(peer, "❌ Укажите пользователя: `Мд -защита @игрок`")
+            return
+        
+        for t_id in targets:
+            with DB_LOCK:
+                CONN.execute("UPDATE members SET poll_protected=0 WHERE user_id=? AND peer_id=?", (t_id, peer))
+                CONN.commit()
+            send_msg(peer, f"✅ {mention(t_id)} удален из защиты от опросов.")
+
+    elif cmd == "текст_др":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        reply = msg_obj.get("reply_message", {})
+        if not isinstance(reply, dict) or not reply.get("text"):
+            current = get_setting(peer, "birthday_text", "")
+            if current:
+                send_msg(peer, f"📝 Текущий текст:\n\n{current}\n\n---\n(в конце автоматически добавится @именинника)")
+            else:
+                send_msg(peer, "📝 Текст не установлен. Используется стандартный.")
+            return
+        set_setting(peer, "birthday_text", reply["text"].strip())
+        send_msg(peer, "✅ Текст поздравления сохранён.")
+
+    elif cmd == "создать":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        reply = msg_obj.get("reply_message", {})
+        if not isinstance(reply, dict) or (not reply.get("text") and not reply.get("attachments")):
+            return send_msg(peer, "❌ Ответьте на сообщение с текстом/фото и введите: `Мд создать <название> <минуты> [кол-во]`")
+        
+        if len(args) < 2:
+            return send_msg(peer, "❌ Формат: `Мд создать <название> <минуты> [кол-во]`")
+        
+        try:
+            repeat_count = 1
+            if len(args) >= 3 and args[-1].isdigit():
+                repeat_count = int(args[-1])
+                minutes = int(args[-2])
+                name = " ".join(args[:-2])
+            else:
+                minutes = int(args[-1])
+                name = " ".join(args[:-1])
+        except ValueError:
+            return send_msg(peer, "❌ Минуты и количество должны быть числами.")
+        
+        source_msg_id = int(reply.get("conversation_message_id", 0) or reply.get("id", 0) or 0)
+        attach_str = parse_reply_attachments(reply)
+        
+        with DB_LOCK:
+            try:
+                CONN.execute("""INSERT INTO reminders(peer_id, name, text, attachments, source_message_id, interval_minutes, repeat_count, next_trigger) 
+                                VALUES(?,?,?,?,?,?,?,?)""",
+                             (peer, name, reply.get("text", ""), attach_str, source_msg_id, minutes, repeat_count, time.time() + minutes * 60))
+                CONN.commit()
+                send_msg(peer, f"✅ Напоминание «{name}» создано. Интервал: {minutes} мин{f', повтор: {repeat_count} раз' if repeat_count>1 else ''}")
+            except sqlite3.IntegrityError:
+                send_msg(peer, f"❌ Напоминание «{name}» уже существует.")
+
+    elif cmd == "список":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        with DB_LOCK:
+            rows = CONN.execute("SELECT id, name, interval_minutes, repeat_count, next_trigger, enabled, attachments, source_message_id FROM reminders WHERE peer_id=? ORDER BY id", (peer,)).fetchall()
+        if not rows: return send_msg(peer, "📭 Список напоминаний пуст.")
+        
+        msg = "📋 **Список напоминаний:**\n\n"
+        now = time.time()
+        for idx, r in enumerate(rows, 1):
+            remaining = max(0, r["next_trigger"] - now)
+            mins, secs = int(remaining // 60), int(remaining % 60)
+            status = "🟢 ВКЛ" if r["enabled"] else "🔴 ВЫКЛ"
+            attach_info = " 📎" if r["source_message_id"] else ""
+            msg += f"#{idx} {r['name']}{attach_info}\n   {status} | {r['interval_minutes']} мин | Через: {mins}м {secs}с\n"
+        send_msg(peer, msg)
+
+    elif cmd == "удалить":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        if not args: return send_msg(peer, "❌ Формат: `Мд удалить <номер или название>`")
+        arg = " ".join(args)
+        with DB_LOCK:
+            if arg.isdigit():
+                row = CONN.execute("SELECT name FROM reminders WHERE peer_id=? ORDER BY id", (peer,)).fetchall()
+                if 1 <= int(arg) <= len(row):
+                    name = row[int(arg)-1]["name"]
+                    CONN.execute("DELETE FROM reminders WHERE peer_id=? AND name=?", (peer, name))
+                    CONN.commit()
+                    send_msg(peer, f"✅ Напоминание «{name}» удалено.")
+                    return
+            else:
+                res = CONN.execute("DELETE FROM reminders WHERE peer_id=? AND name=?", (peer, arg))
+                if res.rowcount > 0:
+                    CONN.commit()
+                    send_msg(peer, f"✅ Напоминание «{arg}» удалено.")
+                    return
+        send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
+
+    elif cmd == "редактировать":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        if len(args) < 2: return send_msg(peer, "❌ Формат: `Мд редактировать <название/номер> <минуты>`")
+        try:
+            minutes = int(args[-1])
+            arg = " ".join(args[:-1])
+        except: return send_msg(peer, "❌ Минуты должны быть числом.")
+        
+        with DB_LOCK:
+            if arg.isdigit():
+                row = CONN.execute("SELECT name FROM reminders WHERE peer_id=? ORDER BY id", (peer,)).fetchall()
+                if 1 <= int(arg) <= len(row): arg = row[int(arg)-1]["name"]
+            
+            res = CONN.execute("UPDATE reminders SET interval_minutes=?, next_trigger=? WHERE peer_id=? AND name=?", (minutes, time.time() + minutes * 60, peer, arg))
+            CONN.commit()
+            if res.rowcount > 0: send_msg(peer, f"✅ Напоминание «{arg}» обновлено. Новый интервал: {minutes} мин.")
+            else: send_msg(peer, f"❌ Напоминание «{arg}» не найдено.")
+
+    elif cmd == "включить":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        arg = " ".join(args) if args else None
+        with DB_LOCK:
+            if arg:
+                CONN.execute("UPDATE reminders SET enabled=1, next_trigger=? WHERE peer_id=? AND name=?", (time.time() + 60, peer, arg))
+            else:
+                CONN.execute("UPDATE reminders SET enabled=1 WHERE peer_id=?", (peer,))
+            CONN.commit()
+        send_msg(peer, f"✅ Напоминание {f'«{arg}»' if arg else 'все'} включено.")
+
+    elif cmd == "отключить":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        arg = " ".join(args) if args else None
+        with DB_LOCK:
+            if arg:
+                CONN.execute("UPDATE reminders SET enabled=0 WHERE peer_id=? AND name=?", (peer, arg))
+            else:
+                CONN.execute("UPDATE reminders SET enabled=0 WHERE peer_id=?", (peer,))
+            CONN.commit()
+        send_msg(peer, f"✅ Напоминание {f'«{arg}»' if arg else 'все'} отключено.")
+
+    elif cmd == "развернуть":
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
+        if not args: return send_msg(peer, "❌ Формат: `Мд развернуть <название или номер>`")
+        arg = " ".join(args)
+        with DB_LOCK:
+            if arg.isdigit():
+                row = CONN.execute("SELECT name FROM reminders WHERE peer_id=? ORDER BY id", (peer,)).fetchall()
+                if 1 <= int(arg) <= len(row): arg = row[int(arg)-1]["name"]
+            row = CONN.execute("SELECT text FROM reminders WHERE peer_id=? AND name=?", (peer, arg)).fetchone()
+        if row: send_msg(peer, f"📝 **{arg}**:\n\n{row['text']}")
+        else: send_msg(peer, f"❌ Не найдено.")
+
+    elif cmd == "назначить":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        targets = extract_targets(text, msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets: return send_msg(peer, "❌ Укажите игрока: `Мд назначить @игрок`")
+        added = []
+        for t in targets:
+            if t not in [CREATOR_ID, get_chat_owner(peer)] and t not in get_extra_admins(peer):
+                add_extra_admin(peer, t)
+                added.append(t)
+        if added: send_msg(peer, f"✅ Назначены админами: {', '.join(mention(x) for x in added)}")
+        else: send_msg(peer, "ℹ️ Уже являются админами.")
+
+    elif cmd == "снять":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        targets = extract_targets(text, msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets: return send_msg(peer, "❌ Укажите игрока: `Мд снять @игрок`")
+        removed = []
+        for t in targets:
+            if t in get_extra_admins(peer) and t not in [CREATOR_ID, get_chat_owner(peer)]:
+                remove_extra_admin(peer, t)
+                removed.append(t)
+        if removed: send_msg(peer, f"✅ Сняты права: {', '.join(mention(x) for x in removed)}")
+        else: send_msg(peer, "ℹ️ У них нет прав админа.")
 
 
 def timer_loop():
@@ -945,46 +868,123 @@ def timer_loop():
             if VK is None:
                 continue
             
+            now_msk = get_msk_now()
+            today_str = now_msk.strftime("%Y-%m-%d")
+            
             with DB_LOCK:
                 peers = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
                 bday_peers = CONN.execute("SELECT DISTINCT peer_id FROM birthdays").fetchall()
+                control_peers = CONN.execute("SELECT DISTINCT peer_id FROM settings WHERE key='control_active' AND value='1'").fetchall()
             
+            # 1. Напоминания
             for p in peers:
                 peer = p["peer_id"]
                 now = time.time()
-                
                 with DB_LOCK:
-                    due = CONN.execute(
-                        "SELECT id, name, text, attachments, source_message_id, interval_minutes, repeat_count, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?",
-                        (peer, now)
-                    ).fetchall()
+                    due = CONN.execute("SELECT id, name, text, attachments, source_message_id, interval_minutes, repeat_count, enabled FROM reminders WHERE peer_id=? AND next_trigger<=?", (peer, now)).fetchall()
                 
                 for rem in due:
                     if rem["enabled"] == 1:
                         repeat_count = rem["repeat_count"] or 1
                         for _ in range(repeat_count):
                             if rem["source_message_id"]:
-                                success = forward_msg(peer, f"🔔 Напоминание: {rem['name']}\n\n@all", rem["source_message_id"])
+                                success = False
+                                try:
+                                    forward_json = json.dumps({"peer_id": peer, "conversation_message_ids": [rem["source_message_id"]]})
+                                    VK.messages.send(peer_id=peer, message=f"🔔 Напоминание: {rem['name']}\n\n@all", forward=forward_json, random_id=random.getrandbits(31))
+                                    success = True
+                                except: pass
                                 if not success:
-                                    msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
-                                    send_msg(peer, msg, attachments=rem["attachments"] or None)
+                                    send_msg(peer, f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all", attachments=rem["attachments"] or None)
                             else:
-                                msg = f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all"
-                                send_msg(peer, msg, attachments=rem["attachments"] or None)
+                                send_msg(peer, f"🔔 Напоминание: {rem['name']}\n\n{rem['text']}\n\n@all", attachments=rem["attachments"] or None)
                             time.sleep(0.5)
-                    
-                    new_trigger = now + rem["interval_minutes"] * 60
-                    with DB_LOCK:
-                        CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (new_trigger, rem["id"]))
-                        CONN.commit()
+                        
+                        with DB_LOCK:
+                            CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (now + rem["interval_minutes"] * 60, rem["id"]))
+                            CONN.commit()
             
-            for p in bday_peers:
+            # 2. Дни рождения (строго в 00:00 МСК)
+            if now_msk.hour == 0 and now_msk.minute == 0:
+                for p in bday_peers:
+                    check_birthdays(p["peer_id"])
+            
+            # 3. Система опросов
+            for p in control_peers:
                 peer = p["peer_id"]
-                last_bday_check = int(get_setting(peer, "last_birthday_check", "0") or 0)
-                now = time.time()
-                if now - last_bday_check >= 3600:
-                    check_birthdays(peer)
-                    set_setting(peer, "last_birthday_check", str(int(now)))
+                start_hour = int(get_setting(peer, "poll_start", "10"))
+                end_hour = int(get_setting(peer, "poll_end", "22"))
+                last_poll_hour = int(get_setting(peer, "last_poll_hour", "-1"))
+                
+                # Отправка inline-опроса в xx:25
+                if now_msk.minute == 25 and start_hour <= now_msk.hour <= end_hour and last_poll_hour != now_msk.hour:
+                    # ИСПРАВЛЕНО: "inline": True гарантирует, что кнопка будет ПРИКРЕПЛЕНА К СООБЩЕНИЮ, а не к полю ввода
+                    keyboard = {
+                        "inline": True,
+                        "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote"})}, "color": "positive"}]]
+                    }
+                    send_msg(peer, "📊 **Опрос:** Кто заходит на этот кд?", keyboard=keyboard)
+                    set_setting(peer, "last_poll_hour", str(now_msk.hour))
+                
+                # Вечерняя проверка в 23:00
+                if now_msk.hour == 23 and now_msk.minute == 0:
+                    last_23_check = get_setting(peer, "last_23_check", "")
+                    if last_23_check != today_str:
+                        with DB_LOCK:
+                            members = CONN.execute("SELECT user_id FROM members WHERE peer_id=? AND poll_protected=0", (peer,)).fetchall()
+                            voted = set(r["user_id"] for r in CONN.execute("SELECT user_id FROM poll_votes WHERE peer_id=? AND date=?", (peer, today_str)).fetchall())
+                            max_warns = int(get_setting(peer, "max_warns", "3"))
+                            default_days = int(get_setting(peer, "default_warn_days", "7"))
+                            expiry = time.time() + (default_days * 86400)
+                            
+                            inactive = [m["user_id"] for m in members if m["user_id"] not in voted]
+                        
+                        if inactive:
+                            lines = [f"⚠️ Данные игроки не проявили актива за день и получают по 1 предупреждению:\n"]
+                            for u_id in inactive:
+                                with DB_LOCK:
+                                    row = CONN.execute("SELECT warnings FROM members WHERE user_id=? AND peer_id=?", (u_id, peer)).fetchone()
+                                    current_warns = row["warnings"] + 1 if row else 1
+                                    CONN.execute("INSERT OR REPLACE INTO members(user_id, peer_id, warnings, warn_expiry) VALUES(?,?,?,?)", (u_id, peer, current_warns, expiry))
+                                    CONN.commit()
+                                
+                                lines.append(f"{mention(u_id)} ({current_warns}/{max_warns})")
+                                
+                                if current_warns >= max_warns:
+                                    try:
+                                        VK.messages.removeChatUser(peer_id=peer, member_id=u_id)
+                                        admin_chat = get_setting(peer, "admin_report_chat")
+                                        # ИСПРАВЛЕНО: Отправляем отчет ТОЛЬКО если адм-чат явно установлен
+                                        if admin_chat and admin_chat.isdigit():
+                                            report_peer = int(admin_chat)
+                                            
+                                            chat_name = VK.messages.getConversationsById(peer_ids=peer)["items"][0].get("chat_settings", {}).get("title", "беседы")
+                                            with DB_LOCK:
+                                                nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (u_id, peer)).fetchone()
+                                            nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(u_id)
+                                            
+                                            report_text = (
+                                                f"🚨 **ВНИМАНИЕ!**\n\n"
+                                                f"Игрок {nick} был исключен из беседы '{chat_name}' за превышение лимита предупреждений ({max_warns}).\n"
+                                                f"Прошу принять меры и исключить его из семьи в игре.\n\n"
+                                                f"🔗 https://vk.ru/im/convo/2000000690?entrypoint=vkcom_right_column_menu"
+                                            )
+                                            send_msg(report_peer, report_text)
+                                    except: pass
+                            
+                            send_msg(peer, "\n".join(lines))
+                        set_setting(peer, "last_23_check", today_str)
+                
+                # 4. Напоминания о нике (каждый час)
+                if now_msk.minute == 0:
+                    with DB_LOCK:
+                        no_nicks = CONN.execute("SELECT user_id, join_time FROM members WHERE peer_id=? AND (nickname='' OR nickname IS NULL)", (peer,)).fetchall()
+                        for u in no_nicks:
+                            last_reminder = int(get_setting(peer, f"nick_reminder_{u['user_id']}", "0"))
+                            if time.time() - last_reminder > 3600:
+                                send_msg(peer, f"🔔 {mention(u['user_id'])}, пожалуйста, установи свой ник с помощью команды `Мд ник <твой_ник>`!")
+                                set_setting(peer, f"nick_reminder_{u['user_id']}", str(int(time.time())))
+                                
         except Exception as e:
             print("timer error:", e)
             time.sleep(10)
@@ -1011,7 +1011,7 @@ def main():
 
             for event in longpoll.listen():
                 if event.type == VkBotEventType.MESSAGE_EVENT:
-                    handle_birthday_button(event)
+                    handle_event(event)
                     continue
                 
                 if event.type != VkBotEventType.MESSAGE_NEW:
