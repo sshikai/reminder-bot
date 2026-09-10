@@ -470,13 +470,13 @@ def handle_message(peer, sender, text, msg_obj):
             "`Мд админы` — список руководителей чата\n"
             "`Мд участник` [@юз] — твоя статистика (админ может смотреть чужую)\n"
             "`Мд ники` — список ников и предупреждений\n"
-            "`Мд номер чата` — узнать ID текущего чата\n"
             "`Мд парк` — информация об автопарке\n"
             "`Мд прем` — информация о премиях и зарплатах\n"
             "`Мд чат` — ссылка на чат для отчетов\n\n"
             "🛡 Для администраторов:\n"
             "`Мд ник` <имя> — установить ник участнику (или через ответ)\n"
             "`Мд ник` @юзер <имя> — установить ник другому участнику\n"
+            "`Мд номер чата` — узнать ID текущего чата и создателя\n"
             "`Мд пред` [@юз] — выдать пред (по умолчанию на 7 дн.)\n"
             "`Мд пред` <дней> [@юз] — выдать пред на N дней\n"
             "`Мд пред` навсегда [@юз] — выдать вечный пред\n"
@@ -552,11 +552,13 @@ def handle_message(peer, sender, text, msg_obj):
         send_msg(peer, msg)
 
     elif cmd == "ники":
-        print(f"DEBUG: Команда 'ники' вызвана пользователем {sender} в чате {peer}")
         try:
             if not admin:
                 send_msg(peer, "⛔ Только администраторы могут смотреть полный список.")
                 return
+            
+            # ИСПРАВЛЕНО: Мгновенная реакция бота
+            send_msg(peer, "⏳ Загрузка списка участников...")
             
             threading.Thread(target=sync_members, args=(peer,), daemon=True).start()
             
@@ -566,7 +568,7 @@ def handle_message(peer, sender, text, msg_obj):
                 rows = CONN.execute("SELECT user_id, nickname, warnings, warn_durations FROM members WHERE peer_id=? ORDER BY user_id LIMIT 40 OFFSET ?", (peer, (page - 1) * 40)).fetchall()
             
             if not rows:
-                send_msg(peer, "📝 Список участников пуст.")
+                send_msg(peer, "📝 Список участников пуст. Попробуйте через минуту, если чат большой.")
                 return
             
             user_ids = [r["user_id"] for r in rows]
@@ -612,6 +614,7 @@ def handle_message(peer, sender, text, msg_obj):
                     set_setting(peer, niki_msg_key, str(msg_id))
                 except Exception as e:
                     print("Send new msg error:", e)
+                    send_msg(peer, f"❌ Ошибка отправки списка: {e}")
         except Exception as e:
             print("НИКИ ERROR:", e)
             send_msg(peer, f"❌ Произошла ошибка при выполнении команды 'Мд ники': {e}")
@@ -878,8 +881,8 @@ def handle_message(peer, sender, text, msg_obj):
         target_chat = int(args[0])
         set_setting(peer, "admin_report_chat", str(target_chat))
         
-        # Отправляем тестовое сообщение в целевой чат, как у "Кая"
-        test_text = f"✅ Жалобы и отчеты из чата {peer} теперь будут отправляться сюда."
+        # ИСПРАВЛЕНО: Новый текст сообщения
+        test_text = f"✅ Отчеты о банах из чата {peer} теперь будут отправляться сюда."
         try:
             send_msg(target_chat, test_text)
             send_msg(peer, f"✅ Репорты из чата {peer} будут отправляться в чат {target_chat}. (Тестовое сообщение отправлено)")
@@ -887,6 +890,10 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"⚠️ Настройка сохранена, но не удалось отправить тестовое сообщение в чат {target_chat}. Проверьте, что бот там есть и имеет права. Ошибка: {e}")
 
     elif cmd == "номер_чата":
+        # ИСПРАВЛЕНО: Перенесено в админские команды
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы могут использовать эту команду.")
+            return
         chat_owner_id = get_chat_owner(peer)
         owner_name = mention(chat_owner_id) if chat_owner_id else "Не определён"
         send_msg(peer, f"📌 Номер чата: {peer}\nСоздатель: {owner_name}")
@@ -1179,8 +1186,17 @@ def timer_loop():
                 end_hour = int(get_setting(peer, "poll_end", "22"))
                 poll_minute = int(get_setting(peer, "poll_minute", "25"))
                 
-                if now_msk.minute == poll_minute and start_hour <= now_msk.hour <= end_hour:
-                    last_poll_key = f"last_poll_{now_msk.hour}_{poll_minute}"
+                current_hour = now_msk.hour
+                
+                # ИСПРАВЛЕНО: Корректная проверка времени с учетом перехода через полночь (например, 10:48 - 00:48)
+                is_active = False
+                if start_hour <= end_hour:
+                    is_active = start_hour <= current_hour <= end_hour
+                else:
+                    is_active = current_hour >= start_hour or current_hour <= end_hour
+                
+                if now_msk.minute == poll_minute and is_active:
+                    last_poll_key = f"last_poll_{current_hour}_{poll_minute}"
                     if get_setting(peer, last_poll_key, "0") != "1":
                         keyboard = {
                             "inline": True,
