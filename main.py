@@ -280,7 +280,7 @@ def handle_event(event):
                     event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметился!"})
                 )
             except Exception as e:
-                send_msg(peer_id, f"❌ Ошибка интерфейса: {e}")
+                print("Event answer error:", e)
             
             today_str = get_msk_now().strftime("%Y-%m-%d")
             now_ts = int(time.time())
@@ -291,7 +291,8 @@ def handle_event(event):
                     last_vote = row["last_vote_time"] if row and row["last_vote_time"] else 0
                     can_spam = (now_ts - last_vote) >= 3600
                     
-                    CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+                    # ИСПРАВЛЕНО 2: INSERT OR IGNORE предотвращает ошибку UNIQUE constraint failed при двойном клике
+                    CONN.execute("INSERT OR IGNORE INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
                     if can_spam:
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                     CONN.commit()
@@ -385,13 +386,12 @@ def handle_event(event):
 def handle_message(peer, sender, text, msg_obj):
     clean_text = text.strip()
     
-    # ИСПРАВЛЕНО: Строгая проверка ID создателя с выводом в чат, если ID не совпадает
+    # ИСПРАВЛЕНО 1: Строгое сравнение int(sender). Если не совпадает - молча выходим (return), без сообщений в чат.
     if clean_text.lower() in ["!!чаты", "!!тест"]:
-        if sender != CREATOR_ID:
-            send_msg(peer, f"⛔ Эта команда доступна только создателю бота. Ваш текущий ID: {sender} (требуется: {CREATOR_ID})")
-            return
+        if int(sender) != CREATOR_ID:
+            return 
         
-        print(f"DEBUG: !!Чаты triggered by {sender}")
+        print(f"DEBUG: !!Чаты успешно запущена пользователем {sender}")
         send_msg(CREATOR_ID, "⏳ Загрузка списка бесед...")
         with DB_LOCK:
             peers_members = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()]
@@ -1180,11 +1180,15 @@ def timer_loop():
                             CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (now + rem["interval_minutes"] * 60, rem["id"]))
                             CONN.commit()
                 
+                # ИСПРАВЛЕНО 3: Корректное получение времени как числа и передача ID сообщения в виде списка для VK API
                 last_poll_msg_id = get_setting(peer, "last_poll_msg_id", "")
-                last_poll_time = int(get_setting(peer, "last_poll_time", "0"))
+                last_poll_time_str = get_setting(peer, "last_poll_time", "0")
+                last_poll_time = int(last_poll_time_str) if last_poll_time_str.isdigit() else 0
+                
                 if last_poll_msg_id and (time.time() - last_poll_time) > 600:
                     try:
-                        VK.messages.delete(peer_id=peer, message_ids=last_poll_msg_id, delete_for_all=1)
+                        VK.messages.delete(peer_id=peer, message_ids=[int(last_poll_msg_id)], delete_for_all=1)
+                        print(f"Успешно удален опрос {last_poll_msg_id} в беседе {peer}")
                     except Exception as e:
                         print(f"Не удалось удалить опрос: {e}")
                     set_setting(peer, "last_poll_msg_id", "")
@@ -1218,7 +1222,7 @@ def timer_loop():
                         try:
                             msg_id = VK.messages.send(
                                 peer_id=peer, 
-                                message="📊 Опрос: Кто заходит на этот кд? @all", # ИСПРАВЛЕНО: добавлен @all
+                                message="📊 Опрос: Кто заходит на этот кд? @all",
                                 keyboard=keyboard_json, 
                                 random_id=random.getrandbits(31)
                             )
