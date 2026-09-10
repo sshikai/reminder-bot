@@ -272,13 +272,11 @@ def handle_event(event):
                 payload = {}
         cmd = payload.get("cmd", "")
 
-        # ИСПРАВЛЕНО 1 и 4: Обработка голосования с защитой от спама и проверкой времени
         if cmd == "poll_vote":
             now_ts = int(time.time())
             last_poll_time_str = get_setting(peer_id, "last_poll_time", "0")
             last_poll_time = int(last_poll_time_str) if last_poll_time_str.isdigit() else 0
             
-            # Проверка: прошло ли 10 минут с создания опроса
             if last_poll_time > 0 and (now_ts - last_poll_time) > 600:
                 VK.messages.sendMessageEventAnswer(
                     event_id=event_id, user_id=user_id, peer_id=peer_id,
@@ -308,7 +306,6 @@ def handle_event(event):
                     if can_vote_msg:
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                     
-                    # Защита от спама предупреждением: отправляем сообщение в чат только 1 раз в час
                     if not can_vote_msg:
                         if (now_ts - last_warn) >= 3600:
                             send_msg(peer_id, f"⚠️ {mention(user_id)}, вы уже голосовали в последний час. Следующий голос будет учтен позже.")
@@ -322,7 +319,6 @@ def handle_event(event):
                 send_msg(peer_id, f"❌ Ошибка при обработке голоса: {e}")
             return
 
-        # ИСПРАВЛЕНО 3: Кнопка номера страницы теперь callback и не спамит
         if cmd == "page_info":
             page = payload.get("page", 1)
             total = payload.get("total", 1)
@@ -336,9 +332,7 @@ def handle_event(event):
             if not is_admin(user_id, peer_id):
                 try:
                     VK.messages.sendMessageEventAnswer(
-                        event_id=event_id, 
-                        user_id=user_id, 
-                        peer_id=peer_id, 
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
                         event_data=json.dumps({"type": "show_snackbar", "text": "🚫 Только для админов"})
                     )
                 except: pass
@@ -373,7 +367,6 @@ def handle_event(event):
             
             buttons = []
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
-            # ИСПРАВЛЕНО 3: type изменен на callback, чтобы не отправлять текст в чат
             buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
@@ -381,13 +374,17 @@ def handle_event(event):
             
             niki_msg_key = f"niki_msg_id_{peer_id}"
             saved_msg_id_str = get_setting(peer_id, niki_msg_key, "0")
-            saved_msg_id = int(saved_msg_id_str) if saved_msg_id_str.isdigit() else 0
             
             success = False
-            # ИСПРАВЛЕНО 2: Приоритет всегда отдается редактированию существующего сообщения
-            if saved_msg_id > 0:
+            # ИСПРАВЛЕНО: Используем conversation_message_id для надежного редактирования
+            if saved_msg_id_str and saved_msg_id_str != "0":
                 try:
-                    VK.messages.edit(peer_id=peer_id, message_id=saved_msg_id, message="\n".join(lines), keyboard=keyboard_json)
+                    if saved_msg_id_str.startswith("conv_"):
+                        conv_id = int(saved_msg_id_str[5:])
+                        VK.messages.edit(peer_id=peer_id, conversation_message_id=conv_id, message="\n".join(lines), keyboard=keyboard_json)
+                    else:
+                        msg_id = int(saved_msg_id_str)
+                        VK.messages.edit(peer_id=peer_id, message_id=msg_id, message="\n".join(lines), keyboard=keyboard_json)
                     success = True
                 except Exception as e:
                     print(f"Edit saved msg error: {e}. Пробуем отправить новое.")
@@ -395,16 +392,26 @@ def handle_event(event):
             if not success:
                 try:
                     msg_id = VK.messages.send(peer_id=peer_id, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
-                    set_setting(peer_id, niki_msg_key, str(msg_id))
-                    success = True
+                    
+                    try:
+                        msg_data = VK.messages.getById(message_ids=[msg_id])
+                        if msg_data.get('items'):
+                            conv_msg_id = msg_data['items'][0].get('conversation_message_id')
+                            if conv_msg_id:
+                                set_setting(peer_id, niki_msg_key, f"conv_{conv_msg_id}")
+                            else:
+                                set_setting(peer_id, niki_msg_key, str(msg_id))
+                        else:
+                            set_setting(peer_id, niki_msg_key, str(msg_id))
+                    except:
+                        set_setting(peer_id, niki_msg_key, str(msg_id))
+                        
                 except Exception as e:
                     print("Send new msg error:", e)
             
             try:
                 VK.messages.sendMessageEventAnswer(
-                    event_id=event_id, 
-                    user_id=user_id, 
-                    peer_id=peer_id, 
+                    event_id=event_id, user_id=user_id, peer_id=peer_id,
                     event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"})
                 )
             except Exception as e:
@@ -645,12 +652,16 @@ def handle_message(peer, sender, text, msg_obj):
             
             niki_msg_key = f"niki_msg_id_{peer}"
             saved_msg_id_str = get_setting(peer, niki_msg_key, "0")
-            saved_msg_id = int(saved_msg_id_str) if saved_msg_id_str.isdigit() else 0
             
             success = False
-            if saved_msg_id > 0:
+            if saved_msg_id_str and saved_msg_id_str != "0":
                 try:
-                    VK.messages.edit(peer_id=peer, message_id=saved_msg_id, message="\n".join(lines), keyboard=keyboard_json)
+                    if saved_msg_id_str.startswith("conv_"):
+                        conv_id = int(saved_msg_id_str[5:])
+                        VK.messages.edit(peer_id=peer, conversation_message_id=conv_id, message="\n".join(lines), keyboard=keyboard_json)
+                    else:
+                        msg_id = int(saved_msg_id_str)
+                        VK.messages.edit(peer_id=peer, message_id=msg_id, message="\n".join(lines), keyboard=keyboard_json)
                     success = True
                 except Exception as e:
                     print("Edit saved msg error:", e)
@@ -658,7 +669,22 @@ def handle_message(peer, sender, text, msg_obj):
             if not success:
                 try:
                     msg_id = VK.messages.send(peer_id=peer, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
-                    set_setting(peer, niki_msg_key, str(msg_id))
+                    
+                    # ИСПРАВЛЕНО: Получаем conversation_message_id для корректного редактирования в будущем
+                    try:
+                        msg_data = VK.messages.getById(message_ids=[msg_id])
+                        if msg_data.get('items'):
+                            conv_msg_id = msg_data['items'][0].get('conversation_message_id')
+                            if conv_msg_id:
+                                set_setting(peer, niki_msg_key, f"conv_{conv_msg_id}")
+                            else:
+                                set_setting(peer, niki_msg_key, str(msg_id))
+                        else:
+                            set_setting(peer, niki_msg_key, str(msg_id))
+                    except Exception as e:
+                        print(f"getById error: {e}")
+                        set_setting(peer, niki_msg_key, str(msg_id))
+                        
                 except Exception as e:
                     print("Send new msg error:", e)
                     send_msg(peer, f"❌ Ошибка отправки списка: {e}")
@@ -1210,7 +1236,6 @@ def timer_loop():
                             CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (now + rem["interval_minutes"] * 60, rem["id"]))
                             CONN.commit()
                 
-                # ИСПРАВЛЕНО 4: Надежное удаление опроса через 10 минут
                 last_poll_msg_id = get_setting(peer, "last_poll_msg_id", "")
                 last_poll_time_str = get_setting(peer, "last_poll_time", "0")
                 last_poll_time = int(last_poll_time_str) if last_poll_time_str.isdigit() else 0
