@@ -147,7 +147,7 @@ def send_msg(peer, text, attachments=None, keyboard=None):
     try:
         params = {'peer_id': peer, 'message': text, 'random_id': random.getrandbits(31)}
         if attachments: params['attachment'] = attachments
-        if keyboard: params['keyboard'] = json.dumps(keyboard)
+        if keyboard: params['keyboard'] = json.dumps(keyboard) # Гарантируем JSON строку
         VK.messages.send(**params)
     except Exception as e:
         print("send error:", e)
@@ -271,7 +271,9 @@ def handle_event(event):
                 payload = {}
         cmd = payload.get("cmd", "")
 
+        # ИСПРАВЛЕНО 2: Надежная обработка голосования с отладкой
         if cmd == "poll_vote":
+            print(f"DEBUG poll_vote: user={user_id}, peer={peer_id}")
             try:
                 VK.messages.sendMessageEventAnswer(
                     event_id=event_id, 
@@ -284,22 +286,25 @@ def handle_event(event):
             
             today_str = get_msk_now().strftime("%Y-%m-%d")
             now_ts = int(time.time())
-            can_spam = True
             
-            with DB_LOCK:
-                row = CONN.execute("SELECT last_vote_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
-                last_vote = row["last_vote_time"] if row and row["last_vote_time"] else 0
-                if (now_ts - last_vote) < 3600:
-                    can_spam = False
-                
-                CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+            try:
+                with DB_LOCK:
+                    row = CONN.execute("SELECT last_vote_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
+                    last_vote = row["last_vote_time"] if row and row["last_vote_time"] else 0
+                    can_spam = (now_ts - last_vote) >= 3600
+                    
+                    CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+                    if can_spam:
+                        CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
+                    CONN.commit()
+                    print(f"DEBUG: Vote recorded. can_spam={can_spam}")
                 
                 if can_spam:
-                    CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
-                CONN.commit()
-            
-            if can_spam:
-                send_msg(peer_id, f"{mention(user_id)} Зайдет на этот кд!")
+                    print(f"DEBUG: Attempting to send message for {user_id} in {peer_id}")
+                    send_msg(peer_id, f"{mention(user_id)} Зайдет на этот кд!")
+                    print("DEBUG: Message sent successfully")
+            except Exception as e:
+                print(f"DEBUG poll_vote DB/Send error: {e}")
             return
 
         if cmd in ["niki_prev", "niki_next"]:
@@ -345,7 +350,9 @@ def handle_event(event):
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
             buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
-            keyboard = {"inline": True, "buttons": [buttons]}
+            
+            # ИСПРАВЛЕНО 1: json.dumps для keyboard
+            keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
             niki_msg_key = f"niki_msg_id_{peer_id}"
             saved_msg_id = int(get_setting(peer_id, niki_msg_key, "0") or "0")
@@ -353,14 +360,14 @@ def handle_event(event):
             success = False
             if saved_msg_id > 0:
                 try:
-                    VK.messages.edit(peer_id=peer_id, message_id=saved_msg_id, message="\n".join(lines), keyboard=keyboard)
+                    VK.messages.edit(peer_id=peer_id, message_id=saved_msg_id, message="\n".join(lines), keyboard=keyboard_json)
                     success = True
                 except Exception as e:
                     print("Edit saved msg error:", e)
             
             if not success:
                 try:
-                    msg_id = VK.messages.send(peer_id=peer_id, message="\n".join(lines), keyboard=keyboard, random_id=random.getrandbits(31))
+                    msg_id = VK.messages.send(peer_id=peer_id, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
                     set_setting(peer_id, niki_msg_key, str(msg_id))
                     success = True
                 except Exception as e:
@@ -380,12 +387,20 @@ def handle_event(event):
 
 
 def handle_message(peer, sender, text, msg_obj):
-    if text.strip() == "!!Чаты" and sender == CREATOR_ID:
+    # ИСПРАВЛЕНО 3: Поддержка !!Чаты и !!Тест, нечувствительная к регистру
+    clean_text = text.strip()
+    if clean_text.lower() in ["!!чаты", "!!тест"] and sender == CREATOR_ID:
+        print(f"DEBUG: !!Чаты triggered by {sender}")
         with DB_LOCK:
-            peers = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()]
+            # Ищем чаты и в members, и в reminders на всякий случай
+            peers_members = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()]
+            peers_reminders = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()]
+            peers = list(set(peers_members + peers_reminders))
+        
         if not peers:
-            send_msg(CREATOR_ID, "📭 Бот пока не зафиксировал ни одной беседы в базе.")
+            send_msg(CREATOR_ID, "📭 Бот пока не зафиксировал ни одной беседы в базе (таблицы пусты).")
         else:
+            print(f"DEBUG: Found {len(peers)} peers")
             lines = ["📊 Список бесед с ботом:\n"]
             for i in range(0, len(peers), 100):
                 chunk = peers[i:i+100]
@@ -405,7 +420,7 @@ def handle_message(peer, sender, text, msg_obj):
                     send_msg(CREATOR_ID, msg_text[i:i+4000])
             else:
                 send_msg(CREATOR_ID, msg_text)
-        return
+        return # Важно: прерываем выполнение, чтобы не идти дальше
 
     if peer < 2000000000: return
 
@@ -557,7 +572,6 @@ def handle_message(peer, sender, text, msg_obj):
                 send_msg(peer, "⛔ Только администраторы могут смотреть полный список.")
                 return
             
-            # ИСПРАВЛЕНО: Мгновенная реакция бота
             send_msg(peer, "⏳ Загрузка списка участников...")
             
             threading.Thread(target=sync_members, args=(peer,), daemon=True).start()
@@ -597,20 +611,23 @@ def handle_message(peer, sender, text, msg_obj):
             buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
+            # ИСПРАВЛЕНО 1: json.dumps для keyboard
+            keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
+            
             niki_msg_key = f"niki_msg_id_{peer}"
             saved_msg_id = int(get_setting(peer, niki_msg_key, "0") or "0")
             
             success = False
             if saved_msg_id > 0:
                 try:
-                    VK.messages.edit(peer_id=peer, message_id=saved_msg_id, message="\n".join(lines), keyboard={"inline": True, "buttons": [buttons]})
+                    VK.messages.edit(peer_id=peer, message_id=saved_msg_id, message="\n".join(lines), keyboard=keyboard_json)
                     success = True
                 except Exception as e:
                     print("Edit saved msg error:", e)
             
             if not success:
                 try:
-                    msg_id = VK.messages.send(peer_id=peer, message="\n".join(lines), keyboard={"inline": True, "buttons": [buttons]}, random_id=random.getrandbits(31))
+                    msg_id = VK.messages.send(peer_id=peer, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
                     set_setting(peer, niki_msg_key, str(msg_id))
                 except Exception as e:
                     print("Send new msg error:", e)
@@ -881,7 +898,6 @@ def handle_message(peer, sender, text, msg_obj):
         target_chat = int(args[0])
         set_setting(peer, "admin_report_chat", str(target_chat))
         
-        # ИСПРАВЛЕНО: Новый текст сообщения
         test_text = f"✅ Отчеты о банах из чата {peer} теперь будут отправляться сюда."
         try:
             send_msg(target_chat, test_text)
@@ -890,7 +906,6 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"⚠️ Настройка сохранена, но не удалось отправить тестовое сообщение в чат {target_chat}. Проверьте, что бот там есть и имеет права. Ошибка: {e}")
 
     elif cmd == "номер_чата":
-        # ИСПРАВЛЕНО: Перенесено в админские команды
         if not admin:
             send_msg(peer, "⛔ Только администраторы могут использовать эту команду.")
             return
@@ -1165,7 +1180,6 @@ def timer_loop():
                             CONN.execute("UPDATE reminders SET next_trigger=? WHERE id=?", (now + rem["interval_minutes"] * 60, rem["id"]))
                             CONN.commit()
                 
-                # Удаление опроса через 10 минут
                 last_poll_msg_id = get_setting(peer, "last_poll_msg_id", "")
                 last_poll_time = int(get_setting(peer, "last_poll_time", "0"))
                 if last_poll_msg_id and (time.time() - last_poll_time) > 600:
@@ -1188,7 +1202,6 @@ def timer_loop():
                 
                 current_hour = now_msk.hour
                 
-                # ИСПРАВЛЕНО: Корректная проверка времени с учетом перехода через полночь (например, 10:48 - 00:48)
                 is_active = False
                 if start_hour <= end_hour:
                     is_active = start_hour <= current_hour <= end_hour
@@ -1198,15 +1211,15 @@ def timer_loop():
                 if now_msk.minute == poll_minute and is_active:
                     last_poll_key = f"last_poll_{current_hour}_{poll_minute}"
                     if get_setting(peer, last_poll_key, "0") != "1":
-                        keyboard = {
+                        keyboard_json = json.dumps({
                             "inline": True,
                             "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote"})}, "color": "positive"}]]
-                        }
+                        })
                         try:
                             msg_id = VK.messages.send(
                                 peer_id=peer, 
                                 message="📊 Опрос: Кто заходит на этот кд?", 
-                                keyboard=json.dumps(keyboard), 
+                                keyboard=keyboard_json, 
                                 random_id=random.getrandbits(31)
                             )
                             set_setting(peer, last_poll_key, "1")
