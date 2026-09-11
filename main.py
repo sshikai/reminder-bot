@@ -302,7 +302,6 @@ def handle_event(event):
                     
                     can_vote_msg = (now_ts - last_vote) >= 3600
                     
-                    # ИСПРАВЛЕНО: Используем обычный INSERT, чтобы каждый клик засчитывался как новый голос
                     CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
                     
                     if can_vote_msg:
@@ -318,6 +317,7 @@ def handle_event(event):
                 if can_vote_msg:
                     send_msg(peer_id, f"✅ {mention(user_id)} Зайдет на этот кд!")
             except Exception as e:
+                print(f"DB error in poll_vote: {e}")
                 send_msg(peer_id, f"❌ Ошибка при обработке голоса: {e}")
             return
 
@@ -682,39 +682,42 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"✅ Твой ник установлен: **{new_nick}**")
 
     elif cmd == "голоса":
-        if not admin:
-            send_msg(peer, "⛔ Только администраторы могут смотреть голоса.")
-            return
-        
-        is_yesterday = args and args[0].lower() == "вчера"
-        if is_yesterday:
-            target_date = (get_msk_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-            day_name = "вчера"
-        else:
-            target_date = get_msk_now().strftime("%Y-%m-%d")
-            day_name = "сегодня"
-        
-        yesterday_str = (get_msk_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        with DB_LOCK:
-            CONN.execute("DELETE FROM poll_votes WHERE date < ?", (yesterday_str,))
+        try:
+            if not admin:
+                send_msg(peer, "⛔ Только администраторы могут смотреть голоса.")
+                return
             
-            # ИСПРАВЛЕНО: Используем COUNT(id) для точного подсчета всех записей
-            rows = CONN.execute("""
-                SELECT user_id, COUNT(id) as count 
-                FROM poll_votes 
-                WHERE peer_id=? AND date=? 
-                GROUP BY user_id 
-                ORDER BY count DESC
-            """, (peer, target_date)).fetchall()
-        
-        if not rows:
-            send_msg(peer, f"🗳 {day_name.capitalize()} ({target_date}) никто не голосовал.")
-            return
-        
-        lines = [f"🗳 Голоса за {day_name} ({target_date}):\n"]
-        for r in rows:
-            lines.append(f"• {mention(r['user_id'])} — {r['count']} раз(а)")
-        send_msg(peer, "\n".join(lines))
+            is_yesterday = args and args[0].lower() == "вчера"
+            if is_yesterday:
+                target_date = (get_msk_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+                day_name = "вчера"
+            else:
+                target_date = get_msk_now().strftime("%Y-%m-%d")
+                day_name = "сегодня"
+            
+            yesterday_str = (get_msk_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            with DB_LOCK:
+                CONN.execute("DELETE FROM poll_votes WHERE date < ?", (yesterday_str,))
+                
+                rows = CONN.execute("""
+                    SELECT user_id, COUNT(id) as count 
+                    FROM poll_votes 
+                    WHERE peer_id=? AND date=? 
+                    GROUP BY user_id 
+                    ORDER BY count DESC
+                """, (peer, target_date)).fetchall()
+            
+            if not rows:
+                send_msg(peer, f"🗳 {day_name.capitalize()} ({target_date}) никто не голосовал.")
+                return
+            
+            lines = [f"🗳 Голоса за {day_name} ({target_date}):\n"]
+            for r in rows:
+                lines.append(f"• {mention(r['user_id'])} — {r['count']} раз(а)")
+            send_msg(peer, "\n".join(lines))
+        except Exception as e:
+            print(f"Error in голоса command: {e}")
+            send_msg(peer, f"❌ Ошибка при выполнении команды: {e}")
 
     elif cmd in ["парк", "прем", "чат"]:
         block_names = {"парк": "park", "прем": "prem", "чат": "chat"}
