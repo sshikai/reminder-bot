@@ -1037,8 +1037,10 @@ def handle_message(peer, sender, text, msg_obj):
                 send_msg(peer, "🛡 Защищенных участников нет.")
             return
         for t_id in targets:
+            # ИСПРАВЛЕНО: Используем INSERT OR IGNORE + UPDATE, чтобы не затирать ник и другие поля
             with DB_LOCK:
-                CONN.execute("INSERT OR REPLACE INTO members(user_id, peer_id, poll_protected) VALUES(?,?,1)", (t_id, peer))
+                CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (t_id, peer))
+                CONN.execute("UPDATE members SET poll_protected=1 WHERE user_id=? AND peer_id=?", (t_id, peer))
                 CONN.commit()
             send_msg(peer, f"🛡 {mention(t_id)} добавлен в защиту от опросов.")
 
@@ -1309,13 +1311,21 @@ def timer_loop():
                 if now_msk.hour == 23 and now_msk.minute == 0:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
+                        # ИСПРАВЛЕНО: Исключаем из проверки всех админов, владельца и создателя
+                        admins = set(get_extra_admins(peer))
+                        admins.add(CREATOR_ID)
+                        chat_owner = get_chat_owner(peer)
+                        if chat_owner:
+                            admins.add(chat_owner)
+                        
                         with DB_LOCK:
                             members = CONN.execute("SELECT user_id FROM members WHERE peer_id=? AND poll_protected=0", (peer,)).fetchall()
                             voted = set(r["user_id"] for r in CONN.execute("SELECT user_id FROM poll_votes WHERE peer_id=? AND date=?", (peer, today_str)).fetchall())
                             max_warns = int(get_setting(peer, "max_warns", "3") or "3")
                             default_days = int(get_setting(peer, "default_warn_days", "7") or "7")
                             expiry = time.time() + (default_days * 86400)
-                            inactive = [m["user_id"] for m in members if m["user_id"] not in voted]
+                            # Фильтруем неактивных, исключая админов
+                            inactive = [m["user_id"] for m in members if m["user_id"] not in voted and m["user_id"] not in admins]
                         if inactive:
                             lines = [f"⚠️ Данные игроки не проявили актива за день и получают по 1 предупреждению:\n"]
                             for u_id in inactive:
