@@ -45,6 +45,7 @@ VALID_COMMANDS = [
 ]
 
 def init_db():
+    with DB_LOCK:
         CONN.execute("""CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id INTEGER, name TEXT, text TEXT,
             attachments TEXT, source_message_id INTEGER DEFAULT 0, interval_minutes INTEGER,
@@ -1263,7 +1264,10 @@ def timer_loop():
             
             if now_msk.hour == 0 and now_msk.minute == 0:
                 for p in bday_peers:
-                    check_birthdays(p["peer_id"])
+                    try:
+                        check_birthdays(p["peer_id"])
+                    except Exception as e:
+                        print(f"Error in birthdays check: {e}")
             
             for p in control_peers:
                 peer = p["peer_id"]
@@ -1301,7 +1305,7 @@ def timer_loop():
                             print(f"Ошибка отправки опроса: {e}")
                 
                 # ИСПРАВЛЕНО: Проверка в 23:00 без вложенных блокировок
-                if now_msk.hour == 1 and now_msk.minute == 9:
+                if now_msk.hour == 1 and now_msk.minute == 23:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
                         try:
@@ -1358,8 +1362,8 @@ def timer_loop():
                                             print(f"Error sending auto-kick report: {e}")
                                 except Exception as e:
                                     print(f"Auto-kick error: {e}")
-                        
-                        send_msg(peer, "\n".join(lines))
+                            
+                            send_msg(peer, "\n".join(lines))
                         
                         # Гарантированно отмечаем, что проверка за сегодня выполнена
                         set_setting(peer, "last_23_check", today_str)
