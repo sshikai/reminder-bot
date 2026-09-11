@@ -1301,10 +1301,10 @@ def timer_loop():
                         except Exception as e:
                             print(f"Ошибка отправки опроса: {e}")
                 
-                # ИСПРАВЛЕНО: Надежная проверка в 00:00, которая не сломает бот при ошибке
-                if now_msk.hour == 0 and now_msk.minute == 0:
-                    last_00_check = get_setting(peer, "last_00_check", "")
-                    if last_00_check != today_str:
+                # ИСПРАВЛЕНО: Надежная проверка в 23:00, которая не блокирует работу бота
+                if now_msk.hour == 00 and now_msk.minute == 44:
+                    last_23_check = get_setting(peer, "last_23_check", "")
+                    if last_23_check != today_str:
                         try:
                             with DB_LOCK:
                                 members = CONN.execute("SELECT user_id FROM members WHERE peer_id=? AND poll_protected=0", (peer,)).fetchall()
@@ -1363,10 +1363,12 @@ def timer_loop():
                                 
                                 send_msg(peer, "\n".join(lines))
                             
-                            set_setting(peer, "last_00_check", today_str)
+                            # Гарантированно отмечаем, что проверка за сегодня выполнена, чтобы не зациклить
+                            set_setting(peer, "last_23_check", today_str)
                         except Exception as e:
-                            print(f"Error in 00:00 check: {e}")
-                            set_setting(peer, "last_00_check", today_str) # Чтобы не зациклить ошибку
+                            print(f"Error in 23:00 check: {e}")
+                            # Даже при ошибке отмечаем выполнение, чтобы не спамить логами каждую секунду
+                            set_setting(peer, "last_23_check", today_str)
                 
                 if now_msk.minute == 0:
                     with DB_LOCK:
