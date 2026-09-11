@@ -60,17 +60,17 @@ def init_db():
             streak INTEGER DEFAULT 0, poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0, 
             last_vote_time INTEGER DEFAULT 0, last_vote_warn_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
         
-        # Безопасная миграция для таблицы голосов, чтобы избежать конфликтов UNIQUE
+        # Безопасная миграция для добавления poll_time в таблицу голосов
         try:
             CONN.execute("ALTER TABLE poll_votes RENAME TO poll_votes_old")
         except Exception:
             pass
         
         CONN.execute("""CREATE TABLE IF NOT EXISTS poll_votes (
-            vote_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, peer_id INTEGER, date TEXT)""")
+            vote_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, peer_id INTEGER, poll_time INTEGER, date TEXT)""")
         
         try:
-            CONN.execute("INSERT INTO poll_votes (user_id, peer_id, date) SELECT user_id, peer_id, date FROM poll_votes_old")
+            CONN.execute("INSERT INTO poll_votes (user_id, peer_id, poll_time, date) SELECT user_id, peer_id, 0, date FROM poll_votes_old")
             CONN.execute("DROP TABLE poll_votes_old")
         except Exception:
             pass
@@ -302,38 +302,44 @@ def handle_event(event):
 
             try:
                 with DB_LOCK:
-                    # 2. Проверяем, голосовал ли уже пользователь сегодня
+                    # 2. Проверяем, голосовал ли уже пользователь в ЭТОМ конкретном опросе
                     existing_vote = CONN.execute(
-                        "SELECT 1 FROM poll_votes WHERE user_id=? AND peer_id=? AND date=?", 
-                        (user_id, peer_id, today_str)
+                        "SELECT 1 FROM poll_votes WHERE user_id=? AND peer_id=? AND poll_time=?", 
+                        (user_id, peer_id, payload_time)
                     ).fetchone()
                     
                     if existing_vote:
-                        # Уже голосовал. Проверяем, нужно ли отправить предупреждение в чат (не чаще 1 раза в час)
-                        row = CONN.execute("SELECT last_vote_warn_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
-                        last_warn = row["last_vote_warn_time"] if row and row["last_vote_warn_time"] else 0
-                        
-                        snackbar_text = "⚠️ Вы уже голосовали!"
-                        if (now_ts - last_warn) >= 3600:
-                            CONN.execute("UPDATE members SET last_vote_warn_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
-                            CONN.commit()
-                            send_msg(peer_id, f"⚠️ {mention(user_id)}, вы уже голосовали в этот опрос. Повторный голос не учитывается.")
-                        
+                        # Уже голосовал в этом опросе.
+                        snackbar_text = "⚠️ Вы уже голосовали в этом опросе!"
                         VK.messages.sendMessageEventAnswer(
                             event_id=event_id, user_id=user_id, peer_id=peer_id,
                             event_data=json.dumps({"type": "show_snackbar", "text": snackbar_text})
                         )
                     else:
-                        # Не голосовал, засчитываем голос
-                        CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
-                        CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
-                        CONN.commit()
-                        send_msg(peer_id, f"✅ {mention(user_id)} Зайдет на этот кд!")
+                        # 3. Проверяем общий кд на голосование (1 час)
+                        mem_row = CONN.execute("SELECT last_vote_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
+                        last_vote = mem_row["last_vote_time"] if mem_row and mem_row["last_vote_time"] else 0
                         
-                        VK.messages.sendMessageEventAnswer(
-                            event_id=event_id, user_id=user_id, peer_id=peer_id,
-                            event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметился!"})
-                        )
+                        if (now_ts - last_vote) < 3600:
+                            # Кд еще не прошел
+                            remaining_mins = (3600 - (now_ts - last_vote)) // 60
+                            snackbar_text = f"⏳ КД на голосование: осталось {remaining_mins}м"
+                            VK.messages.sendMessageEventAnswer(
+                                event_id=event_id, user_id=user_id, peer_id=peer_id,
+                                event_data=json.dumps({"type": "show_snackbar", "text": snackbar_text})
+                            )
+                        else:
+                            # Кд прошел, засчитываем голос
+                            CONN.execute("INSERT INTO poll_votes(user_id, peer_id, poll_time, date) VALUES(?,?,?,?)", (user_id, peer_id, payload_time, today_str))
+                            CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
+                            CONN.commit()
+                            
+                            send_msg(peer_id, f"✅ {mention(user_id)} Зайдет на этот кд!")
+                            
+                            VK.messages.sendMessageEventAnswer(
+                                event_id=event_id, user_id=user_id, peer_id=peer_id,
+                                event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметился!"})
+                            )
             except Exception as e:
                 print(f"DB error in poll_vote: {e}")
                 VK.messages.sendMessageEventAnswer(
@@ -734,8 +740,20 @@ def handle_message(peer, sender, text, msg_obj):
                 return
             
             lines = [f"🗳 Голоса за {day_name} ({target_date}):\n"]
+            now_ts = int(time.time())
             for r in rows:
-                lines.append(f"• {mention(r['user_id'])} — {r['count']} раз(а)")
+                count = r['count']
+                cooldown_text = ""
+                # Показываем КД только для сегодняшних голосов
+                if target_date == get_msk_now().strftime("%Y-%m-%d"):
+                    mem_row = CONN.execute("SELECT last_vote_time FROM members WHERE user_id=? AND peer_id=?", (r['user_id'], peer)).fetchone()
+                    if mem_row and mem_row['last_vote_time']:
+                        elapsed = now_ts - mem_row['last_vote_time']
+                        if elapsed < 3600:
+                            remaining_mins = (3600 - elapsed) // 60
+                            cooldown_text = f" (КД: {remaining_mins}м)"
+                
+                lines.append(f"• {mention(r['user_id'])} — {count} раз(а){cooldown_text}")
             send_msg(peer, "\n".join(lines))
         except Exception as e:
             print(f"Error in голоса command: {e}")
