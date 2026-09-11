@@ -60,8 +60,20 @@ def init_db():
             streak INTEGER DEFAULT 0, poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0, 
             last_vote_time INTEGER DEFAULT 0, last_vote_warn_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
         
+        # ИСПРАВЛЕНИЕ: Пересоздаем таблицу poll_votes без UNIQUE ограничения, чтобы считать каждый клик отдельно
+        try:
+            CONN.execute("ALTER TABLE poll_votes RENAME TO poll_votes_old")
+        except Exception:
+            pass # Таблицы нет или уже переименована
+        
         CONN.execute("""CREATE TABLE IF NOT EXISTS poll_votes (
             vote_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, peer_id INTEGER, date TEXT)""")
+        
+        try:
+            CONN.execute("INSERT INTO poll_votes (user_id, peer_id, date) SELECT user_id, peer_id, date FROM poll_votes_old")
+            CONN.execute("DROP TABLE poll_votes_old")
+        except Exception:
+            pass
             
         CONN.execute("""CREATE TABLE IF NOT EXISTS info_blocks (peer_id INTEGER, key TEXT, text TEXT, PRIMARY KEY(peer_id, key))""")
         
@@ -304,8 +316,8 @@ def handle_event(event):
                     
                     can_vote_msg = (now_ts - last_vote) >= 3600
                     
-                    # ИСПРАВЛЕНО: INSERT OR IGNORE предотвращает ошибку UNIQUE constraint failed при повторном нажатии
-                    CONN.execute("INSERT OR IGNORE INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+                    # ИСПРАВЛЕНО: Обычный INSERT, так как таблица больше не имеет UNIQUE ограничения и честно считает каждый клик
+                    CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
                     
                     if can_vote_msg:
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
@@ -915,7 +927,7 @@ def handle_message(peer, sender, text, msg_obj):
             return
         if not args or not args[0].isdigit():
             current = get_setting(peer, "admin_report_chat", "Не установлена")
-            return send_msg(peer, f"📌 Текущий чат для отчетов: {current}\n\nИспользуйте: `Мд адмчат <id_чата>`")
+            return send_msg(peer, f"📌 Текущий чат для отчетов: {current}\n\nИспользуйте: `Мд адмчат <id_беседы>`")
         
         target_chat = int(args[0])
         set_setting(peer, "admin_report_chat", str(target_chat))
