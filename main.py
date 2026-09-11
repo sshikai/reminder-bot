@@ -302,7 +302,9 @@ def handle_event(event):
                     
                     can_vote_msg = (now_ts - last_vote) >= 3600
                     
-                    CONN.execute("INSERT OR IGNORE INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+                    # ИСПРАВЛЕНО: Используем обычный INSERT, чтобы каждый клик засчитывался как новый голос
+                    CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+                    
                     if can_vote_msg:
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                     
@@ -372,8 +374,6 @@ def handle_event(event):
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
-            # ИСПРАВЛЕНИЕ: Берем conversation_message_id прямо из события нажатия кнопки. 
-            # Это гарантирует, что мы редактируем именно то сообщение, в котором была нажата кнопка.
             conversation_message_id = obj.get("conversation_message_id")
             
             if conversation_message_id:
@@ -386,7 +386,6 @@ def handle_event(event):
                     )
                 except Exception as e:
                     print(f"Edit error: {e}")
-                    # Только если редактирование категорически не удалось, отправляем новое
                     VK.messages.send(
                         peer_id=peer_id, 
                         message="\n".join(lines) + "\n\n(Не удалось обновить сообщение, отправлено новое)", 
@@ -642,7 +641,6 @@ def handle_message(peer, sender, text, msg_obj):
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
-            # Просто отправляем первое сообщение. Последующие обновления будут использовать edit через conversation_message_id из события кнопки.
             VK.messages.send(
                 peer_id=peer, 
                 message="\n".join(lines), 
@@ -700,8 +698,9 @@ def handle_message(peer, sender, text, msg_obj):
         with DB_LOCK:
             CONN.execute("DELETE FROM poll_votes WHERE date < ?", (yesterday_str,))
             
+            # ИСПРАВЛЕНО: Используем COUNT(id) для точного подсчета всех записей
             rows = CONN.execute("""
-                SELECT user_id, COUNT(*) as count 
+                SELECT user_id, COUNT(id) as count 
                 FROM poll_votes 
                 WHERE peer_id=? AND date=? 
                 GROUP BY user_id 
