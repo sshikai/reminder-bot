@@ -1301,7 +1301,7 @@ def timer_loop():
                             print(f"Ошибка отправки опроса: {e}")
                 
                 # ИСПРАВЛЕНО: Проверка в 23:00 без вложенных блокировок
-                if now_msk.hour == 23 and now_msk.minute == 0:
+                if now_msk.hour == 01 and now_msk.minute == 3:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
                         try:
