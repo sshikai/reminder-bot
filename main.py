@@ -1306,7 +1306,7 @@ def timer_loop():
                         except Exception as e:
                             print(f"Ошибка отправки опроса: {e}")
                 
-                if now_msk.hour == 1 and now_msk.minute == 52:
+                if now_msk.hour == 23 and now_msk.minute == 0:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
                         with DB_LOCK:
