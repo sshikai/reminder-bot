@@ -60,18 +60,8 @@ def init_db():
             streak INTEGER DEFAULT 0, poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0, 
             last_vote_time INTEGER DEFAULT 0, last_vote_warn_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
         
-        # ИСПРАВЛЕНО: Гарантируем наличие всех колонок, даже если таблица была создана старой версией кода
         CONN.execute("""CREATE TABLE IF NOT EXISTS poll_votes (
             vote_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, peer_id INTEGER, date TEXT)""")
-        
-        # Миграция для старой таблицы poll_votes, если в ней не было vote_id
-        try:
-            cols = [row[1] for row in CONN.execute("PRAGMA table_info(poll_votes)").fetchall()]
-            if "vote_id" not in cols and "id" not in cols:
-                # Если таблицы нет или она пустая, пересоздадим, но лучше просто добавить колонку если она есть
-                pass # SQLite не поддерживает DROP COLUMN легко, но COUNT(*) решит проблему ниже
-        except Exception:
-            pass
             
         CONN.execute("""CREATE TABLE IF NOT EXISTS info_blocks (peer_id INTEGER, key TEXT, text TEXT, PRIMARY KEY(peer_id, key))""")
         
@@ -314,7 +304,8 @@ def handle_event(event):
                     
                     can_vote_msg = (now_ts - last_vote) >= 3600
                     
-                    CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
+                    # ИСПРАВЛЕНО: INSERT OR IGNORE предотвращает ошибку UNIQUE constraint failed при повторном нажатии
+                    CONN.execute("INSERT OR IGNORE INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
                     
                     if can_vote_msg:
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
@@ -711,8 +702,6 @@ def handle_message(peer, sender, text, msg_obj):
             with DB_LOCK:
                 CONN.execute("DELETE FROM poll_votes WHERE date < ?", (yesterday_str,))
                 
-                # ИСПРАВЛЕНО: Используем COUNT(*) вместо COUNT(id), чтобы избежать ошибки "no such column: id" 
-                # в старых базах данных, где эта колонка могла не создаться.
                 rows = CONN.execute("""
                     SELECT user_id, COUNT(*) as count 
                     FROM poll_votes 
