@@ -60,6 +60,7 @@ def init_db():
             streak INTEGER DEFAULT 0, poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0, 
             last_vote_time INTEGER DEFAULT 0, last_vote_warn_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
         
+        # Безопасная миграция для таблицы голосов, чтобы избежать конфликтов UNIQUE
         try:
             CONN.execute("ALTER TABLE poll_votes RENAME TO poll_votes_old")
         except Exception:
@@ -289,10 +290,9 @@ def handle_event(event):
             now_ts = int(time.time())
             today_str = get_msk_now().strftime("%Y-%m-%d")
             
-            # ИСПРАВЛЕНО: берем время создания опроса из payload кнопки
             payload_time = payload.get("time", 0)
             
-            # Если опрос просрочен (больше 10 минут = 600 секунд с момента создания)
+            # 1. Проверка на истечение времени опроса (10 минут = 600 секунд)
             if payload_time > 0 and (now_ts - payload_time) > 600:
                 VK.messages.sendMessageEventAnswer(
                     event_id=event_id, user_id=user_id, peer_id=peer_id,
@@ -302,20 +302,27 @@ def handle_event(event):
 
             try:
                 with DB_LOCK:
+                    # 2. Проверяем, голосовал ли уже пользователь сегодня
                     existing_vote = CONN.execute(
                         "SELECT 1 FROM poll_votes WHERE user_id=? AND peer_id=? AND date=?", 
                         (user_id, peer_id, today_str)
                     ).fetchone()
                     
                     if existing_vote:
-                        # Уже голосовал. Проверяем, нужно ли отправить предупреждение о спаме (не чаще 1 раза в час)
+                        # Уже голосовал. Проверяем, нужно ли отправить предупреждение в чат (не чаще 1 раза в час)
                         row = CONN.execute("SELECT last_vote_warn_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
                         last_warn = row["last_vote_warn_time"] if row and row["last_vote_warn_time"] else 0
                         
+                        snackbar_text = "⚠️ Вы уже голосовали!"
                         if (now_ts - last_warn) >= 3600:
                             CONN.execute("UPDATE members SET last_vote_warn_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                             CONN.commit()
-                            send_msg(peer_id, f"⚠️ {mention(user_id)}, вы уже голосовали в последний час. Следующий голос будет учтен позже.")
+                            send_msg(peer_id, f"⚠️ {mention(user_id)}, вы уже голосовали в этот опрос. Повторный голос не учитывается.")
+                        
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": snackbar_text})
+                        )
                     else:
                         # Не голосовал, засчитываем голос
                         CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
@@ -323,19 +330,19 @@ def handle_event(event):
                         CONN.commit()
                         send_msg(peer_id, f"✅ {mention(user_id)} Зайдет на этот кд!")
                         
-                # Всегда отвечаем на событие кнопки, чтобы убрать крутилку
-                VK.messages.sendMessageEventAnswer(
-                    event_id=event_id, user_id=user_id, peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметился!"})
-                )
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "✅ Ты отметился!"})
+                        )
             except Exception as e:
                 print(f"DB error in poll_vote: {e}")
                 VK.messages.sendMessageEventAnswer(
                     event_id=event_id, user_id=user_id, peer_id=peer_id,
-                    event_data=json.dumps({"type": "show_snackbar", "text": "❌ Ошибка!"})
+                    event_data=json.dumps({"type": "show_snackbar", "text": "❌ Ошибка базы данных!"})
                 )
             return
 
+        # ИСПРАВЛЕНО: Обработка нажатия на центральную кнопку "1/2", чтобы не спамить в чат
         if cmd == "page_info":
             page = payload.get("page", 1)
             total = payload.get("total", 1)
@@ -384,7 +391,8 @@ def handle_event(event):
             
             buttons = []
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
-            buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
+            # ИСПРАВЛЕНО: type изменен на callback, чтобы не спамить текстом в чат
+            buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
@@ -649,7 +657,8 @@ def handle_message(peer, sender, text, msg_obj):
             
             buttons = []
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
-            buttons.append({"action": {"type": "text", "label": f"{page}/{total_pages}", "payload": "{}"}, "color": "default"})
+            # ИСПРАВЛЕНО: type изменен на callback, чтобы не спамить текстом в чат
+            buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
@@ -1245,7 +1254,6 @@ def timer_loop():
                 if now_msk.minute == poll_minute and is_active:
                     last_poll_key = f"last_poll_{current_hour}_{poll_minute}"
                     if get_setting(peer, last_poll_key, "0") != "1":
-                        # ИСПРАВЛЕНО: добавляем время создания опроса в payload кнопки
                         poll_creation_time = int(time.time())
                         keyboard_json = json.dumps({
                             "inline": True,
