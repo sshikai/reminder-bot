@@ -289,11 +289,11 @@ def handle_event(event):
             now_ts = int(time.time())
             today_str = get_msk_now().strftime("%Y-%m-%d")
             
-            last_poll_time_str = get_setting(peer_id, "last_poll_time", "0")
-            last_poll_time = int(last_poll_time_str) if last_poll_time_str.isdigit() else 0
+            # ИСПРАВЛЕНО: берем время создания опроса из payload кнопки
+            payload_time = payload.get("time", 0)
             
-            # Если опрос просрочен (больше 10 минут с момента создания)
-            if last_poll_time > 0 and (now_ts - last_poll_time) > 600:
+            # Если опрос просрочен (больше 10 минут = 600 секунд с момента создания)
+            if payload_time > 0 and (now_ts - payload_time) > 600:
                 VK.messages.sendMessageEventAnswer(
                     event_id=event_id, user_id=user_id, peer_id=peer_id,
                     event_data=json.dumps({"type": "show_snackbar", "text": "⏰ Время голосования вышло!"})
@@ -302,30 +302,25 @@ def handle_event(event):
 
             try:
                 with DB_LOCK:
-                    # Проверяем, голосовал ли уже пользователь в этом опросе (сегодня в этом чате)
                     existing_vote = CONN.execute(
                         "SELECT 1 FROM poll_votes WHERE user_id=? AND peer_id=? AND date=?", 
                         (user_id, peer_id, today_str)
                     ).fetchone()
                     
                     if existing_vote:
-                        # Уже голосовал. Проверяем, нужно ли отправить предупреждение о спаме
+                        # Уже голосовал. Проверяем, нужно ли отправить предупреждение о спаме (не чаще 1 раза в час)
                         row = CONN.execute("SELECT last_vote_warn_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
                         last_warn = row["last_vote_warn_time"] if row and row["last_vote_warn_time"] else 0
                         
                         if (now_ts - last_warn) >= 3600:
-                            # Прошел час с последнего предупреждения, отправляем новое
                             CONN.execute("UPDATE members SET last_vote_warn_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                             CONN.commit()
                             send_msg(peer_id, f"⚠️ {mention(user_id)}, вы уже голосовали в последний час. Следующий голос будет учтен позже.")
                     else:
                         # Не голосовал, засчитываем голос
                         CONN.execute("INSERT INTO poll_votes(user_id, peer_id, date) VALUES(?,?,?)", (user_id, peer_id, today_str))
-                        
-                        # Обновляем время последнего успешного голоса
                         CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                         CONN.commit()
-                        
                         send_msg(peer_id, f"✅ {mention(user_id)} Зайдет на этот кд!")
                         
                 # Всегда отвечаем на событие кнопки, чтобы убрать крутилку
@@ -715,7 +710,6 @@ def handle_message(peer, sender, text, msg_obj):
             
             yesterday_str = (get_msk_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
             with DB_LOCK:
-                # Очищаем старые голоса, оставляем только вчера и сегодня
                 CONN.execute("DELETE FROM poll_votes WHERE date < ?", (yesterday_str,))
                 
                 rows = CONN.execute("""
@@ -1251,9 +1245,11 @@ def timer_loop():
                 if now_msk.minute == poll_minute and is_active:
                     last_poll_key = f"last_poll_{current_hour}_{poll_minute}"
                     if get_setting(peer, last_poll_key, "0") != "1":
+                        # ИСПРАВЛЕНО: добавляем время создания опроса в payload кнопки
+                        poll_creation_time = int(time.time())
                         keyboard_json = json.dumps({
                             "inline": True,
-                            "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote"})}, "color": "positive"}]]
+                            "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote", "time": poll_creation_time})}, "color": "positive"}]]
                         })
                         try:
                             msg_id = VK.messages.send(
@@ -1264,7 +1260,7 @@ def timer_loop():
                             )
                             set_setting(peer, last_poll_key, "1")
                             set_setting(peer, "last_poll_msg_id", str(msg_id))
-                            set_setting(peer, "last_poll_time", str(int(time.time())))
+                            set_setting(peer, "last_poll_time", str(poll_creation_time))
                         except Exception as e:
                             print(f"Ошибка отправки опроса: {e}")
                 
