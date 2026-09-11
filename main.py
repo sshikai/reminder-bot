@@ -372,41 +372,34 @@ def handle_event(event):
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
-            niki_msg_key = f"niki_msg_id_{peer_id}"
-            saved_msg_id_str = get_setting(peer_id, niki_msg_key, "0")
+            # ИСПРАВЛЕНИЕ: Берем conversation_message_id прямо из события нажатия кнопки. 
+            # Это гарантирует, что мы редактируем именно то сообщение, в котором была нажата кнопка.
+            conversation_message_id = obj.get("conversation_message_id")
             
-            success = False
-            if saved_msg_id_str and saved_msg_id_str != "0":
+            if conversation_message_id:
                 try:
-                    if saved_msg_id_str.startswith("conv_"):
-                        conv_id = int(saved_msg_id_str[5:])
-                        VK.messages.edit(peer_id=peer_id, conversation_message_id=conv_id, message="\n".join(lines), keyboard=keyboard_json)
-                    else:
-                        msg_id = int(saved_msg_id_str)
-                        VK.messages.edit(peer_id=peer_id, message_id=msg_id, message="\n".join(lines), keyboard=keyboard_json)
-                    success = True
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=conversation_message_id,
+                        message="\n".join(lines),
+                        keyboard=keyboard_json
+                    )
                 except Exception as e:
-                    print(f"Edit saved msg error: {e}.")
-            
-            if not success:
-                try:
-                    msg_id = VK.messages.send(peer_id=peer_id, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
-                    try:
-                        # ИСПРАВЛЕНО: добавлен peer_id для корректного получения conversation_message_id в беседах
-                        msg_data = VK.messages.getById(message_ids=[msg_id], peer_id=peer_id)
-                        if msg_data.get('items') and len(msg_data['items']) > 0:
-                            conv_msg_id = msg_data['items'][0].get('conversation_message_id')
-                            if conv_msg_id:
-                                set_setting(peer_id, niki_msg_key, f"conv_{conv_msg_id}")
-                            else:
-                                set_setting(peer_id, niki_msg_key, str(msg_id))
-                        else:
-                            set_setting(peer_id, niki_msg_key, str(msg_id))
-                    except Exception as e:
-                        print(f"getById error: {e}")
-                        set_setting(peer_id, niki_msg_key, str(msg_id))
-                except Exception as e:
-                    print("Send new msg error:", e)
+                    print(f"Edit error: {e}")
+                    # Только если редактирование категорически не удалось, отправляем новое
+                    VK.messages.send(
+                        peer_id=peer_id, 
+                        message="\n".join(lines) + "\n\n(Не удалось обновить сообщение, отправлено новое)", 
+                        keyboard=keyboard_json, 
+                        random_id=random.getrandbits(31)
+                    )
+            else:
+                VK.messages.send(
+                    peer_id=peer_id, 
+                    message="\n".join(lines), 
+                    keyboard=keyboard_json, 
+                    random_id=random.getrandbits(31)
+                )
             
             try:
                 VK.messages.sendMessageEventAnswer(
@@ -649,44 +642,13 @@ def handle_message(peer, sender, text, msg_obj):
             
             keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
             
-            niki_msg_key = f"niki_msg_id_{peer}"
-            saved_msg_id_str = get_setting(peer, niki_msg_key, "0")
-            
-            success = False
-            if saved_msg_id_str and saved_msg_id_str != "0":
-                try:
-                    if saved_msg_id_str.startswith("conv_"):
-                        conv_id = int(saved_msg_id_str[5:])
-                        VK.messages.edit(peer_id=peer, conversation_message_id=conv_id, message="\n".join(lines), keyboard=keyboard_json)
-                    else:
-                        msg_id = int(saved_msg_id_str)
-                        VK.messages.edit(peer_id=peer, message_id=msg_id, message="\n".join(lines), keyboard=keyboard_json)
-                    success = True
-                except Exception as e:
-                    print("Edit saved msg error:", e)
-            
-            if not success:
-                try:
-                    msg_id = VK.messages.send(peer_id=peer, message="\n".join(lines), keyboard=keyboard_json, random_id=random.getrandbits(31))
-                    
-                    # ИСПРАВЛЕНО: добавлен peer_id для корректного получения conversation_message_id в беседах
-                    try:
-                        msg_data = VK.messages.getById(message_ids=[msg_id], peer_id=peer)
-                        if msg_data.get('items') and len(msg_data['items']) > 0:
-                            conv_msg_id = msg_data['items'][0].get('conversation_message_id')
-                            if conv_msg_id:
-                                set_setting(peer, niki_msg_key, f"conv_{conv_msg_id}")
-                            else:
-                                set_setting(peer, niki_msg_key, str(msg_id))
-                        else:
-                            set_setting(peer, niki_msg_key, str(msg_id))
-                    except Exception as e:
-                        print(f"getById error: {e}")
-                        set_setting(peer, niki_msg_key, str(msg_id))
-                        
-                except Exception as e:
-                    print("Send new msg error:", e)
-                    send_msg(peer, f"❌ Ошибка отправки списка: {e}")
+            # Просто отправляем первое сообщение. Последующие обновления будут использовать edit через conversation_message_id из события кнопки.
+            VK.messages.send(
+                peer_id=peer, 
+                message="\n".join(lines), 
+                keyboard=keyboard_json, 
+                random_id=random.getrandbits(31)
+            )
         except Exception as e:
             print("НИКИ ERROR:", e)
             send_msg(peer, f"❌ Произошла ошибка при выполнении команды 'Мд ники': {e}")
