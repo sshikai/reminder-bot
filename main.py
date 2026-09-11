@@ -41,7 +41,7 @@ VALID_COMMANDS = [
     "пред", "-пред", "лимит_предов", "кд_предов", "старт_контроль", "стоп_контроль",
     "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
-    "назначить", "снять", "голоса"
+    "назначить", "снять", "голоса", "тишина", "тишина_офф"
 ]
 
 def init_db():
@@ -60,7 +60,6 @@ def init_db():
             streak INTEGER DEFAULT 0, poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0, 
             last_vote_time INTEGER DEFAULT 0, last_vote_warn_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
         
-        # Безопасная миграция для добавления poll_time в таблицу голосов
         try:
             CONN.execute("ALTER TABLE poll_votes RENAME TO poll_votes_old")
         except Exception:
@@ -292,7 +291,6 @@ def handle_event(event):
             
             payload_time = payload.get("time", 0)
             
-            # 1. Проверка на истечение времени опроса (10 минут = 600 секунд)
             if payload_time > 0 and (now_ts - payload_time) > 600:
                 VK.messages.sendMessageEventAnswer(
                     event_id=event_id, user_id=user_id, peer_id=peer_id,
@@ -302,26 +300,22 @@ def handle_event(event):
 
             try:
                 with DB_LOCK:
-                    # 2. Проверяем, голосовал ли уже пользователь в ЭТОМ конкретном опросе
                     existing_vote = CONN.execute(
                         "SELECT 1 FROM poll_votes WHERE user_id=? AND peer_id=? AND poll_time=?", 
                         (user_id, peer_id, payload_time)
                     ).fetchone()
                     
                     if existing_vote:
-                        # Уже голосовал в этом опросе.
                         snackbar_text = "⚠️ Вы уже голосовали в этом опросе!"
                         VK.messages.sendMessageEventAnswer(
                             event_id=event_id, user_id=user_id, peer_id=peer_id,
                             event_data=json.dumps({"type": "show_snackbar", "text": snackbar_text})
                         )
                     else:
-                        # 3. Проверяем общий кд на голосование (1 час)
                         mem_row = CONN.execute("SELECT last_vote_time FROM members WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
                         last_vote = mem_row["last_vote_time"] if mem_row and mem_row["last_vote_time"] else 0
                         
                         if (now_ts - last_vote) < 3600:
-                            # Кд еще не прошел
                             remaining_mins = (3600 - (now_ts - last_vote)) // 60
                             snackbar_text = f"⏳ КД на голосование: осталось {remaining_mins}м"
                             VK.messages.sendMessageEventAnswer(
@@ -329,7 +323,6 @@ def handle_event(event):
                                 event_data=json.dumps({"type": "show_snackbar", "text": snackbar_text})
                             )
                         else:
-                            # Кд прошел, засчитываем голос
                             CONN.execute("INSERT INTO poll_votes(user_id, peer_id, poll_time, date) VALUES(?,?,?,?)", (user_id, peer_id, payload_time, today_str))
                             CONN.execute("UPDATE members SET last_vote_time=? WHERE user_id=? AND peer_id=?", (now_ts, user_id, peer_id))
                             CONN.commit()
@@ -348,7 +341,6 @@ def handle_event(event):
                 )
             return
 
-        # ИСПРАВЛЕНО: Обработка нажатия на центральную кнопку "1/2", чтобы не спамить в чат
         if cmd == "page_info":
             page = payload.get("page", 1)
             total = payload.get("total", 1)
@@ -397,7 +389,6 @@ def handle_event(event):
             
             buttons = []
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
-            # ИСПРАВЛЕНО: type изменен на callback, чтобы не спамить текстом в чат
             buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
@@ -498,6 +489,17 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"Добро пожаловать, {mention(user_id)}! 🎉\nПожалуйста, установи свой ник с помощью команды:\n`Мд ник <твой_ник>`")
         return
 
+    # ПРОВЕРКА РЕЖИМА ТИШИНЫ
+    if get_setting(peer, "silence_mode", "0") == "1":
+        if not is_admin(sender, peer):
+            try:
+                conv_msg_id = msg_obj.get("conversation_message_id")
+                if conv_msg_id:
+                    VK.messages.delete(peer_id=peer, conversation_message_ids=[conv_msg_id], delete_for_all=1)
+            except Exception as e:
+                print("Silence delete error:", e)
+            return
+
     update_member_activity(peer, sender)
 
     first = norm(text.split("\n")[0])
@@ -575,7 +577,9 @@ def handle_message(peer, sender, text, msg_obj):
             "`Мд кд предов` <дней> — изменить срок дефолтного преда\n"
             "`Мд текст др` — установить текст поздравления с ДР\n"
             "`Мд назначить` @игрок — выдать права админа\n"
-            "`Мд снять` @игрок — снять права админа"
+            "`Мд снять` @игрок — снять права админа\n"
+            "`Мд тишина` — запретить писать всем, кроме админов\n"
+            "`Мд тишина офф` — разрешить писать всем"
         )
         send_msg(peer, help_text)
 
@@ -663,7 +667,6 @@ def handle_message(peer, sender, text, msg_obj):
             
             buttons = []
             if page > 1: buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "niki_prev", "page": page - 1})}, "color": "secondary"})
-            # ИСПРАВЛЕНО: type изменен на callback, чтобы не спамить текстом в чат
             buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "niki_next", "page": page + 1})}, "color": "secondary"})
             
@@ -744,7 +747,6 @@ def handle_message(peer, sender, text, msg_obj):
             for r in rows:
                 count = r['count']
                 cooldown_text = ""
-                # Показываем КД только для сегодняшних голосов
                 if target_date == get_msk_now().strftime("%Y-%m-%d"):
                     mem_row = CONN.execute("SELECT last_vote_time FROM members WHERE user_id=? AND peer_id=?", (r['user_id'], peer)).fetchone()
                     if mem_row and mem_row['last_vote_time']:
@@ -1199,6 +1201,16 @@ def handle_message(peer, sender, text, msg_obj):
                 removed.append(t)
         if removed: send_msg(peer, f"✅ Сняты права: {', '.join(mention(x) for x in removed)}")
         else: send_msg(peer, "ℹ️ У них нет прав админа.")
+
+    elif cmd == "тишина":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        set_setting(peer, "silence_mode", "1")
+        send_msg(peer, "🔇 Режим тишины включен. Теперь писать могут только администраторы.")
+
+    elif cmd == "тишина_офф":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        set_setting(peer, "silence_mode", "0")
+        send_msg(peer, "🔊 Режим тишины выключен. Все могут писать.")
 
 
 def timer_loop():
