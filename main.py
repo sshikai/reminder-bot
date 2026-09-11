@@ -45,7 +45,6 @@ VALID_COMMANDS = [
 ]
 
 def init_db():
-    with DB_LOCK:
         CONN.execute("""CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id INTEGER, name TEXT, text TEXT,
             attachments TEXT, source_message_id INTEGER DEFAULT 0, interval_minutes INTEGER,
@@ -728,14 +727,14 @@ def handle_message(peer, sender, text, msg_obj):
             yesterday_str = (get_msk_now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
             with DB_LOCK:
                 CONN.execute("DELETE FROM poll_votes WHERE date < ?", (yesterday_str,))
-                
-                rows = CONN.execute("""
-                    SELECT user_id, COUNT(*) as count 
-                    FROM poll_votes 
-                    WHERE peer_id=? AND date=? 
-                    GROUP BY user_id 
-                    ORDER BY count DESC
-                """, (peer, target_date)).fetchall()
+            
+            rows = CONN.execute("""
+                SELECT user_id, COUNT(*) as count 
+                FROM poll_votes 
+                WHERE peer_id=? AND date=? 
+                GROUP BY user_id 
+                ORDER BY count DESC
+            """, (peer, target_date)).fetchall()
             
             if not rows:
                 send_msg(peer, f"🗳 {day_name.capitalize()} ({target_date}) никто не голосовал.")
@@ -953,7 +952,7 @@ def handle_message(peer, sender, text, msg_obj):
             return
         if not args or not args[0].isdigit():
             current = get_setting(peer, "admin_report_chat", "Не установлена")
-            return send_msg(peer, f"📌 Текущий чат для отчетов: `{current}`\n\nИспользуйте: `Мд адмчат <id_беседы>`")
+            return send_msg(peer, f"📌 Текущий чат для отчетов: {current}\n\nИспользуйте: `Мд адмчат <id_беседы>`")
         
         target_chat = int(args[0])
         set_setting(peer, "admin_report_chat", str(target_chat))
@@ -1301,73 +1300,71 @@ def timer_loop():
                         except Exception as e:
                             print(f"Ошибка отправки опроса: {e}")
                 
-                # ИСПРАВЛЕНО: Надежная проверка в 23:00, которая не блокирует работу бота
-                if now_msk.hour == 00 and now_msk.minute == 44:
+                # ИСПРАВЛЕНО: Проверка в 23:00 без вложенных блокировок
+                if now_msk.hour == 23 and now_msk.minute == 0:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
                         try:
-                            with DB_LOCK:
-                                members = CONN.execute("SELECT user_id FROM members WHERE peer_id=? AND poll_protected=0", (peer,)).fetchall()
-                                voted = set(r["user_id"] for r in CONN.execute("SELECT user_id FROM poll_votes WHERE peer_id=? AND date=?", (peer, today_str)).fetchall())
-                                default_days = int(get_setting(peer, "default_warn_days", "7") or "7")
-                                max_warns = int(get_setting(peer, "max_warns", "3") or "3")
-                                expiry = time.time() + (default_days * 86400)
-                                
-                                inactive = [m["user_id"] for m in members if m["user_id"] not in voted]
+                            # Получаем данные БЕЗ блокировки
+                            members = CONN.execute("SELECT user_id FROM members WHERE peer_id=? AND poll_protected=0", (peer,)).fetchall()
+                            voted = set(r["user_id"] for r in CONN.execute("SELECT user_id FROM poll_votes WHERE peer_id=? AND date=?", (peer, today_str)).fetchall())
+                            default_days = int(get_setting(peer, "default_warn_days", "7") or "7")
+                            max_warns = int(get_setting(peer, "max_warns", "3") or "3")
+                            expiry = time.time() + (default_days * 86400)
                             
-                            if inactive:
-                                lines = [f"⚠️ Данные игроки не проявили актива за день и получают по 1 предупреждению на {default_days} дней:\n"]
-                                for u_id in inactive:
-                                    with DB_LOCK:
-                                        row = CONN.execute("SELECT warnings FROM members WHERE user_id=? AND peer_id=?", (u_id, peer)).fetchone()
-                                        current_warns = (row["warnings"] or 0) + 1
-                                        
-                                        CONN.execute("UPDATE members SET warnings=?, warn_expiry=? WHERE user_id=? AND peer_id=?",
-                                                     (current_warns, expiry, u_id, peer))
-                                        CONN.commit()
+                            inactive = [m["user_id"] for m in members if m["user_id"] not in voted]
+                        
+                        if inactive:
+                            lines = [f"⚠️ Данные игроки не проявили актива за день и получают по 1 предупреждению на {default_days} дней:\n"]
+                            for u_id in inactive:
+                                # Обновляем БД БЕЗ вложенных блокировок
+                                row = CONN.execute("SELECT warnings FROM members WHERE user_id=? AND peer_id=?", (u_id, peer)).fetchone()
+                                current_warns = (row["warnings"] or 0) + 1
+                                
+                                CONN.execute("UPDATE members SET warnings=?, warn_expiry=? WHERE user_id=? AND peer_id=?",
+                                             (current_warns, expiry, u_id, peer))
+                                CONN.commit()
+                            
+                            lines.append(f"{mention(u_id)} ({current_warns}/{max_warns})")
+                            
+                            if current_warns >= max_warns:
+                                try:
+                                    chat_id = peer - 2000000000
+                                    VK.messages.removeChatUser(chat_id=chat_id, member_id=u_id)
                                     
-                                    lines.append(f"{mention(u_id)} ({current_warns}/{max_warns})")
+                                    admin_chat_raw = get_setting(peer, "admin_report_chat", "")
+                                    admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
                                     
-                                    if current_warns >= max_warns:
+                                    if len(admin_chat_clean) >= 9:
+                                        report_peer = int(admin_chat_clean)
+                                        chat_name = "Неизвестная беседа"
                                         try:
-                                            chat_id = peer - 2000000000
-                                            VK.messages.removeChatUser(chat_id=chat_id, member_id=u_id)
-                                            
-                                            admin_chat_raw = get_setting(peer, "admin_report_chat", "")
-                                            admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
-                                            
-                                            if len(admin_chat_clean) >= 9:
-                                                report_peer = int(admin_chat_clean)
-                                                chat_name = "Неизвестная беседа"
-                                                try:
-                                                    conv = VK.messages.getConversationsById(peer_ids=peer)
-                                                    if conv.get("items"):
-                                                        chat_name = conv["items"][0].get("chat_settings", {}).get("title", "Неизвестная беседа")
-                                                except: pass
-                                                
-                                                with DB_LOCK:
-                                                    nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (u_id, peer)).fetchone()
-                                                nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(u_id)
-                                                
-                                                report_text = (
-                                                    f"🚨 **ПРИВЕТСТВУЮ, АДМИНИСТРАТОРЫ!** 😀\n\n"
-                                                    f"Игрок {mention(u_id)} ({nick}) был исключен из беседы '{chat_name}' за неактивность.\n"
-                                                    f"Прошу принять меры и исключить его из семьи в игре. 👊"
-                                                )
-                                                try:
-                                                    send_msg(report_peer, report_text)
-                                                except Exception as e:
-                                                    print(f"Error sending auto-kick report: {e}")
+                                            conv = VK.messages.getConversationsById(peer_ids=peer)
+                                            if conv.get("items"):
+                                                chat_name = conv["items"][0].get("chat_settings", {}).get("title", "Неизвестная беседа")
+                                        except: pass
+                                        
+                                        nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (u_id, peer)).fetchone()
+                                        nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(u_id)
+                                        
+                                        report_text = (
+                                            f"🚨 **ПРИВЕТСТВУЮ, АДМИНИСТРАТОРЫ!** 😀\n\n"
+                                            f"Игрок {mention(u_id)} ({nick}) был исключен из беседы '{chat_name}' за неактивность.\n"
+                                            f"Прошу принять меры и исключить его из семьи в игре. 👊"
+                                        )
+                                        try:
+                                            send_msg(report_peer, report_text)
                                         except Exception as e:
-                                            print(f"Auto-kick error: {e}")
-                                
-                                send_msg(peer, "\n".join(lines))
-                            
-                            # Гарантированно отмечаем, что проверка за сегодня выполнена, чтобы не зациклить
-                            set_setting(peer, "last_23_check", today_str)
+                                            print(f"Error sending auto-kick report: {e}")
+                                except Exception as e:
+                                    print(f"Auto-kick error: {e}")
+                        
+                        send_msg(peer, "\n".join(lines))
+                        
+                        # Гарантированно отмечаем, что проверка за сегодня выполнена
+                        set_setting(peer, "last_23_check", today_str)
                         except Exception as e:
                             print(f"Error in 23:00 check: {e}")
-                            # Даже при ошибке отмечаем выполнение, чтобы не спамить логами каждую секунду
                             set_setting(peer, "last_23_check", today_str)
                 
                 if now_msk.minute == 0:
