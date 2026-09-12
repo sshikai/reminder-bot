@@ -204,7 +204,6 @@ def parse_reply_attachments(reply_obj):
             if ph.get("owner_id") and ph.get("id"): parts.append(f"photo{ph['owner_id']}_{ph['id']}")
     return ",".join(parts)
 
-# ИСПРАВЛЕНО: sync_members теперь удаляет из базы тех, кого больше нет в чате
 def sync_members(peer):
     now = time.time()
     if peer in MEMBER_SYNC_CACHE and (now - MEMBER_SYNC_CACHE[peer]) < 300:
@@ -214,7 +213,6 @@ def sync_members(peer):
         profiles = members_resp.get("profiles", [])
         today = get_msk_now().strftime("%Y-%m-%d")
         
-        # Собираем ID всех текущих участников чата
         current_members = set()
         for profile in profiles:
             user_id = int(profile.get("id", 0))
@@ -222,12 +220,10 @@ def sync_members(peer):
                 current_members.add(user_id)
         
         with DB_LOCK:
-            # Добавляем новых участников
             for user_id in current_members:
                 CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id, last_active, streak) VALUES(?,?,?,?)", 
                              (user_id, peer, today, 0))
             
-            # Удаляем из базы тех, кого больше нет в чате
             all_db_members = CONN.execute("SELECT user_id FROM members WHERE peer_id=?", (peer,)).fetchall()
             for row in all_db_members:
                 if row["user_id"] not in current_members:
@@ -253,10 +249,10 @@ def update_member_activity(peer, user_id):
         CONN.commit()
 
 def get_streak_emoji(streak):
-    if streak >= 50: return "👑"
-    if streak >= 40: return "🤑"
-    if streak >= 30: return "😈"
-    if streak >= 20: return "🤠"
+    if streak >= 30: return "👑"
+    if streak >= 25: return "🤑"
+    if streak >= 20: return "😈"
+    if streak >= 15: return "🤠"
     if streak >= 10: return "😇"
     if streak >= 5: return "😎"
     return "🤓"
@@ -509,14 +505,42 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"Добро пожаловать, {mention(user_id)}! 🎉\nПожалуйста, установи свой ник с помощью команды:\n`Мд ник <твой_ник>`")
         return
 
-    # ИСПРАВЛЕНО: Обработка события кика/выхода из чата вручную
+    # Обработка события кика/выхода из чата вручную + отправка отчёта в адм-чат
     if action.get("type") == "chat_kick_user":
         user_id = action.get("member_id")
         if user_id:
+            # Получаем ник до удаления из БД
+            with DB_LOCK:
+                nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
+            nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(user_id)
+            
+            # Удаляем из БД
             with DB_LOCK:
                 CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer))
                 CONN.commit()
             print(f"User {user_id} kicked from peer {peer}, removed from DB")
+            
+            # НОВОЕ: Отправляем отчёт в адм-чат, если он настроен
+            admin_chat_raw = get_setting(peer, "admin_report_chat", "")
+            admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
+            if len(admin_chat_clean) >= 9:
+                report_peer = int(admin_chat_clean)
+                chat_name = "Неизвестная беседа"
+                try:
+                    conv = VK.messages.getConversationsById(peer_ids=peer)
+                    if conv.get("items"):
+                        chat_name = conv["items"][0].get("chat_settings", {}).get("title", "Неизвестная беседа")
+                except: pass
+                
+                report_text = (
+                    f"🚨 **ПРИВЕТСТВУЮ, АДМИНИСТРАТОРЫ!** 😀\n\n"
+                    f"Игрок {mention(user_id)} ({nick}) был вручную исключен из беседы '{chat_name}'.\n"
+                    f"Прошу принять меры и исключить его из семьи в игре. 👊"
+                )
+                try:
+                    send_msg(report_peer, report_text)
+                except Exception as e:
+                    print(f"Error sending kick report to {report_peer}: {e}")
             return
 
     # ПРОВЕРКА РЕЖИМА ТИШИНЫ
@@ -571,12 +595,12 @@ def handle_message(peer, sender, text, msg_obj):
             "`Мд помощь` — эта справка\n"
             "`Мд админы` — список руководителей чата\n"
             "`Мд участник` [@юз] — твоя статистика (админ может смотреть чужую)\n"
-            "`Мд ники` — список ников и предупреждений\n"
             "`Мд парк` — информация об автопарке\n"
             "`Мд прем` — информация о премиях и зарплатах\n"
             "`Мд чат` — ссылка на чат для отчетов\n\n"
             "🛡 Для администраторов:\n"
             "`Мд ник` <имя> — установить ник участнику (или через ответ)\n"
+            "`Мд ники` — список ников и предупреждений\n"
             "`Мд ник` @юзер <имя> — установить ник другому участнику\n"
             "`Мд номер чата` — узнать ID текущего чата и создателя\n"
             "`Мд пред` [@юз] — выдать пред (по умолчанию на 7 дн.)\n"
@@ -603,6 +627,7 @@ def handle_message(peer, sender, text, msg_obj):
             "`Мд стоп контроль` — выключить систему опросов\n"
             "`Мд время опросов` <ЧЧ:ММ> <ЧЧ:ММ> — время опросов (напр. 10:20 23:20)\n"
             "`Мд адмчат` <id> — установить чат для отчетов о банах\n"
+            "`Мд адмчат удалить` — отключить отправку отчетов\n"
             "`Мд лимит предов` <число> — макс. количество предов до кика (по умолч. 3)\n"
             "`Мд кд предов` <дней> — изменить срок дефолтного преда\n"
             "`Мд текст др` — установить текст поздравления с ДР\n"
@@ -982,9 +1007,18 @@ def handle_message(peer, sender, text, msg_obj):
         if not owner:
             send_msg(peer, "⛔ Только владелец или создатель может менять чат для отчетов.")
             return
+        
+        # НОВОЕ: обработка удаления привязки адм-чата
+        if args and args[0].lower() == "удалить":
+            with DB_LOCK:
+                CONN.execute("DELETE FROM settings WHERE peer_id=? AND key='admin_report_chat'", (peer,))
+                CONN.commit()
+            send_msg(peer, "✅ Привязка адм-чата удалена. Отчеты больше никуда не отправляются.")
+            return
+        
         if not args or not args[0].isdigit():
             current = get_setting(peer, "admin_report_chat", "Не установлена")
-            return send_msg(peer, f"📌 Текущий чат для отчетов: `{current}`\n\nИспользуйте: `Мд адмчат <id_беседы>`")
+            return send_msg(peer, f"📌 Текущий чат для отчетов: `{current}`\n\nИспользуйте:\n`Мд адмчат <id_беседы>` — установить\n`Мд адмчат удалить` — отключить отправку отчетов")
         
         target_chat = int(args[0])
         set_setting(peer, "admin_report_chat", str(target_chat))
