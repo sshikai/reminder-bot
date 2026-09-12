@@ -43,7 +43,7 @@ VALID_COMMANDS = [
     "пред", "-пред", "лимит_предов", "кд_предов", "старт_контроль", "стоп_контроль",
     "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
-    "назначить", "снять", "голоса", "тишина", "тишина_офф"
+    "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса"
 ]
 
 def init_db():
@@ -357,7 +357,8 @@ HELP_OWNER_TEXT = (
     "9. Мд назначить @игрок — выдать права админа.\n"
     "10. Мд снять @игрок — снять права админа.\n"
     "11. Мд тишина — запретить писать всем, кроме админов.\n"
-    "12. Мд тишина офф — разрешить писать всем."
+    "12. Мд тишина офф — разрешить писать всем.\n"
+    "13. Мд проверка опроса <ЧЧ:ММ> — изменить время проверки опроса."
 )
 
 
@@ -521,9 +522,7 @@ def handle_event(event):
                 print("Event answer error:", e)
             return
 
-        # ===== ОБРАБОТКА КНОПОК КОМАНД =====
         if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_back"]:
-            # ИСПРАВЛЕНО: "Общие" и "Назад" доступны всем, остальные — только админам
             if cmd not in ["help_general", "help_back"] and not is_admin(user_id, peer_id):
                 try:
                     VK.messages.sendMessageEventAnswer(
@@ -1358,6 +1357,29 @@ def handle_message(peer, sender, text, msg_obj):
         set_setting(peer, "silence_mode", "0")
         send_msg(peer, "🔊 Режим тишины выключен. Все могут писать.")
 
+    # НОВАЯ КОМАНДА: Мд проверка опроса <ЧЧ:ММ>
+    elif cmd == "проверка_опроса":
+        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        if len(args) >= 1:
+            try:
+                time_parts = args[0].split(":")
+                check_h = int(time_parts[0])
+                check_m = int(time_parts[1]) if len(time_parts) > 1 else 0
+                if 0 <= check_h <= 23 and 0 <= check_m <= 59:
+                    set_setting(peer, "check_hour", str(check_h))
+                    set_setting(peer, "check_minute", str(check_m))
+                    # Сбрасываем флаг проверки, чтобы можно было протестировать снова
+                    set_setting(peer, "last_23_check", "")
+                    send_msg(peer, f"✅ Время проверки опроса изменено на {check_h:02d}:{check_m:02d}. Флаг проверки сброшен для тестирования.")
+                else:
+                    send_msg(peer, "❌ Некорректное время. Формат: `Мд проверка опроса ЧЧ:ММ`")
+            except (ValueError, IndexError):
+                send_msg(peer, "❌ Формат: `Мд проверка опроса ЧЧ:ММ`")
+        else:
+            check_h = int(get_setting(peer, "check_hour", "23"))
+            check_m = int(get_setting(peer, "check_minute", "0"))
+            send_msg(peer, f"📌 Текущее время проверки опроса: {check_h:02d}:{check_m:02d}\n\nИспользуйте: `Мд проверка опроса ЧЧ:ММ`")
+
 
 def timer_loop():
     while True:
@@ -1448,7 +1470,12 @@ def timer_loop():
                         except Exception as e:
                             print(f"Ошибка отправки опроса: {e}")
                 
-                if now_msk.hour == 23 and now_msk.minute == 0:
+                # ИСПРАВЛЕНО: Проверка опроса по настраиваемому времени (по умолчанию 23:00)
+                check_hour = int(get_setting(peer, "check_hour", "23"))
+                check_minute = int(get_setting(peer, "check_minute", "0"))
+                check_time = now_msk.replace(hour=check_hour, minute=check_minute, second=0, microsecond=0)
+                
+                if now_msk >= check_time:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
                         admins = set(get_extra_admins(peer))
