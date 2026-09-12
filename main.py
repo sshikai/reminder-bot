@@ -232,6 +232,12 @@ def sync_members(peer):
     except Exception as e:
         print("sync_members error:", e)
 
+# НОВАЯ ФУНКЦИЯ: Синхронизация всех активных чатов
+def sync_all_peers(peers_list):
+    for peer in peers_list:
+        sync_members(peer)
+        time.sleep(1)
+
 def update_member_activity(peer, user_id):
     today = get_msk_now().strftime("%Y-%m-%d")
     with DB_LOCK:
@@ -262,10 +268,21 @@ def check_birthdays(peer):
     last_check = get_setting(peer, "last_bday_check_date", "")
     if last_check == today_str:
         return
+    
+    # ИСПРАВЛЕНО: Сначала синхронизируем участников, чтобы исключить тех, кого нет в чате
+    sync_members(peer)
+    
     with DB_LOCK:
         rows = [dict(r) for r in CONN.execute("SELECT user_id, bdate FROM birthdays WHERE peer_id=? AND bdate IS NOT NULL", (peer,)).fetchall()]
     for r in rows:
         user_id, bdate = r["user_id"], r["bdate"]
+        
+        # ИСПРАВЛЕНО: Проверяем, есть ли человек в чате (в таблице members)
+        with DB_LOCK:
+            member_row = CONN.execute("SELECT 1 FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
+        if not member_row:
+            continue  # Пропускаем, если человека нет в чате
+        
         parts = bdate.split(".")
         if len(parts) >= 2 and int(parts[0]) == now_msk.day and int(parts[1]) == now_msk.month:
             with DB_LOCK:
@@ -315,6 +332,7 @@ HELP_GENERAL_TEXT = (
     "6. Мд чат — ссылка на чат для отчетов."
 )
 
+# ИСПРАВЛЕНО: Добавлены команды тишины в раздел Админские
 HELP_ADMIN_TEXT = (
     "🛡 Админские:\n"
     "1. Мд ник [@юз] <имя> — установить ник другому участнику.\n"
@@ -328,7 +346,9 @@ HELP_ADMIN_TEXT = (
     "9. Мд голоса вчера — посмотреть голоса за вчера.\n"
     "10. Мд защита [@юз] — добавить защиту от опросов.\n"
     "11. Мд -защита [@юз] — убрать защиту от опросов.\n"
-    "12. Мд ники - список ников и предупреждений."
+    "12. Мд ники - список ников и предупреждений.\n"
+    "13. Мд тишина — запретить писать всем, кроме админов.\n"
+    "14. Мд тишина офф — разрешить писать всем."
 )
 
 HELP_REMIND_TEXT = (
@@ -344,6 +364,7 @@ HELP_REMIND_TEXT = (
     "9. Мд развернуть <название или номер> — показать текст напоминания."
 )
 
+# ИСПРАВЛЕНО: Убраны команды тишины из раздела Владелец (перенесены в Админские)
 HELP_OWNER_TEXT = (
     "👑 Команды владельца:\n"
     "1. Мд старт контроль — включить систему опросов и контроля.\n"
@@ -356,9 +377,7 @@ HELP_OWNER_TEXT = (
     "8. Мд текст др — установить текст поздравления с ДР (ответом на сообщение).\n"
     "9. Мд назначить @игрок — выдать права админа.\n"
     "10. Мд снять @игрок — снять права админа.\n"
-    "11. Мд тишина — запретить писать всем, кроме админов.\n"
-    "12. Мд тишина офф — разрешить писать всем.\n"
-    "13. Мд проверка опроса <ЧЧ:ММ> — изменить время проверки опроса."
+    "11. Мд проверка опроса <ЧЧ:ММ> — изменить время проверки опроса."
 )
 
 
@@ -845,14 +864,18 @@ def handle_message(peer, sender, text, msg_obj):
                 return
             
             new_nick = " ".join(nick_args)
+            # ИСПРАВЛЕНО: Используем INSERT OR IGNORE + UPDATE, чтобы не сбрасывать серию и другие поля
             with DB_LOCK:
-                CONN.execute("INSERT OR REPLACE INTO members(user_id, peer_id, nickname) VALUES(?,?,?)", (target_id, peer, new_nick))
+                CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (target_id, peer))
+                CONN.execute("UPDATE members SET nickname=? WHERE user_id=? AND peer_id=?", (new_nick, target_id, peer))
                 CONN.commit()
             send_msg(peer, f"✅ Ник {mention(target_id)} установлен: **{new_nick}**")
         else:
             new_nick = " ".join(args)
+            # ИСПРАВЛЕНО: Используем INSERT OR IGNORE + UPDATE, чтобы не сбрасывать серию и другие поля
             with DB_LOCK:
-                CONN.execute("INSERT OR REPLACE INTO members(user_id, peer_id, nickname) VALUES(?,?,?)", (sender, peer, new_nick))
+                CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (sender, peer))
+                CONN.execute("UPDATE members SET nickname=? WHERE user_id=? AND peer_id=?", (new_nick, sender, peer))
                 CONN.commit()
             send_msg(peer, f"✅ Твой ник установлен: **{new_nick}**")
 
@@ -1347,17 +1370,17 @@ def handle_message(peer, sender, text, msg_obj):
         if removed: send_msg(peer, f"✅ Сняты права: {', '.join(mention(x) for x in removed)}")
         else: send_msg(peer, "ℹ️ У них нет прав админа.")
 
+    # ИСПРАВЛЕНО: Тишина теперь доступна админам (было только владельцу)
     elif cmd == "тишина":
-        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
         set_setting(peer, "silence_mode", "1")
         send_msg(peer, "🔇 Режим тишины включен. Теперь писать могут только администраторы.")
 
     elif cmd == "тишина_офф":
-        if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
+        if not admin: return send_msg(peer, "⛔ Только администраторы.")
         set_setting(peer, "silence_mode", "0")
         send_msg(peer, "🔊 Режим тишины выключен. Все могут писать.")
 
-    # НОВАЯ КОМАНДА: Мд проверка опроса <ЧЧ:ММ>
     elif cmd == "проверка_опроса":
         if not owner: return send_msg(peer, "⛔ Только владелец/создатель.")
         if len(args) >= 1:
@@ -1368,7 +1391,6 @@ def handle_message(peer, sender, text, msg_obj):
                 if 0 <= check_h <= 23 and 0 <= check_m <= 59:
                     set_setting(peer, "check_hour", str(check_h))
                     set_setting(peer, "check_minute", str(check_m))
-                    # Сбрасываем флаг проверки, чтобы можно было протестировать снова
                     set_setting(peer, "last_23_check", "")
                     send_msg(peer, f"✅ Время проверки опроса изменено на {check_h:02d}:{check_m:02d}. Флаг проверки сброшен для тестирования.")
                 else:
@@ -1435,6 +1457,12 @@ def timer_loop():
                 for p in bday_peers:
                     check_birthdays(p["peer_id"])
             
+            # ИСПРАВЛЕНО: Периодическая синхронизация участников каждый час (в 0 минут)
+            # Это удаляет из базы тех, кого исключили из чата вручную
+            if now_msk.minute == 0:
+                peers_to_sync = list(set([p["peer_id"] for p in control_peers] + [p["peer_id"] for p in bday_peers]))
+                threading.Thread(target=sync_all_peers, args=(peers_to_sync,), daemon=True).start()
+            
             for p in control_peers:
                 peer = p["peer_id"]
                 start_hour = int(get_setting(peer, "poll_start", "10"))
@@ -1470,7 +1498,6 @@ def timer_loop():
                         except Exception as e:
                             print(f"Ошибка отправки опроса: {e}")
                 
-                # ИСПРАВЛЕНО: Проверка опроса по настраиваемому времени (по умолчанию 23:00)
                 check_hour = int(get_setting(peer, "check_hour", "23"))
                 check_minute = int(get_setting(peer, "check_minute", "0"))
                 check_time = now_msk.replace(hour=check_hour, minute=check_minute, second=0, microsecond=0)
