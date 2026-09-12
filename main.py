@@ -212,11 +212,26 @@ def sync_members(peer):
         members_resp = VK.messages.getConversationMembers(peer_id=peer)
         profiles = members_resp.get("profiles", [])
         today = get_msk_now().strftime("%Y-%m-%d")
+        
+        # Собираем ID всех текущих участников чата
+        current_members = set()
+        for profile in profiles:
+            user_id = int(profile.get("id", 0))
+            if user_id > 0:
+                current_members.add(user_id)
+        
         with DB_LOCK:
-            for profile in profiles:
-                user_id = int(profile.get("id", 0))
-                if user_id <= 0: continue
-                CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id, last_active, streak) VALUES(?,?,?,?)", (user_id, peer, today, 0))
+            # Добавляем новых участников (как было раньше)
+            for user_id in current_members:
+                CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id, last_active, streak) VALUES(?,?,?,?)", 
+                             (user_id, peer, today, 0))
+            
+            # ИСПРАВЛЕНО: Удаляем из базы тех, кого больше нет в чате
+            all_db_members = CONN.execute("SELECT user_id FROM members WHERE peer_id=?", (peer,)).fetchall()
+            for row in all_db_members:
+                if row["user_id"] not in current_members:
+                    CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (row["user_id"], peer))
+            
             CONN.commit()
         MEMBER_SYNC_CACHE[peer] = now
     except Exception as e:
@@ -476,6 +491,14 @@ def handle_message(peer, sender, text, msg_obj):
 
     action = msg_obj.get("action", {})
     if action.get("type") == "chat_invite_user":
+            # ИСПРАВЛЕНО: Обработка события кика/выхода из чата
+    if action.get("type") == "chat_kick_user":
+        user_id = action.get("member_id")
+        if user_id:
+            with DB_LOCK:
+                CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer))
+                CONN.commit()
+            print(f"User {user_id} kicked from peer {peer}, removed from DB")
         user_id = action.get("member_id")
         if not user_id: return
         
