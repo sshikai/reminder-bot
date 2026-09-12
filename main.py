@@ -525,8 +525,8 @@ def handle_event(event):
 
         # ===== ОБРАБОТКА КНОПОК КОМАНД С ПРОВЕРКОЙ ПРАВ =====
         if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_back"]:
-            # Кнопка "Общие" доступна всем, остальные — только админам
-            if cmd != "help_general" and not is_admin(user_id, peer_id):
+            # ИСПРАВЛЕНО: Кнопки "Общие" и "Назад" доступны всем, остальные — только админам
+            if cmd not in ["help_general", "help_back"] and not is_admin(user_id, peer_id):
                 try:
                     VK.messages.sendMessageEventAnswer(
                         event_id=event_id, user_id=user_id, peer_id=peer_id,
