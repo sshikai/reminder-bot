@@ -284,18 +284,18 @@ def check_birthdays(peer):
     set_setting(peer, "last_bday_check_date", today_str)
 
 
-# ===== НОВАЯ СИСТЕМА КОМАНД С КНОПКАМИ =====
+# ===== СИСТЕМА КОМАНД С КНОПКАМИ =====
 def get_help_main_buttons():
     return {
         "inline": True,
         "buttons": [
             [
-                {"action": {"type": "callback", "label": "Общие", "payload": json.dumps({"cmd": "help_general"})}, "color": "positive"},
-                {"action": {"type": "callback", "label": "Админские", "payload": json.dumps({"cmd": "help_admin"})}, "color": "secondary"}
+                {"action": {"type": "callback", "label": "Общие", "payload": json.dumps({"cmd": "help_general"})}, "color": "primary"},
+                {"action": {"type": "callback", "label": "Админские", "payload": json.dumps({"cmd": "help_admin"})}, "color": "negative"}
             ],
             [
                 {"action": {"type": "callback", "label": "Напоминалка", "payload": json.dumps({"cmd": "help_remind"})}, "color": "primary"},
-                {"action": {"type": "callback", "label": "Владелец", "payload": json.dumps({"cmd": "help_owner"})}, "color": "primary"}
+                {"action": {"type": "callback", "label": "Владелец", "payload": json.dumps({"cmd": "help_owner"})}, "color": "negative"}
             ]
         ]
     }
@@ -360,7 +360,7 @@ HELP_OWNER_TEXT = (
     "11. Мд тишина — запретить писать всем, кроме админов.\n"
     "12. Мд тишина офф — разрешить писать всем."
 )
-# ===== КОНЕЦ НОВОЙ СИСТЕМЫ =====
+# ===== КОНЕЦ СИСТЕМЫ =====
 
 
 def handle_event(event):
@@ -523,11 +523,19 @@ def handle_event(event):
                 print("Event answer error:", e)
             return
 
-        # ===== ОБРАБОТКА КНОПОК КОМАНД =====
+        # ===== ОБРАБОТКА КНОПОК КОМАНД С ПРОВЕРКОЙ ПРАВ =====
         if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_back"]:
+            # Кнопка "Общие" доступна всем, остальные — только админам
+            if cmd != "help_general" and not is_admin(user_id, peer_id):
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "У вас нет прав⛔️"})
+                    )
+                except: pass
+                return
+            
             help_msg_key = f"help_msg_id_{peer_id}"
-            saved_msg_id_str = get_setting(peer_id, help_msg_key, "0")
-            saved_msg_id = int(saved_msg_id_str) if saved_msg_id_str.isdigit() else 0
             conversation_message_id = obj.get("conversation_message_id")
             
             if cmd == "help_back":
@@ -580,7 +588,7 @@ def handle_event(event):
             except Exception as e:
                 print("Help event answer error:", e)
             return
-        # ===== КОНЕЦ ОБРАБОТКИ КНОПОК =====
+        # ===== КОНЕЦ =====
     except Exception as e:
         print("event error:", e)
 
@@ -723,8 +731,6 @@ def handle_message(peer, sender, text, msg_obj):
 
     if cmd == "команды":
         help_msg_key = f"help_msg_id_{peer}"
-        # Сохраняем текущий message_id для последующего редактирования
-        # Но мы не знаем message_id до отправки, поэтому просто отправляем новое сообщение
         send_msg(peer, "📖 Команды MD BOT", keyboard=get_help_main_buttons())
 
     elif cmd == "админы":
