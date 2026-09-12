@@ -204,6 +204,7 @@ def parse_reply_attachments(reply_obj):
             if ph.get("owner_id") and ph.get("id"): parts.append(f"photo{ph['owner_id']}_{ph['id']}")
     return ",".join(parts)
 
+# ИСПРАВЛЕНО: sync_members теперь удаляет из базы тех, кого больше нет в чате
 def sync_members(peer):
     now = time.time()
     if peer in MEMBER_SYNC_CACHE and (now - MEMBER_SYNC_CACHE[peer]) < 300:
@@ -221,12 +222,12 @@ def sync_members(peer):
                 current_members.add(user_id)
         
         with DB_LOCK:
-            # Добавляем новых участников (как было раньше)
+            # Добавляем новых участников
             for user_id in current_members:
                 CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id, last_active, streak) VALUES(?,?,?,?)", 
                              (user_id, peer, today, 0))
             
-            # ИСПРАВЛЕНО: Удаляем из базы тех, кого больше нет в чате
+            # Удаляем из базы тех, кого больше нет в чате
             all_db_members = CONN.execute("SELECT user_id FROM members WHERE peer_id=?", (peer,)).fetchall()
             for row in all_db_members:
                 if row["user_id"] not in current_members:
@@ -491,14 +492,6 @@ def handle_message(peer, sender, text, msg_obj):
 
     action = msg_obj.get("action", {})
     if action.get("type") == "chat_invite_user":
-            # ИСПРАВЛЕНО: Обработка события кика/выхода из чата
-    if action.get("type") == "chat_kick_user":
-        user_id = action.get("member_id")
-        if user_id:
-            with DB_LOCK:
-                CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer))
-                CONN.commit()
-            print(f"User {user_id} kicked from peer {peer}, removed from DB")
         user_id = action.get("member_id")
         if not user_id: return
         
@@ -515,6 +508,16 @@ def handle_message(peer, sender, text, msg_obj):
         if get_setting(peer, "control_active") == "1":
             send_msg(peer, f"Добро пожаловать, {mention(user_id)}! 🎉\nПожалуйста, установи свой ник с помощью команды:\n`Мд ник <твой_ник>`")
         return
+
+    # ИСПРАВЛЕНО: Обработка события кика/выхода из чата вручную
+    if action.get("type") == "chat_kick_user":
+        user_id = action.get("member_id")
+        if user_id:
+            with DB_LOCK:
+                CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer))
+                CONN.commit()
+            print(f"User {user_id} kicked from peer {peer}, removed from DB")
+            return
 
     # ПРОВЕРКА РЕЖИМА ТИШИНЫ
     if get_setting(peer, "silence_mode", "0") == "1":
@@ -1060,7 +1063,6 @@ def handle_message(peer, sender, text, msg_obj):
                 send_msg(peer, "🛡 Защищенных участников нет.")
             return
         for t_id in targets:
-            # ИСПРАВЛЕНО: Используем INSERT OR IGNORE + UPDATE, чтобы не затирать ник и другие поля
             with DB_LOCK:
                 CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (t_id, peer))
                 CONN.execute("UPDATE members SET poll_protected=1 WHERE user_id=? AND peer_id=?", (t_id, peer))
@@ -1334,7 +1336,6 @@ def timer_loop():
                 if now_msk.hour == 23 and now_msk.minute == 0:
                     last_23_check = get_setting(peer, "last_23_check", "")
                     if last_23_check != today_str:
-                        # ИСПРАВЛЕНО: Исключаем из проверки всех админов, владельца и создателя
                         admins = set(get_extra_admins(peer))
                         admins.add(CREATOR_ID)
                         chat_owner = get_chat_owner(peer)
@@ -1347,7 +1348,6 @@ def timer_loop():
                             max_warns = int(get_setting(peer, "max_warns", "3") or "3")
                             default_days = int(get_setting(peer, "default_warn_days", "7") or "7")
                             expiry = time.time() + (default_days * 86400)
-                            # Фильтруем неактивных, исключая админов
                             inactive = [m["user_id"] for m in members if m["user_id"] not in voted and m["user_id"] not in admins]
                         if inactive:
                             lines = [f"⚠️ Данные игроки не проявили актива за день и получают по 1 предупреждению:\n"]
