@@ -284,7 +284,6 @@ def check_birthdays(peer):
     set_setting(peer, "last_bday_check_date", today_str)
 
 
-# ===== СИСТЕМА КОМАНД С КНОПКАМИ =====
 def get_help_main_buttons():
     return {
         "inline": True,
@@ -360,7 +359,6 @@ HELP_OWNER_TEXT = (
     "11. Мд тишина — запретить писать всем, кроме админов.\n"
     "12. Мд тишина офф — разрешить писать всем."
 )
-# ===== КОНЕЦ СИСТЕМЫ =====
 
 
 def handle_event(event):
@@ -523,9 +521,9 @@ def handle_event(event):
                 print("Event answer error:", e)
             return
 
-        # ===== ОБРАБОТКА КНОПОК КОМАНД С ПРОВЕРКОЙ ПРАВ =====
+        # ===== ОБРАБОТКА КНОПОК КОМАНД =====
         if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_back"]:
-            # ИСПРАВЛЕНО: Кнопки "Общие" и "Назад" доступны всем, остальные — только админам
+            # ИСПРАВЛЕНО: "Общие" и "Назад" доступны всем, остальные — только админам
             if cmd not in ["help_general", "help_back"] and not is_admin(user_id, peer_id):
                 try:
                     VK.messages.sendMessageEventAnswer(
@@ -535,7 +533,6 @@ def handle_event(event):
                 except: pass
                 return
             
-            help_msg_key = f"help_msg_id_{peer_id}"
             conversation_message_id = obj.get("conversation_message_id")
             
             if cmd == "help_back":
@@ -588,7 +585,6 @@ def handle_event(event):
             except Exception as e:
                 print("Help event answer error:", e)
             return
-        # ===== КОНЕЦ =====
     except Exception as e:
         print("event error:", e)
 
@@ -730,7 +726,6 @@ def handle_message(peer, sender, text, msg_obj):
     admin = is_admin(sender, peer)
 
     if cmd == "команды":
-        help_msg_key = f"help_msg_id_{peer}"
         send_msg(peer, "📖 Команды MD BOT", keyboard=get_help_main_buttons())
 
     elif cmd == "админы":
