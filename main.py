@@ -39,7 +39,7 @@ LEADER_BDAY_TEXT = (
 DEFAULT_BDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!"
 
 VALID_COMMANDS = [
-    "помощь", "админы", "участник", "ники", "ник", "парк", "прем", "чат",
+    "команды", "админы", "участник", "ники", "ник", "парк", "прем", "чат",
     "пред", "-пред", "лимит_предов", "кд_предов", "старт_контроль", "стоп_контроль",
     "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
@@ -246,7 +246,6 @@ def update_member_activity(peer, user_id):
             CONN.execute("INSERT INTO members(user_id, peer_id, last_active, streak) VALUES(?,?,?,?)", (user_id, peer, today, 1))
         CONN.commit()
 
-# ИСПРАВЛЕНО 3: Новые пороги для смайликов (каждые 5 дней, последний за 30)
 def get_streak_emoji(streak):
     if streak >= 30: return "👑"
     if streak >= 25: return "🤑"
@@ -283,6 +282,86 @@ def check_birthdays(peer):
                 CONN.execute("INSERT OR REPLACE INTO birthday_congratulated(user_id, peer_id, year, congratulated_at) VALUES(?,?,?,?)", (user_id, peer, current_year, int(time.time())))
                 CONN.commit()
     set_setting(peer, "last_bday_check_date", today_str)
+
+
+# ===== НОВАЯ СИСТЕМА КОМАНД С КНОПКАМИ =====
+def get_help_main_buttons():
+    return {
+        "inline": True,
+        "buttons": [
+            [
+                {"action": {"type": "callback", "label": "Общие", "payload": json.dumps({"cmd": "help_general"})}, "color": "positive"},
+                {"action": {"type": "callback", "label": "Админские", "payload": json.dumps({"cmd": "help_admin"})}, "color": "secondary"}
+            ],
+            [
+                {"action": {"type": "callback", "label": "Напоминалка", "payload": json.dumps({"cmd": "help_remind"})}, "color": "primary"},
+                {"action": {"type": "callback", "label": "Владелец", "payload": json.dumps({"cmd": "help_owner"})}, "color": "primary"}
+            ]
+        ]
+    }
+
+def get_help_back_button():
+    return {
+        "inline": True,
+        "buttons": [[{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back"})}, "color": "secondary"}]]
+    }
+
+HELP_GENERAL_TEXT = (
+    "👥 Общие:\n"
+    "1. Мд админы — список руководителей чата.\n"
+    "2. Мд участник — твоя статистика.\n"
+    "3. Мд ник — установить ник.\n"
+    "4. Мд парк — информация об автопарке.\n"
+    "5. Мд прем — информация о премиях и зарплатах.\n"
+    "6. Мд чат — ссылка на чат для отчетов."
+)
+
+HELP_ADMIN_TEXT = (
+    "🛡 Админские:\n"
+    "1. Мд ник [@юз] <имя> — установить ник другому участнику.\n"
+    "2. Мд номер чата — узнать ID текущего чата и создателя.\n"
+    "3. Мд пред [@юз] — выдать пред.\n"
+    "4. Мд пред <дней> [@юз] — выдать пред на N дней.\n"
+    "5. Мд пред навсегда [@юз] — выдать вечный пред.\n"
+    "6. Мд -пред [@юз] — снять предупреждение.\n"
+    "7. Мд бан [@юз] — забанить участника.\n"
+    "8. Мд голоса — посмотреть, кто проголосовал сегодня.\n"
+    "9. Мд голоса вчера — посмотреть голоса за вчера.\n"
+    "10. Мд защита [@юз] — добавить защиту от опросов.\n"
+    "11. Мд -защита [@юз] — убрать защиту от опросов.\n"
+    "12. Мд ники - список ников и предупреждений."
+)
+
+HELP_REMIND_TEXT = (
+    "🔔 Напоминалка:\n"
+    "1. Мд создать <название> <минуты> [количество] — создать напоминание (ответом на сообщение).\n"
+    "2. Мд список — список всех напоминаний.\n"
+    "3. Мд удалить <название или номер> — удалить напоминание.\n"
+    "4. Мд редактировать <название или номер> <минуты> [кол-во] — изменить интервал.\n"
+    "5. Мд отключить — отключить все напоминания.\n"
+    "6. Мд отключить <название или номер> — отключить одно напоминание.\n"
+    "7. Мд включить — включить все напоминания.\n"
+    "8. Мд включить <название или номер> — включить одно напоминание.\n"
+    "9. Мд развернуть <название или номер> — показать текст напоминания."
+)
+
+HELP_OWNER_TEXT = (
+    "👑 Команды владельца:\n"
+    "1. Мд старт контроль — включить систему опросов и контроля.\n"
+    "2. Мд стоп контроль — выключить систему опросов.\n"
+    "3. Мд время опросов <ЧЧ:ММ> <ЧЧ:ММ> — изменить время опросов.\n"
+    "4. Мд адмчат <id> — установить чат для отчетов о банах.\n"
+    "5. Мд адмчат удалить — отвязать чат для отчетов о банах.\n"
+    "6. Мд лимит предов <число> — макс. количество предов до кика (по умолч. 3).\n"
+    "7. Мд кд предов <дней> — изменить срок дефолтного преда.\n"
+    "8. Мд текст др — установить текст поздравления с ДР (ответом на сообщение).\n"
+    "9. Мд назначить @игрок — выдать права админа.\n"
+    "10. Мд снять @игрок — снять права админа.\n"
+    "11. Мд тишина — запретить писать всем, кроме админов.\n"
+    "12. Мд тишина офф — разрешить писать всем."
+)
+# ===== КОНЕЦ НОВОЙ СИСТЕМЫ =====
+
 
 def handle_event(event):
     try:
@@ -442,6 +521,66 @@ def handle_event(event):
                 )
             except Exception as e:
                 print("Event answer error:", e)
+            return
+
+        # ===== ОБРАБОТКА КНОПОК КОМАНД =====
+        if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_back"]:
+            help_msg_key = f"help_msg_id_{peer_id}"
+            saved_msg_id_str = get_setting(peer_id, help_msg_key, "0")
+            saved_msg_id = int(saved_msg_id_str) if saved_msg_id_str.isdigit() else 0
+            conversation_message_id = obj.get("conversation_message_id")
+            
+            if cmd == "help_back":
+                message_text = "📖 Команды MD BOT"
+                keyboard_json = json.dumps(get_help_main_buttons())
+            elif cmd == "help_general":
+                message_text = HELP_GENERAL_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_admin":
+                message_text = HELP_ADMIN_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_remind":
+                message_text = HELP_REMIND_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_owner":
+                message_text = HELP_OWNER_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            else:
+                return
+            
+            if conversation_message_id:
+                try:
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=conversation_message_id,
+                        message=message_text,
+                        keyboard=keyboard_json
+                    )
+                except Exception as e:
+                    print(f"Help edit error: {e}")
+                    VK.messages.send(
+                        peer_id=peer_id, 
+                        message=message_text, 
+                        keyboard=keyboard_json, 
+                        random_id=random.getrandbits(31)
+                    )
+            else:
+                VK.messages.send(
+                    peer_id=peer_id, 
+                    message=message_text, 
+                    keyboard=keyboard_json, 
+                    random_id=random.getrandbits(31)
+                )
+            
+            try:
+                VK.messages.sendMessageEventAnswer(
+                    event_id=event_id, user_id=user_id, peer_id=peer_id,
+                    event_data=json.dumps({"type": "show_snackbar", "text": "✅ Выполнено"})
+                )
+            except Exception as e:
+                print("Help event answer error:", e)
+            return
+        # ===== КОНЕЦ ОБРАБОТКИ КНОПОК =====
     except Exception as e:
         print("event error:", e)
 
@@ -504,7 +643,6 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"Добро пожаловать, {mention(user_id)}! 🎉\nПожалуйста, установи свой ник с помощью команды:\n`Мд ник <твой_ник>`")
         return
 
-    # Обработка события кика/выхода из чата вручную
     if action.get("type") == "chat_kick_user":
         user_id = action.get("member_id")
         if user_id:
@@ -517,7 +655,6 @@ def handle_message(peer, sender, text, msg_obj):
                 CONN.commit()
             print(f"User {user_id} kicked from peer {peer}, removed from DB")
             
-            # ИСПРАВЛЕНО 2: Убрано слово "вручную" - используется тот же текст, что и для обычного бана
             admin_chat_raw = get_setting(peer, "admin_report_chat", "")
             admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
             if len(admin_chat_clean) >= 9:
@@ -558,7 +695,7 @@ def handle_message(peer, sender, text, msg_obj):
 
     parts = first[3:].strip().split()
     if not parts:
-        send_msg(peer, "Меня кто то звал?🧐 «Мд помощь» список команд.")
+        send_msg(peer, "Меня кто то звал?🧐 «Мд команды» список команд.")
         return
 
     found_cmd = None
@@ -578,61 +715,17 @@ def handle_message(peer, sender, text, msg_obj):
     args = found_args
 
     if cmd not in VALID_COMMANDS:
-        send_msg(peer, "Меня кто то звал?🧐 «Мд помощь» список команд.")
+        send_msg(peer, "Меня кто то звал?🧐 «Мд команды» список команд.")
         return
 
     owner = is_owner(sender, peer)
     admin = is_admin(sender, peer)
 
-    if cmd == "помощь":
-        help_text = (
-            "📖 Команды MD BOT\n\n"
-            "👥 Для всех участников:\n"
-            "`Мд помощь` — эта справка\n"
-            "`Мд админы` — список руководителей чата\n"
-            "`Мд участник` [@юз] — твоя статистика (админ может смотреть чужую)\n"
-            "`Мд ники` — список ников и предупреждений\n"
-            "`Мд парк` — информация об автопарке\n"
-            "`Мд прем` — информация о премиях и зарплатах\n"
-            "`Мд чат` — ссылка на чат для отчетов\n\n"
-            "🛡 Для администраторов:\n"
-            "`Мд ник` <имя> — установить ник участнику (или через ответ)\n"
-            "`Мд ник` @юзер <имя> — установить ник другому участнику\n"
-            "`Мд номер чата` — узнать ID текущего чата и создателя\n"
-            "`Мд пред` [@юз] — выдать пред (по умолчанию на 7 дн.)\n"
-            "`Мд пред` <дней> [@юз] — выдать пред на N дней\n"
-            "`Мд пред` навсегда [@юз] — выдать вечный пред\n"
-            "`Мд -пред` [@юз] — снять предупреждение\n"
-            "`Мд бан` [@юз] — забанить участника (отчет уйдет в адм-чат)\n"
-            "`Мд голоса` — посмотреть, кто проголосовал сегодня\n"
-            "`Мд голоса вчера` — посмотреть голоса за вчера\n"
-            "`Мд защита` [@юз] — добавить защиту от опросов\n"
-            "`Мд -защита` [@юз] — убрать защиту от опросов\n\n"
-            "🔔 Напоминания (для администраторов):\n"
-            "`Мд создать` <название> <минуты> [количество] — создать напоминание (ответом на сообщение)\n"
-            "`Мд список` — список всех напоминаний с номерами и статусами\n"
-            "`Мд удалить` <название или номер> — удалить напоминание\n"
-            "`Мд редактировать` <название или номер> <минуты> [кол-во] — изменить интервал\n"
-            "`Мд отключить` — отключить все напоминания\n"
-            "`Мд отключить` <название или номер> — отключить одно напоминание\n"
-            "`Мд включить` — включить все напоминания\n"
-            "`Мд включить` <название или номер> — включить одно напоминание\n"
-            "`Мд развернуть` <название или номер> — показать текст напоминания\n\n"
-            "👑 Для владельца/создателя:\n"
-            "`Мд старт контроль` — включить систему опросов и контроля\n"
-            "`Мд стоп контроль` — выключить систему опросов\n"
-            "`Мд время опросов` <ЧЧ:ММ> <ЧЧ:ММ> — время опросов (напр. 10:20 23:20)\n"
-            "`Мд адмчат` <id> — установить чат для отчетов о банах\n"
-            "`Мд адмчат удалить` — отключить отправку отчетов\n"
-            "`Мд лимит предов` <число> — макс. количество предов до кика (по умолч. 3)\n"
-            "`Мд кд предов` <дней> — изменить срок дефолтного преда\n"
-            "`Мд текст др` — установить текст поздравления с ДР\n"
-            "`Мд назначить` @игрок — выдать права админа\n"
-            "`Мд снять` @игрок — снять права админа\n"
-            "`Мд тишина` — запретить писать всем, кроме админов\n"
-            "`Мд тишина офф` — разрешить писать всем"
-        )
-        send_msg(peer, help_text)
+    if cmd == "команды":
+        help_msg_key = f"help_msg_id_{peer}"
+        # Сохраняем текущий message_id для последующего редактирования
+        # Но мы не знаем message_id до отправки, поэтому просто отправляем новое сообщение
+        send_msg(peer, "📖 Команды MD BOT", keyboard=get_help_main_buttons())
 
     elif cmd == "админы":
         chat_owner_id = get_chat_owner(peer)
@@ -892,7 +985,6 @@ def handle_message(peer, sender, text, msg_obj):
                     admin_chat_raw = get_setting(peer, "admin_report_chat", "")
                     admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
                     
-                    # ИСПРАВЛЕНО 1: Если адм-чат не настроен - просто не отправляем отчет (без предупреждения)
                     if len(admin_chat_clean) >= 9:
                         report_peer = int(admin_chat_clean)
                         chat_name = "Неизвестная беседа"
@@ -972,7 +1064,6 @@ def handle_message(peer, sender, text, msg_obj):
                     CONN.execute("UPDATE members SET warnings=0, warn_durations='', warn_expiry=0 WHERE user_id=? AND peer_id=?", (t_id, peer))
                     CONN.commit()
                 
-                # ИСПРАВЛЕНО 1: Если адм-чат не настроен - просто не отправляем отчет (без предупреждения)
                 admin_chat_raw = get_setting(peer, "admin_report_chat", "")
                 admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
                 
