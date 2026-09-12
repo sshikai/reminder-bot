@@ -22,8 +22,6 @@ DB_PATH = os.path.join(DATA_DIR, "bot.db")
 CONN = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
 CONN.row_factory = sqlite3.Row
 
-# ИСПРАВЛЕНО: Заменено на RLock (Reentrant Lock), чтобы избежать deadlock 
-# при вызове get_setting() внутри блока with DB_LOCK:
 DB_LOCK = threading.RLock()
 
 VK = None
@@ -248,6 +246,7 @@ def update_member_activity(peer, user_id):
             CONN.execute("INSERT INTO members(user_id, peer_id, last_active, streak) VALUES(?,?,?,?)", (user_id, peer, today, 1))
         CONN.commit()
 
+# ИСПРАВЛЕНО 3: Новые пороги для смайликов (каждые 5 дней, последний за 30)
 def get_streak_emoji(streak):
     if streak >= 30: return "👑"
     if streak >= 25: return "🤑"
@@ -505,22 +504,20 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"Добро пожаловать, {mention(user_id)}! 🎉\nПожалуйста, установи свой ник с помощью команды:\n`Мд ник <твой_ник>`")
         return
 
-    # Обработка события кика/выхода из чата вручную + отправка отчёта в адм-чат
+    # Обработка события кика/выхода из чата вручную
     if action.get("type") == "chat_kick_user":
         user_id = action.get("member_id")
         if user_id:
-            # Получаем ник до удаления из БД
             with DB_LOCK:
                 nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
             nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(user_id)
             
-            # Удаляем из БД
             with DB_LOCK:
                 CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer))
                 CONN.commit()
             print(f"User {user_id} kicked from peer {peer}, removed from DB")
             
-            # НОВОЕ: Отправляем отчёт в адм-чат, если он настроен
+            # ИСПРАВЛЕНО 2: Убрано слово "вручную" - используется тот же текст, что и для обычного бана
             admin_chat_raw = get_setting(peer, "admin_report_chat", "")
             admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
             if len(admin_chat_clean) >= 9:
@@ -534,7 +531,7 @@ def handle_message(peer, sender, text, msg_obj):
                 
                 report_text = (
                     f"🚨 **ПРИВЕТСТВУЮ, АДМИНИСТРАТОРЫ!** 😀\n\n"
-                    f"Игрок {mention(user_id)} ({nick}) был вручную исключен из беседы '{chat_name}'.\n"
+                    f"Игрок {mention(user_id)} ({nick}) был исключен из беседы '{chat_name}'.\n"
                     f"Прошу принять меры и исключить его из семьи в игре. 👊"
                 )
                 try:
@@ -543,7 +540,6 @@ def handle_message(peer, sender, text, msg_obj):
                     print(f"Error sending kick report to {report_peer}: {e}")
             return
 
-    # ПРОВЕРКА РЕЖИМА ТИШИНЫ
     if get_setting(peer, "silence_mode", "0") == "1":
         if not is_admin(sender, peer):
             try:
@@ -595,12 +591,12 @@ def handle_message(peer, sender, text, msg_obj):
             "`Мд помощь` — эта справка\n"
             "`Мд админы` — список руководителей чата\n"
             "`Мд участник` [@юз] — твоя статистика (админ может смотреть чужую)\n"
+            "`Мд ники` — список ников и предупреждений\n"
             "`Мд парк` — информация об автопарке\n"
             "`Мд прем` — информация о премиях и зарплатах\n"
             "`Мд чат` — ссылка на чат для отчетов\n\n"
             "🛡 Для администраторов:\n"
             "`Мд ник` <имя> — установить ник участнику (или через ответ)\n"
-            "`Мд ники` — список ников и предупреждений\n"
             "`Мд ник` @юзер <имя> — установить ник другому участнику\n"
             "`Мд номер чата` — узнать ID текущего чата и создателя\n"
             "`Мд пред` [@юз] — выдать пред (по умолчанию на 7 дн.)\n"
@@ -896,6 +892,7 @@ def handle_message(peer, sender, text, msg_obj):
                     admin_chat_raw = get_setting(peer, "admin_report_chat", "")
                     admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
                     
+                    # ИСПРАВЛЕНО 1: Если адм-чат не настроен - просто не отправляем отчет (без предупреждения)
                     if len(admin_chat_clean) >= 9:
                         report_peer = int(admin_chat_clean)
                         chat_name = "Неизвестная беседа"
@@ -913,13 +910,8 @@ def handle_message(peer, sender, text, msg_obj):
                         try:
                             send_msg(report_peer, report_text)
                             print(f"Отчет о кике успешно отправлен в чат {report_peer}")
-                            send_msg(peer, f"✅ Игрок {mention(t_id)} исключен. Отчет отправлен в адм-чат.")
                         except Exception as e:
                             print(f"Ошибка отправки отчета в {report_peer}: {e}")
-                            send_msg(peer, f"⚠️ Игрок {mention(t_id)} исключен, но **не удалось** отправить отчет в адм-чат ({report_peer}). Ошибка: {e}")
-                    else:
-                        print(f"Адм-чат не настроен или некорректен: '{admin_chat_raw}'")
-                        send_msg(peer, f"⚠️ Игрок {mention(t_id)} исключен, но **адм-чат не настроен** или ID некорректен ('{admin_chat_raw}'). Используйте `Мд адмчат <id>`")
                 except Exception as e:
                     print("Kick error:", e)
                     send_msg(peer, f"❌ Не удалось исключить {mention(t_id)}: {e}")
@@ -980,6 +972,7 @@ def handle_message(peer, sender, text, msg_obj):
                     CONN.execute("UPDATE members SET warnings=0, warn_durations='', warn_expiry=0 WHERE user_id=? AND peer_id=?", (t_id, peer))
                     CONN.commit()
                 
+                # ИСПРАВЛЕНО 1: Если адм-чат не настроен - просто не отправляем отчет (без предупреждения)
                 admin_chat_raw = get_setting(peer, "admin_report_chat", "")
                 admin_chat_clean = "".join(filter(str.isdigit, str(admin_chat_raw)))
                 
@@ -997,9 +990,6 @@ def handle_message(peer, sender, text, msg_obj):
                     except Exception as e:
                         print(f"Ошибка отправки отчета в {report_peer}: {e}")
                         send_msg(peer, f"⚠️ Игрок {mention(t_id)} забанен, но **не удалось** отправить отчет в адм-чат ({report_peer}). Ошибка: {e}")
-                else:
-                    print(f"Адм-чат не настроен или некорректен: '{admin_chat_raw}'")
-                    send_msg(peer, f"⚠️ Игрок {mention(t_id)} забанен, но **адм-чат не настроен** или ID некорректен ('{admin_chat_raw}'). Используйте `Мд адмчат <id>`")
             except Exception as e:
                 send_msg(peer, f"❌ Не удалось забанить {mention(t_id)}: {e}")
 
@@ -1008,7 +998,6 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, "⛔ Только владелец или создатель может менять чат для отчетов.")
             return
         
-        # НОВОЕ: обработка удаления привязки адм-чата
         if args and args[0].lower() == "удалить":
             with DB_LOCK:
                 CONN.execute("DELETE FROM settings WHERE peer_id=? AND key='admin_report_chat'", (peer,))
