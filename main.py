@@ -45,7 +45,7 @@ VALID_COMMANDS = [
     "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
     "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса",
-    "/onlinebr", "onlinebr"
+    "бр"
 ]
 
 # ===== BLACK RUSSIA API =====
@@ -461,7 +461,7 @@ HELP_OWNER_TEXT = (
 # НОВЫЙ РАЗДЕЛ: BLACK RUSSIA (доступен всем)
 HELP_BR_TEXT = (
     "🎮 BLACK RUSSIA:\n"
-    "1. Мд onlinebr — список всех серверов BlackRussia и их онлайн."
+    "1. Мд бр — список всех серверов BlackRussia и их онлайн."
 )
 
 
@@ -1535,8 +1535,8 @@ def handle_message(peer, sender, text, msg_obj):
             check_m = int(get_setting(peer, "check_minute", "0"))
             send_msg(peer, f"📌 Текущее время проверки опроса: {check_h:02d}:{check_m:02d}\n\nИспользуйте: `Мд проверка опроса ЧЧ:ММ`")
 
-    # НОВАЯ КОМАНДА: Мд /onlinebr (доступна всем)
-    elif cmd in ["/onlinebr", "onlinebr"]:
+       # НОВАЯ КОМАНДА: Мд бр (доступна всем)
+    elif cmd == "бр":
         try:
             page = int(args[0]) if args and args[0].isdigit() else 1
             text, keyboard_json, total_pages = build_br_page(page)
