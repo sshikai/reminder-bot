@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import json
 import datetime
+import urllib.request
 import vk_api
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 
@@ -43,8 +44,83 @@ VALID_COMMANDS = [
     "пред", "-пред", "лимит_предов", "кд_предов", "старт_контроль", "стоп_контроль",
     "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
-    "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса"
+    "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса",
+    "/onlinebr", "onlinebr"
 ]
+
+# ===== BLACK RUSSIA API =====
+BR_API_URL = "https://api.blackrussia.online/servers.json"
+BR_CACHE = {"time": 0.0, "data": None}
+BR_PER_PAGE = 20
+
+BR_COLOR_EMOJI = {
+    "RED": "🟥", "GREEN": "🟩", "BLUE": "🟦", "YELLOW": "🟨",
+    "ORANGE": "🟧", "PURPLE": "🟪", "VIOLET": "🟪", "BLACK": "⬛",
+    "WHITE": "⬜", "GRAY": "⬜", "GREY": "⬜", "PINK": "🌸",
+    "CYAN": "🟦", "TURQUOISE": "🟦", "LIME": "🟩",
+}
+
+def fetch_br_servers():
+    now = time.time()
+    if BR_CACHE["data"] is not None and (now - BR_CACHE["time"]) < 300:
+        return BR_CACHE["data"]
+    try:
+        req = urllib.request.Request(BR_API_URL, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if isinstance(data, list):
+            BR_CACHE["time"] = now
+            BR_CACHE["data"] = data
+            return data
+        return BR_CACHE["data"]
+    except Exception as e:
+        print("BR API error:", e)
+        return BR_CACHE["data"]
+
+def build_br_page(page):
+    servers = fetch_br_servers()
+    if not servers:
+        return None, None, 1
+    total = len(servers)
+    total_pages = max(1, (total + BR_PER_PAGE - 1) // BR_PER_PAGE)
+    try:
+        page = int(page)
+    except Exception:
+        page = 1
+    page = max(1, min(page, total_pages))
+    
+    total_online = 0
+    total_max = 0
+    for s in servers:
+        try: total_online += int(s.get("online", 0) or 0)
+        except Exception: pass
+        try: total_max += int(s.get("maxonline", 0) or 0)
+        except Exception: pass
+    
+    chunk = servers[(page - 1) * BR_PER_PAGE: page * BR_PER_PAGE]
+    lines = [
+        f"📱 Общий онлайн проекта BlackRussia: {total_online}",
+        f"🏆 Общий рекордный онлайн за день: {total_max}\n",
+    ]
+    start_idx = (page - 1) * BR_PER_PAGE
+    for i, s in enumerate(chunk, start_idx + 1):
+        fname = str(s.get("firstname", "") or s.get("name", "")).strip()
+        emoji = BR_COLOR_EMOJI.get(fname.upper(), "🎮")
+        try: online = int(s.get("online", 0) or 0)
+        except Exception: online = 0
+        try: maxonline = int(s.get("maxonline", 0) or 0)
+        except Exception: maxonline = 0
+        lines.append(f"{i}. {emoji}{fname} - {online} / {maxonline}.")
+    
+    buttons = []
+    if page > 1:
+        buttons.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "br_prev", "page": page - 1})}, "color": "secondary"})
+    buttons.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
+    if page < total_pages:
+        buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "br_next", "page": page + 1})}, "color": "secondary"})
+    keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
+    return "\n".join(lines), keyboard_json, total_pages
+# ===== КОНЕЦ BLACK RUSSIA =====
 
 def init_db():
     with DB_LOCK:
@@ -232,7 +308,6 @@ def sync_members(peer):
     except Exception as e:
         print("sync_members error:", e)
 
-# НОВАЯ ФУНКЦИЯ: Синхронизация всех активных чатов
 def sync_all_peers(peers_list):
     for peer in peers_list:
         sync_members(peer)
@@ -269,7 +344,6 @@ def check_birthdays(peer):
     if last_check == today_str:
         return
     
-    # ИСПРАВЛЕНО: Сначала синхронизируем участников, чтобы исключить тех, кого нет в чате
     sync_members(peer)
     
     with DB_LOCK:
@@ -277,11 +351,10 @@ def check_birthdays(peer):
     for r in rows:
         user_id, bdate = r["user_id"], r["bdate"]
         
-        # ИСПРАВЛЕНО: Проверяем, есть ли человек в чате (в таблице members)
         with DB_LOCK:
             member_row = CONN.execute("SELECT 1 FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
         if not member_row:
-            continue  # Пропускаем, если человека нет в чате
+            continue
         
         parts = bdate.split(".")
         if len(parts) >= 2 and int(parts[0]) == now_msk.day and int(parts[1]) == now_msk.month:
@@ -312,6 +385,9 @@ def get_help_main_buttons():
             [
                 {"action": {"type": "callback", "label": "Напоминалка", "payload": json.dumps({"cmd": "help_remind"})}, "color": "primary"},
                 {"action": {"type": "callback", "label": "Владелец", "payload": json.dumps({"cmd": "help_owner"})}, "color": "negative"}
+            ],
+            [
+                {"action": {"type": "callback", "label": "BLACK RUSSIA", "payload": json.dumps({"cmd": "help_br"})}, "color": "positive"}
             ]
         ]
     }
@@ -332,7 +408,6 @@ HELP_GENERAL_TEXT = (
     "6. Мд чат — ссылка на чат для отчетов."
 )
 
-# ИСПРАВЛЕНО: Добавлены команды тишины в раздел Админские
 HELP_ADMIN_TEXT = (
     "🛡 Админские:\n"
     "1. Мд ник [@юз] <имя> — установить ник другому участнику.\n"
@@ -364,7 +439,6 @@ HELP_REMIND_TEXT = (
     "9. Мд развернуть <название или номер> — показать текст напоминания."
 )
 
-# ИСПРАВЛЕНО: Убраны команды тишины из раздела Владелец (перенесены в Админские)
 HELP_OWNER_TEXT = (
     "👑 Команды владельца:\n"
     "1. Мд старт контроль — включить систему опросов и контроля.\n"
@@ -378,6 +452,13 @@ HELP_OWNER_TEXT = (
     "9. Мд назначить @игрок — выдать права админа.\n"
     "10. Мд снять @игрок — снять права админа.\n"
     "11. Мд проверка опроса <ЧЧ:ММ> — изменить время проверки опроса."
+)
+
+# НОВЫЙ РАЗДЕЛ: BLACK RUSSIA (доступен всем)
+HELP_BR_TEXT = (
+    "🎮 BLACK RUSSIA:\n"
+    "1. Мд /onlinebr — список всех серверов BlackRussia и их онлайн (20 серверов на странице).\n"
+    "   Данные берутся автоматически с api.blackrussia.online и обновляются раз в 5 минут."
 )
 
 
@@ -541,8 +622,57 @@ def handle_event(event):
                 print("Event answer error:", e)
             return
 
-        if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_back"]:
-            if cmd not in ["help_general", "help_back"] and not is_admin(user_id, peer_id):
+        # НОВОЕ: Пагинация списка серверов BlackRussia (доступна всем)
+        if cmd in ["br_prev", "br_next"]:
+            page = int(payload.get("page", 1))
+            text, keyboard_json, total_pages = build_br_page(page)
+            if text is None:
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "❌ Не удалось получить данные"})
+                    )
+                except: pass
+                return
+            
+            conversation_message_id = obj.get("conversation_message_id")
+            
+            if conversation_message_id:
+                try:
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=conversation_message_id,
+                        message=text,
+                        keyboard=keyboard_json
+                    )
+                except Exception as e:
+                    print(f"BR edit error: {e}")
+                    VK.messages.send(
+                        peer_id=peer_id, 
+                        message=text, 
+                        keyboard=keyboard_json, 
+                        random_id=random.getrandbits(31)
+                    )
+            else:
+                VK.messages.send(
+                    peer_id=peer_id, 
+                    message=text, 
+                    keyboard=keyboard_json, 
+                    random_id=random.getrandbits(31)
+                )
+            
+            try:
+                VK.messages.sendMessageEventAnswer(
+                    event_id=event_id, user_id=user_id, peer_id=peer_id,
+                    event_data=json.dumps({"type": "show_snackbar", "text": f"📄 Страница {page}"})
+                )
+            except Exception as e:
+                print("BR event answer error:", e)
+            return
+
+        if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_br", "help_back"]:
+            # help_br доступен всем участникам (как и help_general / help_back)
+            if cmd not in ["help_general", "help_back", "help_br"] and not is_admin(user_id, peer_id):
                 try:
                     VK.messages.sendMessageEventAnswer(
                         event_id=event_id, user_id=user_id, peer_id=peer_id,
@@ -567,6 +697,9 @@ def handle_event(event):
                 keyboard_json = json.dumps(get_help_back_button())
             elif cmd == "help_owner":
                 message_text = HELP_OWNER_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_br":
+                message_text = HELP_BR_TEXT
                 keyboard_json = json.dumps(get_help_back_button())
             else:
                 return
@@ -864,7 +997,6 @@ def handle_message(peer, sender, text, msg_obj):
                 return
             
             new_nick = " ".join(nick_args)
-            # ИСПРАВЛЕНО: Используем INSERT OR IGNORE + UPDATE, чтобы не сбрасывать серию и другие поля
             with DB_LOCK:
                 CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (target_id, peer))
                 CONN.execute("UPDATE members SET nickname=? WHERE user_id=? AND peer_id=?", (new_nick, target_id, peer))
@@ -872,7 +1004,6 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, f"✅ Ник {mention(target_id)} установлен: **{new_nick}**")
         else:
             new_nick = " ".join(args)
-            # ИСПРАВЛЕНО: Используем INSERT OR IGNORE + UPDATE, чтобы не сбрасывать серию и другие поля
             with DB_LOCK:
                 CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (sender, peer))
                 CONN.execute("UPDATE members SET nickname=? WHERE user_id=? AND peer_id=?", (new_nick, sender, peer))
@@ -1370,7 +1501,6 @@ def handle_message(peer, sender, text, msg_obj):
         if removed: send_msg(peer, f"✅ Сняты права: {', '.join(mention(x) for x in removed)}")
         else: send_msg(peer, "ℹ️ У них нет прав админа.")
 
-    # ИСПРАВЛЕНО: Тишина теперь доступна админам (было только владельцу)
     elif cmd == "тишина":
         if not admin: return send_msg(peer, "⛔ Только администраторы.")
         set_setting(peer, "silence_mode", "1")
@@ -1401,6 +1531,24 @@ def handle_message(peer, sender, text, msg_obj):
             check_h = int(get_setting(peer, "check_hour", "23"))
             check_m = int(get_setting(peer, "check_minute", "0"))
             send_msg(peer, f"📌 Текущее время проверки опроса: {check_h:02d}:{check_m:02d}\n\nИспользуйте: `Мд проверка опроса ЧЧ:ММ`")
+
+    # НОВАЯ КОМАНДА: Мд /onlinebr (доступна всем)
+    elif cmd in ["/onlinebr", "onlinebr"]:
+        try:
+            page = int(args[0]) if args and args[0].isdigit() else 1
+            text, keyboard_json, total_pages = build_br_page(page)
+            if text is None:
+                send_msg(peer, "❌ Не удалось получить данные о серверах BlackRussia. Попробуйте позже.")
+                return
+            VK.messages.send(
+                peer_id=peer, 
+                message=text, 
+                keyboard=keyboard_json, 
+                random_id=random.getrandbits(31)
+            )
+        except Exception as e:
+            print("onlinebr error:", e)
+            send_msg(peer, f"❌ Ошибка при выполнении команды: {e}")
 
 
 def timer_loop():
@@ -1457,8 +1605,6 @@ def timer_loop():
                 for p in bday_peers:
                     check_birthdays(p["peer_id"])
             
-            # ИСПРАВЛЕНО: Периодическая синхронизация участников каждый час (в 0 минут)
-            # Это удаляет из базы тех, кого исключили из чата вручную
             if now_msk.minute == 0:
                 peers_to_sync = list(set([p["peer_id"] for p in control_peers] + [p["peer_id"] for p in bday_peers]))
                 threading.Thread(target=sync_all_peers, args=(peers_to_sync,), daemon=True).start()
