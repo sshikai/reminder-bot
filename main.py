@@ -684,7 +684,7 @@ def handle_event(event):
             # help_general, help_polls, help_br, help_back доступны всем
             # help_admin, help_remind, help_owner — только админам
                         if cmd not in ["help_general", "help_back", "help_br"] and not is_admin(user_id, peer_id):
-                try:
+            try:
                     VK.messages.sendMessageEventAnswer(
                         event_id=event_id, user_id=user_id, peer_id=peer_id,
                         event_data=json.dumps({"type": "show_snackbar", "text": "У вас нет прав⛔️"})
