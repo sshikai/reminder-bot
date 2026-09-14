@@ -461,7 +461,7 @@ HELP_OWNER_TEXT = (
 # НОВЫЙ РАЗДЕЛ: BLACK RUSSIA (доступен всем)
 HELP_BR_TEXT = (
     "🎮 BLACK RUSSIA:\n"
-    "1. Мд onlinebr — список всех серверов BlackRussia и их онлайн (20 серверов на странице)."
+    "1. Мд onlinebr — список всех серверов BlackRussia и их онлайн."
 )
 
 
