@@ -58,7 +58,6 @@ BR_COLOR_EMOJI = {
     "ORANGE": "🟧", "PURPLE": "🟪", "VIOLET": "🟪", "BLACK": "⬛",
     "WHITE": "⬜", "PINK": "🌸",
     "CYAN": "🟦", "TURQUOISE": "🟦", "LIME": "🟩",
-    # Кастомные стикеры для серверов
     "CHERRY": "🍒", "INDIGO": "🦋", "MAGENTA": "🎀", "CRIMSON": "🌺",
     "GOLD": "⭐️", "AZURE": "🧿", "PLATINUM": "💍", "AQUA": "🐟",
     "GRAY": "🐰", "GREY": "🐰", "ICE": "🧊",
@@ -391,6 +390,7 @@ def get_help_main_buttons():
                 {"action": {"type": "callback", "label": "Владелец", "payload": json.dumps({"cmd": "help_owner"})}, "color": "negative"}
             ],
             [
+                {"action": {"type": "callback", "label": "Опросы", "payload": json.dumps({"cmd": "help_polls"})}, "color": "primary"},
                 {"action": {"type": "callback", "label": "BLACK RUSSIA", "payload": json.dumps({"cmd": "help_br"})}, "color": "positive"}
             ]
         ]
@@ -412,6 +412,7 @@ HELP_GENERAL_TEXT = (
     "6. Мд чат — ссылка на чат для отчетов."
 )
 
+# УБРАНЫ команды опросов (голоса, защита) - перенесены в раздел "Опросы"
 HELP_ADMIN_TEXT = (
     "🛡 Админские:\n"
     "1. Мд ник [@юз] <имя> — установить ник другому участнику.\n"
@@ -421,13 +422,9 @@ HELP_ADMIN_TEXT = (
     "5. Мд пред навсегда [@юз] — выдать вечный пред.\n"
     "6. Мд -пред [@юз] — снять предупреждение.\n"
     "7. Мд бан [@юз] — забанить участника.\n"
-    "8. Мд голоса — посмотреть, кто проголосовал сегодня.\n"
-    "9. Мд голоса вчера — посмотреть голоса за вчера.\n"
-    "10. Мд защита [@юз] — добавить защиту от опросов.\n"
-    "11. Мд -защита [@юз] — убрать защиту от опросов.\n"
-    "12. Мд ники - список ников и предупреждений.\n"
-    "13. Мд тишина — запретить писать всем, кроме админов.\n"
-    "14. Мд тишина офф — разрешить писать всем."
+    "8. Мд ники — список ников и предупреждений.\n"
+    "9. Мд тишина — запретить писать всем, кроме админов.\n"
+    "10. Мд тишина офф — разрешить писать всем."
 )
 
 HELP_REMIND_TEXT = (
@@ -443,22 +440,33 @@ HELP_REMIND_TEXT = (
     "9. Мд развернуть <название или номер> — показать текст напоминания."
 )
 
+# УБРАНЫ команды опросов (старт/стоп контроль, время опросов, проверка опроса) - перенесены в раздел "Опросы"
 HELP_OWNER_TEXT = (
     "👑 Команды владельца:\n"
+    "1. Мд адмчат <id> — установить чат для отчетов о банах.\n"
+    "2. Мд адмчат удалить — отвязать чат для отчетов о банах.\n"
+    "3. Мд лимит предов <число> — макс. количество предов до кика (по умолч. 3).\n"
+    "4. Мд кд предов <дней> — изменить срок дефолтного преда.\n"
+    "5. Мд текст др — установить текст поздравления с ДР (ответом на сообщение).\n"
+    "6. Мд назначить @игрок — выдать права админа.\n"
+    "7. Мд снять @игрок — снять права админа."
+)
+
+# НОВЫЙ РАЗДЕЛ: ОПРОСЫ (доступен всем для просмотра)
+HELP_POLLS_TEXT = (
+    "📢 Система опросов:\n\n"
+    "🛡️Админские👇\n"
+    "1. Мд голоса — посмотреть, кто проголосовал сегодня.\n"
+    "2. Мд голоса вчера — посмотреть голоса за вчера.\n"
+    "3. Мд защита [@юз] — добавить защиту от опросов.\n"
+    "4. Мд -защита [@юз] — убрать защиту от опросов.\n\n"
+    "🤴Владельца👇\n"
     "1. Мд старт контроль — включить систему опросов и контроля.\n"
     "2. Мд стоп контроль — выключить систему опросов.\n"
     "3. Мд время опросов <ЧЧ:ММ> <ЧЧ:ММ> — изменить время опросов.\n"
-    "4. Мд адмчат <id> — установить чат для отчетов о банах.\n"
-    "5. Мд адмчат удалить — отвязать чат для отчетов о банах.\n"
-    "6. Мд лимит предов <число> — макс. количество предов до кика (по умолч. 3).\n"
-    "7. Мд кд предов <дней> — изменить срок дефолтного преда.\n"
-    "8. Мд текст др — установить текст поздравления с ДР (ответом на сообщение).\n"
-    "9. Мд назначить @игрок — выдать права админа.\n"
-    "10. Мд снять @игрок — снять права админа.\n"
-    "11. Мд проверка опроса <ЧЧ:ММ> — изменить время проверки опроса."
+    "4. Мд проверка опроса <ЧЧ:ММ> — изменить время проверки опроса."
 )
 
-# НОВЫЙ РАЗДЕЛ: BLACK RUSSIA (доступен всем)
 HELP_BR_TEXT = (
     "🎮 BLACK RUSSIA:\n"
     "1. Мд бр — список всех серверов BlackRussia и их онлайн."
@@ -625,7 +633,6 @@ def handle_event(event):
                 print("Event answer error:", e)
             return
 
-        # НОВОЕ: Пагинация списка серверов BlackRussia (доступна всем)
         if cmd in ["br_prev", "br_next"]:
             page = int(payload.get("page", 1))
             text, keyboard_json, total_pages = build_br_page(page)
@@ -673,9 +680,10 @@ def handle_event(event):
                 print("BR event answer error:", e)
             return
 
-        if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_br", "help_back"]:
-            # help_br доступен всем участникам (как и help_general / help_back)
-            if cmd not in ["help_general", "help_back", "help_br"] and not is_admin(user_id, peer_id):
+        if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_polls", "help_br", "help_back"]:
+            # help_general, help_polls, help_br, help_back доступны всем
+            # help_admin, help_remind, help_owner — только админам
+                        if cmd not in ["help_general", "help_back", "help_br"] and not is_admin(user_id, peer_id):
                 try:
                     VK.messages.sendMessageEventAnswer(
                         event_id=event_id, user_id=user_id, peer_id=peer_id,
@@ -700,6 +708,9 @@ def handle_event(event):
                 keyboard_json = json.dumps(get_help_back_button())
             elif cmd == "help_owner":
                 message_text = HELP_OWNER_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_polls":
+                message_text = HELP_POLLS_TEXT
                 keyboard_json = json.dumps(get_help_back_button())
             elif cmd == "help_br":
                 message_text = HELP_BR_TEXT
@@ -1535,7 +1546,6 @@ def handle_message(peer, sender, text, msg_obj):
             check_m = int(get_setting(peer, "check_minute", "0"))
             send_msg(peer, f"📌 Текущее время проверки опроса: {check_h:02d}:{check_m:02d}\n\nИспользуйте: `Мд проверка опроса ЧЧ:ММ`")
 
-       # НОВАЯ КОМАНДА: Мд бр (доступна всем)
     elif cmd == "бр":
         try:
             page = int(args[0]) if args and args[0].isdigit() else 1
@@ -1550,7 +1560,7 @@ def handle_message(peer, sender, text, msg_obj):
                 random_id=random.getrandbits(31)
             )
         except Exception as e:
-            print("onlinebr error:", e)
+            print("бр error:", e)
             send_msg(peer, f"❌ Ошибка при выполнении команды: {e}")
 
 
