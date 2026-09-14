@@ -56,8 +56,12 @@ BR_PER_PAGE = 20
 BR_COLOR_EMOJI = {
     "RED": "🟥", "GREEN": "🟩", "BLUE": "🟦", "YELLOW": "🟨",
     "ORANGE": "🟧", "PURPLE": "🟪", "VIOLET": "🟪", "BLACK": "⬛",
-    "WHITE": "⬜", "GRAY": "⬜", "GREY": "⬜", "PINK": "🌸",
+    "WHITE": "⬜", "PINK": "🌸",
     "CYAN": "🟦", "TURQUOISE": "🟦", "LIME": "🟩",
+    # Кастомные стикеры для серверов
+    "CHERRY": "🍒", "INDIGO": "🦋", "MAGENTA": "🎀", "CRIMSON": "🌺",
+    "GOLD": "⭐️", "AZURE": "🧿", "PLATINUM": "💍", "AQUA": "🐟",
+    "GRAY": "🐰", "GREY": "🐰", "ICE": "🧊",
 }
 
 def fetch_br_servers():
@@ -457,8 +461,7 @@ HELP_OWNER_TEXT = (
 # НОВЫЙ РАЗДЕЛ: BLACK RUSSIA (доступен всем)
 HELP_BR_TEXT = (
     "🎮 BLACK RUSSIA:\n"
-    "1. Мд /onlinebr — список всех серверов BlackRussia и их онлайн (20 серверов на странице).\n"
-    "   Данные берутся автоматически с api.blackrussia.online и обновляются раз в 5 минут."
+    "1. Мд onlinebr — список всех серверов BlackRussia и их онлайн (20 серверов на странице)."
 )
 
 
