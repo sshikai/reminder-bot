@@ -36,7 +36,7 @@ DICE_PHRASES = [
     "Твой максимум — это бросать кости собакам, к игральным тебе лучше не прикасаться. 🐕🎲",
     "Удача сегодня посмотрела на тебя, посмеялась и ушла ко мне. 😏",
     "Кости любят смелых, а над наивными они просто ржут — прямо как я сейчас. 🦴😂",
-    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬",
+    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬💀",
     "Пискоструй ты где? Не забыл? Ты проебал в кости. 📢",
     "Эй чепуха, твой проёб не забыли. 🤡",
     "Ты проиграл, но ты держись там, хорошего настроения. 😔✊",
@@ -66,18 +66,18 @@ VALID_COMMANDS = [
 
 ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
 
-def get_role_display(peer, user_id):
-    """Роль для отображения: создатель бота всегда '🔹Создатель'."""
-    if user_id == CREATOR_ID:
-        return "🔹Создатель"
-    return ROLE_NAMES.get(get_user_role(peer, user_id), "Участник")
-    
 def get_user_role(peer, user_id):
     if user_id == CREATOR_ID or user_id == get_chat_owner(peer):
         return 4
     with DB_LOCK:
         row = CONN.execute("SELECT role FROM roles WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
         return row["role"] if row else 0
+
+def get_role_display(peer, user_id):
+    """Роль для отображения: создатель бота всегда '🔹Создатель'."""
+    if user_id == CREATOR_ID:
+        return "🔹Создатель"
+    return ROLE_NAMES.get(get_user_role(peer, user_id), "Участник")
 
 def set_user_role(peer, user_id, role):
     with DB_LOCK:
@@ -223,7 +223,6 @@ def get_all_bot_chats():
 
 # ===== ПОМОЩНИКИ ДЛЯ ИГРЫ В КОСТИ =====
 def get_conversation_message_id(peer, message_id):
-    """VK.messages.send возвращает глобальный ID, а для edit нужен conversation_message_id."""
     try:
         resp = VK.messages.getById(message_ids=[message_id])
         items = resp.get("items", [])
@@ -237,7 +236,6 @@ def empty_keyboard():
     return json.dumps({"inline": True, "buttons": []})
 
 def dice_edit(peer_id, game_id, message, keyboard_json=None):
-    """Редактирует сообщение игры. Если не вышло — шлёт новое и запоминает его id."""
     with DB_LOCK:
         row = CONN.execute("SELECT message_id FROM dice_games WHERE id=?", (game_id,)).fetchone()
     cmid = row["message_id"] if row else 0
@@ -277,7 +275,6 @@ def dice_punish_keyboard(game_id):
     })
 
 def cleanup_dice_games(peer):
-    """Протухание зависших игр: pending > 60 сек, playing без активности > 10 мин."""
     now = int(time.time())
     with DB_LOCK:
         CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='pending' AND created_at<?", (peer, now - 60))
@@ -414,6 +411,10 @@ def get_chat_owner(peer):
     OWNER_CACHE[peer] = oid
     return oid
 
+def is_real_owner(sender, peer):
+    """Только настоящий владелец: создатель бота или создатель беседы."""
+    return sender > 0 and (sender == CREATOR_ID or sender == get_chat_owner(peer))
+
 def is_moderator(sender, peer):
     if sender <= 0: return False
     if sender == CREATOR_ID or sender == get_chat_owner(peer): return True
@@ -430,7 +431,10 @@ def is_main_admin(sender, peer):
     return get_user_role(peer, sender) >= 3
 
 def is_owner(sender, peer):
-    return sender > 0 and (sender == CREATOR_ID or sender == get_chat_owner(peer))
+    """Владелец: настоящий владелец ИЛИ совладелец (роль 4)."""
+    if is_real_owner(sender, peer):
+        return True
+    return get_user_role(peer, sender) >= 4
 
 def send_msg(peer, text, attachments=None, keyboard=None):
     if VK is None or not peer: return
@@ -675,7 +679,7 @@ HELP_OWNER_TEXT = (
     "3. Мд лимит предов <число> — макс. количество предов до кика (по умолч. 3).\n"
     "4. Мд кд предов <дней> — изменить срок дефолтного преда.\n"
     "5. Мд текст др — установить текст поздравления с ДР (ответом на сообщение).\n"
-    "6. Мд назначить @игрок <номер ранга> — повышает участника.\n"
+    "6. Мд назначить @игрок <номер ранга> — повышает участника (4 - владелец).\n"
     "7. Мд снять @игрок — снимает роль в беседе.\n"
     "Имеет возможности прошлых ролей."
 )
@@ -700,7 +704,7 @@ HELP_BR_TEXT = (
 )
 
 HELP_MODERATOR_TEXT = (
-    "👮‍️ Команды Модератора:\n"
+    "👮‍♂️ Команды Модератора:\n"
     "1. Мд пред [@юз] причина — выдать пред.\n"
     "2. Мд пред <дней> [@юз] причина — выдать пред на N дней.\n"
     "3. Мд пред навсегда [@юз] причина — выдать вечный пред.\n"
@@ -771,7 +775,6 @@ def handle_event(event):
 
             now = int(time.time())
 
-            # Заявка протухла (1 минута)
             if game["state"] == "pending" and (now - game["created_at"]) > 60:
                 with DB_LOCK:
                     CONN.execute("UPDATE dice_games SET state='expired' WHERE id=?", (game_id,))
@@ -788,7 +791,6 @@ def handle_event(event):
                 except: pass
                 return
 
-            # Игра зависла без активности (10 минут)
             if game["state"] == "playing" and (now - game["created_at"]) > 600:
                 with DB_LOCK:
                     CONN.execute("UPDATE dice_games SET state='expired' WHERE id=?", (game_id,))
@@ -1365,7 +1367,7 @@ def handle_event(event):
         print("event error:", e)
 
 
-STATUS_PER_PAGE = 10
+STATUS_PER_PAGE = 5
 
 def build_status_page(peer, page):
     with DB_LOCK:
@@ -1533,6 +1535,7 @@ def handle_message(peer, sender, text, msg_obj):
         return
 
     owner = is_owner(sender, peer)
+    real_owner = is_real_owner(sender, peer)
     admin = is_admin(sender, peer)
     moderator = is_moderator(sender, peer)
     main_admin = is_main_admin(sender, peer)
@@ -1543,7 +1546,6 @@ def handle_message(peer, sender, text, msg_obj):
     reply_msg_id = reply_obj.get("conversation_message_id", 0) if has_reply else 0
     reply_text = reply_obj.get("text", "") if has_reply else ""
 
-    # Нормализуем варианты написания команд объявлений
     if cmd in ["обьява", "объяв", "обьяв"]:
         cmd = "объява"
     if cmd in ["обьявы"]:
@@ -1556,15 +1558,22 @@ def handle_message(peer, sender, text, msg_obj):
 
     elif cmd == "админы":
         chat_owner_id = get_chat_owner(peer)
-        lines = ["👥 Администраторы:\n"]
-        if chat_owner_id:
-            lines.append("👑 Владелец: {}".format(mention(chat_owner_id)))
-        else:
-            lines.append("👑 Владелец: не определён")
         with DB_LOCK:
+            co_owners = [r["user_id"] for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role=4", (peer,)).fetchall()]
             main_admins = [r["user_id"] for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role=3", (peer,)).fetchall()]
             admins_list = [r["user_id"] for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role=2", (peer,)).fetchall()]
             moderators_list = [r["user_id"] for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role=1", (peer,)).fetchall()]
+        lines = ["👥 Администраторы:\n"]
+        owner_parts = []
+        if chat_owner_id:
+            owner_parts.append(mention(chat_owner_id))
+        for u in co_owners:
+            if u != chat_owner_id:
+                owner_parts.append(mention(u))
+        if owner_parts:
+            lines.append("👑 Владелец: {}".format(", ".join(owner_parts)))
+        else:
+            lines.append("👑 Владелец: не определён")
         lines.append("🥷 Главные Админы(3): {}".format(", ".join(mention(u) for u in main_admins) if main_admins else "отсутствуют"))
         lines.append("🛡 Админы(2): {}".format(", ".join(mention(u) for u in admins_list) if admins_list else "отсутствуют"))
         lines.append("👮‍️ Модераторы(1): {}".format(", ".join(mention(u) for u in moderators_list) if moderators_list else "отсутствуют"))
@@ -1803,6 +1812,7 @@ def handle_message(peer, sender, text, msg_obj):
         expiry = now + (duration_days * 86400) if duration_days < 9999 else now + (36500 * 86400)
         for t_id in targets:
             if t_id == CREATOR_ID or t_id == get_chat_owner(peer):
+                send_msg(peer, "❌ Нельзя выдать пред владельцу/создателю.")
                 continue
             days_str = "∞" if duration_days >= 9999 else str(duration_days)
             with DB_LOCK:
@@ -1902,6 +1912,9 @@ def handle_message(peer, sender, text, msg_obj):
                 chat_name = conv["items"][0].get("chat_settings", {}).get("title", "Неизвестная беседа")
         except: pass
         for t_id in targets:
+            if t_id == CREATOR_ID or t_id == get_chat_owner(peer):
+                send_msg(peer, "❌ Нельзя забанить владельца/создателя.")
+                continue
             try:
                 chat_id = peer - 2000000000
                 with DB_LOCK:
@@ -2138,7 +2151,6 @@ def handle_message(peer, sender, text, msg_obj):
         if opponent == CREATOR_ID or opponent == get_chat_owner(peer):
             send_msg(peer, "❌ Нельзя вызвать на игру владельца/создателя.")
             return
-        # Чистим зависшие игры перед проверкой
         cleanup_dice_games(peer)
         with DB_LOCK:
             active_game = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending', 'playing')", (peer,)).fetchone()
@@ -2161,7 +2173,7 @@ def handle_message(peer, sender, text, msg_obj):
                 ]
             ]
         })
-        msg_text = "🎲 {}, {} вызывает вас сыграть в кости!\nНажмите кнопку ниже 👇\n⏰ Время на ответ: 1 минута".format(
+        msg_text = "🎲 {}, {} вызывает вас сыграть в кости!\nНажмите кнопку ниже 👇\n Время на ответ: 1 минута".format(
             mention(opponent), mention(sender)
         )
         try:
@@ -2435,15 +2447,18 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, "⛔ Только админ и выше могут назначать роли.")
             return
         if not args:
-            send_msg(peer, "❌ Формат: `Мд назначить @игрок <номер ранга>`\nРанги: 1 - Модератор, 2 - Админ, 3 - Главный Админ")
+            send_msg(peer, "❌ Формат: `Мд назначить @игрок <номер ранга>`\nРанги: 1 - Модератор, 2 - Админ, 3 - Главный Админ, 4 - Владелец")
             return
         try:
             target_role = int(args[-1])
         except:
             send_msg(peer, "❌ Укажите номер ранга: `Мд назначить @игрок <номер ранга>`")
             return
-        if target_role not in [1, 2, 3]:
-            send_msg(peer, "❌ Неверный ранг. Доступно: 1, 2, 3")
+        if target_role not in [1, 2, 3, 4]:
+            send_msg(peer, "❌ Неверный ранг. Доступно: 1, 2, 3, 4")
+            return
+        if target_role == 4 and not real_owner:
+            send_msg(peer, "⛔ Только настоящий владелец чата может назначить владельца (ранг 4).")
             return
         if sender_role == 2 and target_role > 1:
             send_msg(peer, "⛔ Админ может назначить только модератора (ранг 1).")
@@ -2460,6 +2475,9 @@ def handle_message(peer, sender, text, msg_obj):
                 send_msg(peer, "❌ Нельзя менять роль владельца/создателя.")
                 continue
             old_role = get_user_role(peer, t)
+            if old_role >= 4 and not real_owner:
+                send_msg(peer, "⛔ Только настоящий владелец может менять роль совладельца.")
+                continue
             set_user_role(peer, t, target_role)
             if old_role > target_role:
                 send_msg(peer, "⬇️ {} понижен до {}.".format(mention(t), ROLE_NAMES[target_role]))
@@ -2483,6 +2501,9 @@ def handle_message(peer, sender, text, msg_obj):
             old_role = get_user_role(peer, t)
             if old_role == 0:
                 send_msg(peer, "ℹ️ {} уже является участником.".format(mention(t)))
+                continue
+            if old_role >= 4 and not real_owner:
+                send_msg(peer, "⛔ Только настоящий владелец может снимать роль владельца.")
                 continue
             if old_role >= sender_role and not is_owner(sender, peer):
                 send_msg(peer, "⛔ Нельзя снять роль выше или равную вашей.")
@@ -2611,7 +2632,6 @@ def timer_loop():
             today_str = now_msk.strftime("%Y-%m-%d")
             now = int(time.time())
 
-            # Обработка упоминаний за проигрыш в кости
             with DB_LOCK:
                 due_mentions = CONN.execute("SELECT * FROM dice_mentions WHERE next_trigger<=? AND end_time>?", (now, now)).fetchall()
             for dm in due_mentions:
