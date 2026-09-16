@@ -13,6 +13,7 @@ from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 VK_TOKEN = os.environ.get("VK_TOKEN", "").strip()
 CREATOR_ID = 479753606
 LEADER_ID = 639963159
+MD_CHAT_PEER = 2000000004
 
 MSK_TZ = datetime.timezone(datetime.timedelta(hours=3))
 def get_msk_now():
@@ -28,6 +29,21 @@ VK = None
 NAME_CACHE = {}
 OWNER_CACHE = {}
 MEMBER_SYNC_CACHE = {}
+MD_MEMBERS_CACHE = {"time": 0.0, "members": set()}
+
+DICE_PHRASES = [
+    "Фортуна повернулась к тебе самым неприличным местом. 🍑",
+    "Твой максимум — это бросать кости собакам, к игральным тебе лучше не прикасаться. 🐕🎲",
+    "Удача сегодня посмотрела на тебя, посмеялась и ушла ко мне. 😏",
+    "Кости любят смелых, а над наивными они просто ржут — прямо как я сейчас. 🦴😂",
+    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬💀",
+    "Пискоструй ты где? Не забыл? Ты проебал в кости. 📢",
+    "Эй чепуха, твой проёб не забыли. 🤡",
+    "Ты проиграл, но ты держись там, хорошего настроения. 😔✊",
+    "Ну что, допизделся, фартовый? Кости легли раком, сиди теперь и обтекай. 🦀",
+    "Удача сегодня посмотрела на твою рожу, плюнула и ушла ко мне. 🤮",
+    "Твоя удача осталась где-то далеко, так что иди спокойно погрусти в углу. 😢"
+]
 
 LEADER_BDAY_TEXT = (
     "Дорогой лидер Million Dollars🎉\n"
@@ -44,10 +60,10 @@ VALID_COMMANDS = [
     "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
     "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса", "бр",
-    "мут", "-мут", "мутлист", "предлист", "статус", "статусы", "проверка"
+    "мут", "-мут", "мутлист", "предлист", "статус", "статусы", "проверка", "кости",
+    "объява", "обьява", "объявы", "обьявы", "объяв", "обьяв", "кд_объяв", "кд_обьяв"
 ]
 
-# ===== СИСТЕМА РОЛЕЙ =====
 ROLE_NAMES = {0: "Участник", 1: "👮‍♂️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
 
 def get_user_role(peer, user_id):
@@ -66,7 +82,6 @@ def get_users_with_min_role(peer, min_role):
     with DB_LOCK:
         return [int(r["user_id"]) for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role>=?", (peer, min_role)).fetchall()]
 
-# ===== ИСТОРИЯ НАКАЗАНИЙ =====
 def add_punishment(peer, user_id, p_type, reason, message_id, message_text, issued_by, duration_minutes=0):
     with DB_LOCK:
         CONN.execute("""INSERT INTO punishment_history 
@@ -74,7 +89,6 @@ def add_punishment(peer, user_id, p_type, reason, message_id, message_text, issu
                         VALUES(?,?,?,?,?,?,?,?,?)""",
                      (peer, user_id, p_type, reason, message_id or 0, message_text or "", issued_by, int(time.time()), duration_minutes))
         CONN.commit()
-# ===== КОНЕЦ ИСТОРИИ =====
 
 # ===== BLACK RUSSIA API =====
 BR_API_URL = "https://api.blackrussia.online/servers.json"
@@ -147,6 +161,60 @@ def build_br_page(page):
     keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
     return "\n".join(lines), keyboard_json, total_pages
 
+def is_md_member(user_id):
+    if user_id == CREATOR_ID:
+        return True
+    now = time.time()
+    if now - MD_MEMBERS_CACHE["time"] > 300 or not MD_MEMBERS_CACHE["members"]:
+        try:
+            members_resp = VK.messages.getConversationMembers(peer_id=MD_CHAT_PEER)
+            members = set()
+            for item in members_resp.get("items", []):
+                member_id = int(item.get("member_id", 0))
+                if member_id > 0:
+                    members.add(member_id)
+            MD_MEMBERS_CACHE["time"] = now
+            MD_MEMBERS_CACHE["members"] = members
+        except Exception as e:
+            print("MD members fetch error:", e)
+    return user_id in MD_MEMBERS_CACHE["members"]
+
+def get_all_bot_chats():
+    chats = set()
+    try:
+        with DB_LOCK:
+            rows_members = CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()
+            rows_reminders = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
+        for r in rows_members:
+            pid = r["peer_id"]
+            if pid and pid >= 2000000000:
+                chats.add(pid)
+        for r in rows_reminders:
+            pid = r["peer_id"]
+            if pid and pid >= 2000000000:
+                chats.add(pid)
+    except Exception as e:
+        print("get_all_bot_chats DB error:", e)
+    try:
+        offset = 0
+        while True:
+            resp = VK.messages.getConversations(count=200, offset=offset)
+            items = resp.get("items", [])
+            if not items:
+                break
+            for item in items:
+                pid = item.get("peer", {}).get("id", 0)
+                if pid and pid >= 2000000000:
+                    chats.add(pid)
+            if len(items) < 200:
+                break
+            offset += 200
+            if offset > 1000:
+                break
+    except Exception as e:
+        print("get_all_bot_chats API error:", e)
+    return list(chats)
+
 def init_db():
     with DB_LOCK:
         CONN.execute("""CREATE TABLE IF NOT EXISTS reminders (
@@ -173,6 +241,21 @@ def init_db():
             peer_id INTEGER, user_id INTEGER, type TEXT, reason TEXT,
             message_id INTEGER DEFAULT 0, message_text TEXT DEFAULT '', issued_by INTEGER, issued_at INTEGER,
             duration_minutes INTEGER DEFAULT 0)""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS dice_games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            peer_id INTEGER, initiator INTEGER, opponent INTEGER,
+            state TEXT DEFAULT 'pending',
+            message_id INTEGER DEFAULT 0,
+            initiator_roll INTEGER DEFAULT 0,
+            opponent_roll INTEGER DEFAULT 0,
+            current_turn INTEGER DEFAULT 0,
+            created_at INTEGER DEFAULT 0)""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS dice_mentions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            peer_id INTEGER, user_id INTEGER,
+            next_trigger INTEGER DEFAULT 0,
+            end_time INTEGER DEFAULT 0,
+            interval_minutes INTEGER DEFAULT 30)""")
         try:
             CONN.execute("ALTER TABLE poll_votes RENAME TO poll_votes_old")
         except Exception:
@@ -191,8 +274,7 @@ def init_db():
             "ALTER TABLE members ADD COLUMN last_vote_warn_time INTEGER DEFAULT 0",
             "ALTER TABLE members ADD COLUMN mute_until INTEGER DEFAULT 0",
             "ALTER TABLE members ADD COLUMN mute_reason TEXT DEFAULT ''",
-            "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''",
-            "ALTER TABLE punishment_history ADD COLUMN message_text TEXT DEFAULT ''"
+            "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''"
         ]
         for sql in migrations:
             try:
@@ -419,7 +501,11 @@ def get_help_main_buttons():
             ],
             [
                 {"action": {"type": "callback", "label": "Управление", "payload": json.dumps({"cmd": "help_manage"})}, "color": "negative"},
-                {"action": {"type": "callback", "label": "BLACK RUSSIA", "payload": json.dumps({"cmd": "help_br"})}, "color": "positive"}
+                {"action": {"type": "callback", "label": "Игровые", "payload": json.dumps({"cmd": "help_games"})}, "color": "positive"}
+            ],
+            [
+                {"action": {"type": "callback", "label": "BLACK RUSSIA", "payload": json.dumps({"cmd": "help_br"})}, "color": "positive"},
+                {"action": {"type": "callback", "label": "MD", "payload": json.dumps({"cmd": "help_md"})}, "color": "negative"}
             ]
         ]
     }
@@ -568,6 +654,23 @@ HELP_MAIN_ADMIN_TEXT = (
     "Имеет возможности прошлых ролей."
 )
 
+HELP_GAMES_TEXT = (
+    "🎯 Игровые команды:\n"
+    "1. Мд кости @игрок — пригласить игрока бросить кости. 🎲\n"
+    "Победитель выбирает наказание проигравшему:\n"
+    "• 🔇 Мут на 2 часа\n"
+    "• 📢 Упоминать каждые 30 мин, 5 часов (10 фраз)\n"
+    "• 🕊 Помиловать"
+)
+
+HELP_MD_TEXT = (
+    "👊 Основной состав MD:\n"
+    "1. Мд объява - отправить объявление во все чаты (ответом на сообщение).\n"
+    "🛡️ Админские:\n"
+    "1. Мд кд объяв (минуты) - изменить кд отправки.\n"
+    "2. Мд +-объявы - разрешает/запрещает отправку объявлений в данный чат."
+)
+
 
 def handle_event(event):
     try:
@@ -581,6 +684,379 @@ def handle_event(event):
             try: payload = json.loads(payload)
             except: payload = {}
         cmd = payload.get("cmd", "")
+
+        # ===== ИГРА В КОСТИ =====
+        if cmd in ["dice_accept", "dice_decline", "dice_roll", "dice_punish_mute", "dice_punish_mention", "dice_punish_pardon"]:
+            game_id = payload.get("game_id", 0)
+            with DB_LOCK:
+                game = CONN.execute("SELECT * FROM dice_games WHERE id=?", (game_id,)).fetchone()
+            if not game:
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "❌ Игра не найдена"})
+                    )
+                except: pass
+                return
+
+            now = int(time.time())
+            if game["state"] == "pending" and (now - game["created_at"]) > 60:
+                with DB_LOCK:
+                    CONN.execute("UPDATE dice_games SET state='expired' WHERE id=?", (game_id,))
+                    CONN.commit()
+                try:
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=game["message_id"],
+                        message="⏰ Время вышло! {} не успел принять вызов от {} 🕐".format(
+                            mention(game["opponent"]), mention(game["initiator"])
+                        )
+                    )
+                except: pass
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "⏰ Время на ответ вышло"})
+                    )
+                except: pass
+                return
+
+            if cmd == "dice_accept":
+                if user_id != game["opponent"]:
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⛔ Это не твой вызов"})
+                        )
+                    except: pass
+                    return
+                if game["state"] != "pending":
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⚠️ Игра уже неактивна"})
+                        )
+                    except: pass
+                    return
+                with DB_LOCK:
+                    CONN.execute("UPDATE dice_games SET state='playing', current_turn=? WHERE id=?", (game["initiator"], game_id))
+                    CONN.commit()
+                try:
+                    keyboard_json = json.dumps({
+                        "inline": True,
+                        "buttons": [[{"action": {"type": "callback", "label": "🎲 Бросить кость", "payload": json.dumps({"cmd": "dice_roll", "game_id": game_id})}, "color": "positive"}]]
+                    })
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=game["message_id"],
+                        message="✅ {} принял вызов! Начинаем! 🎲\n\n{}, твоя очередь кидать кость! 👇".format(
+                            mention(game["opponent"]), mention(game["initiator"])
+                        ),
+                        keyboard=keyboard_json
+                    )
+                except Exception as e:
+                    print("dice_accept edit error:", e)
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "🎲 Игра началась!"})
+                    )
+                except: pass
+                return
+
+            elif cmd == "dice_decline":
+                if user_id != game["opponent"]:
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⛔ Это не твой вызов"})
+                        )
+                    except: pass
+                    return
+                if game["state"] != "pending":
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⚠️ Игра уже неактивна"})
+                        )
+                    except: pass
+                    return
+                with DB_LOCK:
+                    CONN.execute("UPDATE dice_games SET state='declined' WHERE id=?", (game_id,))
+                    CONN.commit()
+                try:
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=game["message_id"],
+                        message="😞 {} отказался от игры с {}. Ну и ладно... 💔".format(
+                            mention(game["opponent"]), mention(game["initiator"])
+                        )
+                    )
+                except Exception as e:
+                    print("dice_decline edit error:", e)
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "❌ Игра отменена"})
+                    )
+                except: pass
+                return
+
+            elif cmd == "dice_roll":
+                if game["state"] != "playing":
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⚠️ Игра уже неактивна"})
+                        )
+                    except: pass
+                    return
+                if user_id != game["current_turn"]:
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⛔ Сейчас не твоя очередь"})
+                        )
+                    except: pass
+                    return
+
+                roll = random.randint(1, 6)
+                initiator = game["initiator"]
+                opponent = game["opponent"]
+
+                if user_id == initiator:
+                    new_init_roll = roll
+                    new_opp_roll = game["opponent_roll"]
+                    next_turn = opponent
+                else:
+                    new_init_roll = game["initiator_roll"]
+                    new_opp_roll = roll
+                    next_turn = initiator
+
+                with DB_LOCK:
+                    CONN.execute("UPDATE dice_games SET initiator_roll=?, opponent_roll=?, current_turn=? WHERE id=?",
+                                 (new_init_roll, new_opp_roll, next_turn, game_id))
+                    CONN.commit()
+
+                if new_init_roll > 0 and new_opp_roll > 0:
+                    if new_init_roll == new_opp_roll:
+                        with DB_LOCK:
+                            CONN.execute("UPDATE dice_games SET initiator_roll=0, opponent_roll=0, current_turn=? WHERE id=?", (initiator, game_id))
+                            CONN.commit()
+                        try:
+                            keyboard_json = json.dumps({
+                                "inline": True,
+                                "buttons": [[{"action": {"type": "callback", "label": "🎲 Бросить кость", "payload": json.dumps({"cmd": "dice_roll", "game_id": game_id})}, "color": "positive"}]]
+                            })
+                            VK.messages.edit(
+                                peer_id=peer_id,
+                                conversation_message_id=game["message_id"],
+                                message="🤝 Ничья! {} выбросил {}, а {} выбросил {}.\nПерекидываем! 🔄\n{}, бросай снова!".format(
+                                    mention(initiator), new_init_roll, mention(opponent), new_opp_roll, mention(initiator)
+                                ),
+                                keyboard=keyboard_json
+                            )
+                        except Exception as e:
+                            print("dice_tie edit error:", e)
+                    else:
+                        if new_init_roll > new_opp_roll:
+                            winner = initiator
+                            loser = opponent
+                        else:
+                            winner = opponent
+                            loser = initiator
+                        with DB_LOCK:
+                            CONN.execute("UPDATE dice_games SET state='finished' WHERE id=?", (game_id,))
+                            CONN.commit()
+                        try:
+                            keyboard_json = json.dumps({
+                                "inline": True,
+                                "buttons": [
+                                    [{"action": {"type": "callback", "label": "🔇 Мут на 2 часа", "payload": json.dumps({"cmd": "dice_punish_mute", "game_id": game_id})}, "color": "negative"}],
+                                    [{"action": {"type": "callback", "label": "📢 Упоминать 30 мин / 5 часов", "payload": json.dumps({"cmd": "dice_punish_mention", "game_id": game_id})}, "color": "primary"}],
+                                    [{"action": {"type": "callback", "label": "🕊 Помиловать", "payload": json.dumps({"cmd": "dice_punish_pardon", "game_id": game_id})}, "color": "positive"}]
+                                ]
+                            })
+                            VK.messages.edit(
+                                peer_id=peer_id,
+                                conversation_message_id=game["message_id"],
+                                message="🎉 {} побеждает! 🏆\n{} выбросил {}, а {} выбросил {}.\n\n{}, выбирай наказание для {}:".format(
+                                    mention(winner), mention(initiator), new_init_roll, mention(opponent), new_opp_roll,
+                                    mention(winner), mention(loser)
+                                ),
+                                keyboard=keyboard_json
+                            )
+                        except Exception as e:
+                            print("dice_win edit error:", e)
+                else:
+                    try:
+                        keyboard_json = json.dumps({
+                            "inline": True,
+                            "buttons": [[{"action": {"type": "callback", "label": "🎲 Бросить кость", "payload": json.dumps({"cmd": "dice_roll", "game_id": game_id})}, "color": "positive"}]]
+                        })
+                        VK.messages.edit(
+                            peer_id=peer_id,
+                            conversation_message_id=game["message_id"],
+                            message="🎲 {} бросил кость и выпало {}!\n{}, твоя очередь!".format(
+                                mention(user_id), roll, mention(next_turn)
+                            ),
+                            keyboard=keyboard_json
+                        )
+                    except Exception as e:
+                        print("dice_roll edit error:", e)
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "🎲 Выпало: {}".format(roll)})
+                    )
+                except: pass
+                return
+
+            elif cmd == "dice_punish_mute":
+                if game["state"] != "finished":
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⚠️ Игра уже неактивна"})
+                        )
+                    except: pass
+                    return
+                initiator = game["initiator"]
+                opponent = game["opponent"]
+                if game["initiator_roll"] > game["opponent_roll"]:
+                    winner = initiator
+                    loser = opponent
+                else:
+                    winner = opponent
+                    loser = initiator
+                if user_id != winner:
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⛔ Наказание выбирает только победитель"})
+                        )
+                    except: pass
+                    return
+                mute_until = int(time.time()) + 2 * 3600
+                with DB_LOCK:
+                    CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (loser, peer_id))
+                    CONN.execute("UPDATE members SET mute_until=?, mute_reason=? WHERE user_id=? AND peer_id=?",
+                                 (mute_until, "Проиграл в кости 🎲", loser, peer_id))
+                    CONN.commit()
+                add_punishment(peer_id, loser, "mute", "Проиграл в кости 🎲", 0, "", winner, 120)
+                try:
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=game["message_id"],
+                        message="🔇 {} выдал мут на 2 часа для {} за проигрыш в кости! 🎲".format(
+                            mention(winner), mention(loser)
+                        )
+                    )
+                except Exception as e:
+                    print("dice_punish_mute edit error:", e)
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "🔇 Мут выдан!"})
+                    )
+                except: pass
+                return
+
+            elif cmd == "dice_punish_mention":
+                if game["state"] != "finished":
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⚠️ Игра уже неактивна"})
+                        )
+                    except: pass
+                    return
+                initiator = game["initiator"]
+                opponent = game["opponent"]
+                if game["initiator_roll"] > game["opponent_roll"]:
+                    winner = initiator
+                    loser = opponent
+                else:
+                    winner = opponent
+                    loser = initiator
+                if user_id != winner:
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⛔ Наказание выбирает только победитель"})
+                        )
+                    except: pass
+                    return
+                now = int(time.time())
+                end_time = now + 5 * 3600
+                next_trigger = now + 30 * 60
+                with DB_LOCK:
+                    CONN.execute("DELETE FROM dice_mentions WHERE peer_id=? AND user_id=?", (peer_id, loser))
+                    CONN.execute("INSERT INTO dice_mentions(peer_id, user_id, next_trigger, end_time, interval_minutes) VALUES(?,?,?,?,?)",
+                                 (peer_id, loser, next_trigger, end_time, 30))
+                    CONN.commit()
+                try:
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=game["message_id"],
+                        message="📢 {} будет упоминать {} каждые 30 минут в течение 5 часов за проигрыш в кости! 🎲".format(
+                            mention(winner), mention(loser)
+                        )
+                    )
+                except Exception as e:
+                    print("dice_punish_mention edit error:", e)
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "📢 Упоминания запущены!"})
+                    )
+                except: pass
+                return
+
+            elif cmd == "dice_punish_pardon":
+                if game["state"] != "finished":
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⚠️ Игра уже неактивна"})
+                        )
+                    except: pass
+                    return
+                initiator = game["initiator"]
+                opponent = game["opponent"]
+                if game["initiator_roll"] > game["opponent_roll"]:
+                    winner = initiator
+                    loser = opponent
+                else:
+                    winner = opponent
+                    loser = initiator
+                if user_id != winner:
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "⛔ Наказание выбирает только победитель"})
+                        )
+                    except: pass
+                    return
+                try:
+                    VK.messages.edit(
+                        peer_id=peer_id,
+                        conversation_message_id=game["message_id"],
+                        message="🕊 {} помиловал {}! Проигрыш в кости обошёлся без последствий. 🎲❤️".format(
+                            mention(winner), mention(loser)
+                        )
+                    )
+                except Exception as e:
+                    print("dice_punish_pardon edit error:", e)
+                try:
+                    VK.messages.sendMessageEventAnswer(
+                        event_id=event_id, user_id=user_id, peer_id=peer_id,
+                        event_data=json.dumps({"type": "show_snackbar", "text": "🕊 Помилован!"})
+                    )
+                except: pass
+                return
+
+        # ===== КОНЕЦ ИГРЫ В КОСТИ =====
 
         if cmd == "poll_vote":
             now_ts = int(time.time())
@@ -620,6 +1096,10 @@ def handle_event(event):
                             )
             except Exception as e:
                 print("DB error in poll_vote: {}".format(e))
+                VK.messages.sendMessageEventAnswer(
+                    event_id=event_id, user_id=user_id, peer_id=peer_id,
+                    event_data=json.dumps({"type": "show_snackbar", "text": "❌ Ошибка базы данных!"})
+                )
             return
 
         if cmd == "page_info":
@@ -742,7 +1222,7 @@ def handle_event(event):
             return
 
         if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls",
-                   "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_back"]:
+                   "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_games", "help_md", "help_back"]:
             if cmd == "help_systems":
                 if not is_admin(user_id, peer_id):
                     try:
@@ -797,6 +1277,15 @@ def handle_event(event):
                         )
                     except: pass
                     return
+            elif cmd == "help_md":
+                if not is_md_member(user_id):
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "У вас нет прав⛔️"})
+                        )
+                    except: pass
+                    return
 
             conversation_message_id = obj.get("conversation_message_id")
             if cmd == "help_back":
@@ -832,6 +1321,12 @@ def handle_event(event):
             elif cmd == "help_br":
                 message_text = HELP_BR_TEXT
                 keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_games":
+                message_text = HELP_GAMES_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_md":
+                message_text = HELP_MD_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
             else:
                 return
             if conversation_message_id:
@@ -853,7 +1348,6 @@ def handle_event(event):
         print("event error:", e)
 
 
-# ===== ПАГИНАЦИЯ СТАТУСОВ =====
 STATUS_PER_PAGE = 10
 
 def build_status_page(peer, page):
@@ -895,16 +1389,13 @@ def handle_message(peer, sender, text, msg_obj):
     if clean_text.lower() in ["!!чаты", "!!тест"]:
         if int(sender) != CREATOR_ID: return
         send_msg(CREATOR_ID, "⏳ Загрузка списка бесед...")
-        with DB_LOCK:
-            peers_members = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()]
-            peers_reminders = [row["peer_id"] for row in CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()]
-            peers = list(set(peers_members + peers_reminders))
-        if not peers:
+        chats = get_all_bot_chats()
+        if not chats:
             send_msg(CREATOR_ID, "📭 Бот пока не зафиксировал ни одной беседы.")
         else:
             lines = ["📊 Список бесед с ботом:\n"]
-            for i in range(0, len(peers), 100):
-                chunk = peers[i:i+100]
+            for i in range(0, len(chats), 100):
+                chunk = chats[i:i+100]
                 try:
                     convos = VK.messages.getConversationsById(peer_ids=chunk)
                     for item in convos.get("items", []):
@@ -971,7 +1462,6 @@ def handle_message(peer, sender, text, msg_obj):
                     print("Error sending kick report to {}: {}".format(report_peer, e))
             return
 
-    # ПРОВЕРКА МУТА (до всех команд)
     with DB_LOCK:
         mute_row = CONN.execute("SELECT mute_until FROM members WHERE user_id=? AND peer_id=?", (sender, peer)).fetchone()
     if mute_row and mute_row["mute_until"] and mute_row["mute_until"] > time.time():
@@ -1007,18 +1497,15 @@ def handle_message(peer, sender, text, msg_obj):
     parts_orig = first_line[3:].strip().split()
 
     found_cmd = None
-    found_args_norm = []
     found_idx = -1
     for i in range(len(parts_norm), 0, -1):
         candidate = "_".join(parts_norm[:i]).lower()
         if candidate in VALID_COMMANDS:
             found_cmd = candidate
-            found_args_norm = parts_norm[i:]
             found_idx = i
             break
     if not found_cmd:
         found_cmd = parts_norm[0].lower()
-        found_args_norm = parts_norm[1:]
         found_idx = 1
 
     cmd = found_cmd
@@ -1034,11 +1521,18 @@ def handle_message(peer, sender, text, msg_obj):
     main_admin = is_main_admin(sender, peer)
     sender_role = get_user_role(peer, sender)
 
-    # Информация о reply для мут/пред
     reply_obj = msg_obj.get("reply_message", {}) or {}
     has_reply = bool(reply_obj and isinstance(reply_obj, dict) and reply_obj.get("from_id"))
     reply_msg_id = reply_obj.get("conversation_message_id", 0) if has_reply else 0
     reply_text = reply_obj.get("text", "") if has_reply else ""
+
+    # Нормализуем варианты написания команд объявлений
+    if cmd in ["обьява", "объяв", "обьяв"]:
+        cmd = "объява"
+    if cmd in ["обьявы"]:
+        cmd = "объявы"
+    if cmd in ["кд_обьяв"]:
+        cmd = "кд_объяв"
 
     if cmd == "команды":
         send_msg(peer, "📖 Команды MD BOT", keyboard=get_help_main_buttons())
@@ -1613,6 +2107,50 @@ def handle_message(peer, sender, text, msg_obj):
                     CONN.commit()
                 send_msg(peer, "✅ {} назначен на статус «{}».".format(mention(t), status_name))
 
+    elif cmd == "кости":
+        targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
+        if not targets:
+            send_msg(peer, "❌ Укажите пользователя: `Мд кости @игрок`")
+            return
+        opponent = targets[0]
+        if opponent == sender:
+            send_msg(peer, "❌ Нельзя играть с самим собой! 🤦")
+            return
+        if opponent == CREATOR_ID or opponent == get_chat_owner(peer):
+            send_msg(peer, "❌ Нельзя вызвать на игру владельца/создателя.")
+            return
+        with DB_LOCK:
+            active_game = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending', 'playing')", (peer,)).fetchone()
+        if active_game:
+            send_msg(peer, "❌ В этом чате уже идёт игра в кости! Дождитесь её окончания. 🎲")
+            return
+        now = int(time.time())
+        with DB_LOCK:
+            cursor = CONN.execute("""INSERT INTO dice_games (peer_id, initiator, opponent, state, created_at) 
+                                      VALUES(?,?,?,?,?)""",
+                                   (peer, sender, opponent, "pending", now))
+            game_id = cursor.lastrowid
+            CONN.commit()
+        keyboard_json = json.dumps({
+            "inline": True,
+            "buttons": [
+                [
+                    {"action": {"type": "callback", "label": "✅ Принять", "payload": json.dumps({"cmd": "dice_accept", "game_id": game_id})}, "color": "positive"},
+                    {"action": {"type": "callback", "label": "❌ Отказаться", "payload": json.dumps({"cmd": "dice_decline", "game_id": game_id})}, "color": "negative"}
+                ]
+            ]
+        })
+        msg_text = "🎲 {}, {} вызывает вас сыграть в кости!\nНажмите кнопку ниже 👇\n⏰ Время на ответ: 1 минута".format(
+            mention(opponent), mention(sender)
+        )
+        try:
+            msg_id = VK.messages.send(peer_id=peer, message=msg_text, keyboard=keyboard_json, random_id=random.getrandbits(31))
+            with DB_LOCK:
+                CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (msg_id, game_id))
+                CONN.commit()
+        except Exception as e:
+            print("dice_game send error:", e)
+
     elif cmd in ["адмчат", "admg"]:
         if not owner:
             send_msg(peer, "⛔ Только владелец или создатель может менять чат для отчетов.")
@@ -1975,6 +2513,72 @@ def handle_message(peer, sender, text, msg_obj):
             print("бр error:", e)
             send_msg(peer, "❌ Ошибка при выполнении команды: {}".format(e))
 
+    elif cmd == "объява":
+        if peer != MD_CHAT_PEER:
+            send_msg(peer, "❌ Эта команда работает только в основной беседе MD.")
+            return
+        reply = msg_obj.get("reply_message", {})
+        if not reply or not isinstance(reply, dict) or not reply.get("conversation_message_id"):
+            send_msg(peer, "❌ Ответь на сообщение, которое нужно объявить, и напиши `Мд объява`.")
+            return
+        cd_minutes = int(get_setting(MD_CHAT_PEER, "announce_cd", "60") or "60")
+        last_announce = int(get_setting(MD_CHAT_PEER, "last_announce_{}".format(sender), "0") or "0")
+        now = time.time()
+        if last_announce > 0 and (now - last_announce) < cd_minutes * 60:
+            remaining = int((cd_minutes * 60 - (now - last_announce)) / 60) + 1
+            send_msg(peer, "⏳ Следующее объявление можно отправить через {} мин.".format(remaining))
+            return
+        conv_msg_id = reply.get("conversation_message_id")
+        chats = get_all_bot_chats()
+        print("Announce: found {} chats total".format(len(chats)))
+        success_count = 0
+        for chat_peer in chats:
+            if chat_peer == MD_CHAT_PEER:
+                continue
+            if get_setting(chat_peer, "announcements_enabled", "1") != "1":
+                continue
+            try:
+                forward_json = json.dumps({"peer_id": MD_CHAT_PEER, "conversation_message_ids": [conv_msg_id]})
+                VK.messages.send(
+                    peer_id=chat_peer,
+                    message="📢 Объявление от семьи Million Dollars:",
+                    forward=forward_json,
+                    random_id=random.getrandbits(31)
+                )
+                success_count += 1
+                time.sleep(0.4)
+            except Exception as e:
+                print("announce send error to {}: {}".format(chat_peer, e))
+        set_setting(MD_CHAT_PEER, "last_announce_{}".format(sender), str(int(time.time())))
+        send_msg(peer, "✅ Объявление отправлено в {} чатов.".format(success_count))
+
+    elif cmd == "кд_объяв":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы.")
+            return
+        if not args or not args[0].isdigit():
+            current = get_setting(MD_CHAT_PEER, "announce_cd", "60")
+            send_msg(peer, "📌 Текущий КД объявлений: {} мин.\n`Мд кд объяв <минуты>`".format(current))
+            return
+        minutes = int(args[0])
+        if minutes < 1:
+            send_msg(peer, "❌ КД должен быть не меньше 1 минуты.")
+            return
+        set_setting(MD_CHAT_PEER, "announce_cd", str(minutes))
+        send_msg(peer, "✅ КД объявлений установлен: {} мин.".format(minutes))
+
+    elif cmd == "объявы":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы.")
+            return
+        current = get_setting(peer, "announcements_enabled", "1")
+        if current == "1":
+            set_setting(peer, "announcements_enabled", "0")
+            send_msg(peer, "🔕 Объявления в этом чате теперь ВЫКЛЮЧЕНЫ.")
+        else:
+            set_setting(peer, "announcements_enabled", "1")
+            send_msg(peer, "🔔 Объявления в этом чате теперь ВКЛЮЧЕНЫ.")
+
 
 def timer_loop():
     while True:
@@ -1983,6 +2587,22 @@ def timer_loop():
             if VK is None: continue
             now_msk = get_msk_now()
             today_str = now_msk.strftime("%Y-%m-%d")
+            now = int(time.time())
+
+            # Обработка упоминаний за проигрыш в кости
+            with DB_LOCK:
+                due_mentions = CONN.execute("SELECT * FROM dice_mentions WHERE next_trigger<=? AND end_time>?", (now, now)).fetchall()
+            for dm in due_mentions:
+                phrase = random.choice(DICE_PHRASES)
+                send_msg(dm["peer_id"], "🎲 {}, {}".format(mention(dm["user_id"]), phrase))
+                next_trigger = now + dm["interval_minutes"] * 60
+                with DB_LOCK:
+                    if next_trigger >= dm["end_time"]:
+                        CONN.execute("DELETE FROM dice_mentions WHERE id=?", (dm["id"],))
+                    else:
+                        CONN.execute("UPDATE dice_mentions SET next_trigger=? WHERE id=?", (next_trigger, dm["id"]))
+                    CONN.commit()
+
             with DB_LOCK:
                 peers = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
                 bday_peers = CONN.execute("SELECT DISTINCT peer_id FROM birthdays").fetchall()
