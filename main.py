@@ -14,8 +14,10 @@ VK_TOKEN = os.environ.get("VK_TOKEN", "").strip()
 CREATOR_ID = 479753606
 LEADER_ID = 639963159
 
-MSK_TZ = datetime.timezone(datetime.timedelta(hours=3))
+# Основная беседа семьи (роль MD присваивается всем её участникам)
+MD_CHAT_PEER = 2000000004
 
+MSK_TZ = datetime.timezone(datetime.timedelta(hours=3))
 def get_msk_now():
     return datetime.datetime.now(MSK_TZ)
 
@@ -29,6 +31,7 @@ VK = None
 NAME_CACHE = {}
 OWNER_CACHE = {}
 MEMBER_SYNC_CACHE = {}
+MD_MEMBERS_CACHE = {"time": 0.0, "members": set()}
 
 LEADER_BDAY_TEXT = (
     "Дорогой лидер Million Dollars🎉\n"
@@ -44,7 +47,8 @@ VALID_COMMANDS = [
     "пред", "-пред", "лимит_предов", "кд_предов", "старт_контроль", "стоп_контроль",
     "время_опросов", "защита", "-защита", "бан", "адмчат", "admg", "номер_чата",
     "текст_др", "создать", "список", "удалить", "редактировать", "включить", "отключить", "развернуть",
-    "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса", "бр"
+    "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса", "бр",
+    "объява", "кд_объяв", "объявы"
 ]
 
 # ===== BLACK RUSSIA API =====
@@ -78,6 +82,29 @@ def fetch_br_servers():
         print("BR API error:", e)
         return BR_CACHE["data"]
 
+def update_br_record():
+    """Обновить рекорд суммарного онлайна BlackRussia за сегодня"""
+    try:
+        servers = fetch_br_servers()
+        if not servers:
+            return
+        total_online = 0
+        for s in servers:
+            try:
+                total_online += int(s.get("online", 0) or 0)
+            except Exception:
+                pass
+        today = get_msk_now().strftime("%Y-%m-%d")
+        record_date = get_setting(0, "br_record_date", "")
+        record_online = int(get_setting(0, "br_record_online", "0") or 0)
+        if record_date != today:
+            set_setting(0, "br_record_date", today)
+            set_setting(0, "br_record_online", str(total_online))
+        elif total_online > record_online:
+            set_setting(0, "br_record_online", str(total_online))
+    except Exception as e:
+        print("update_br_record error:", e)
+
 def build_br_page(page):
     servers = fetch_br_servers()
     if not servers:
@@ -90,20 +117,19 @@ def build_br_page(page):
         page = 1
     page = max(1, min(page, total_pages))
     total_online = 0
-    total_max = 0
     for s in servers:
         try:
             total_online += int(s.get("online", 0) or 0)
         except Exception:
             pass
-        try:
-            total_max += int(s.get("maxonline", 0) or 0)
-        except Exception:
-            pass
+    # Реальный рекорд онлайна за день (обновляется в timer_loop)
+    record_online = int(get_setting(0, "br_record_online", "0") or 0)
+    if total_online > record_online:
+        record_online = total_online
     chunk = servers[(page - 1) * BR_PER_PAGE: page * BR_PER_PAGE]
     lines = [
         "📱 Общий онлайн проекта BlackRussia: {}".format(total_online),
-        "🏆 Общий рекордный онлайн за день: {}\n".format(total_max),
+        "🏆 Рекордный онлайн за день: {}\n".format(record_online),
     ]
     start_idx = (page - 1) * BR_PER_PAGE
     for i, s in enumerate(chunk, start_idx + 1):
@@ -236,6 +262,48 @@ def is_admin(sender, peer):
 
 def is_owner(sender, peer):
     return sender > 0 and (sender == CREATOR_ID or sender == get_chat_owner(peer))
+
+def is_md_member(user_id):
+    """Проверить, является ли пользователь участником основной беседы (роль MD)"""
+    if user_id == CREATOR_ID:
+        return True
+    now = time.time()
+    if now - MD_MEMBERS_CACHE["time"] > 300 or not MD_MEMBERS_CACHE["members"]:
+        try:
+            members_resp = VK.messages.getConversationMembers(peer_id=MD_CHAT_PEER)
+            members = set()
+            for item in members_resp.get("items", []):
+                member_id = int(item.get("member_id", 0))
+                if member_id > 0:
+                    members.add(member_id)
+            MD_MEMBERS_CACHE["time"] = now
+            MD_MEMBERS_CACHE["members"] = members
+        except Exception as e:
+            print("MD members fetch error:", e)
+    return user_id in MD_MEMBERS_CACHE["members"]
+
+def get_all_bot_chats():
+    """Получить все беседы, где есть бот"""
+    chats = []
+    try:
+        offset = 0
+        while True:
+            resp = VK.messages.getConversations(count=200, offset=offset)
+            items = resp.get("items", [])
+            if not items:
+                break
+            for item in items:
+                peer_id = item.get("peer", {}).get("id", 0)
+                if peer_id and peer_id >= 2000000000:
+                    chats.append(peer_id)
+            if len(items) < 200:
+                break
+            offset += 200
+            if offset > 1000:
+                break
+    except Exception as e:
+        print("get_all_bot_chats error:", e)
+    return chats
 
 def send_msg(peer, text, attachments=None, keyboard=None):
     if VK is None or not peer:
@@ -401,6 +469,9 @@ def get_help_main_buttons():
             [
                 {"action": {"type": "callback", "label": "Опросы", "payload": json.dumps({"cmd": "help_polls"})}, "color": "primary"},
                 {"action": {"type": "callback", "label": "BLACK RUSSIA", "payload": json.dumps({"cmd": "help_br"})}, "color": "positive"}
+            ],
+            [
+                {"action": {"type": "callback", "label": "MD", "payload": json.dumps({"cmd": "help_md"})}, "color": "negative"}
             ]
         ]
     }
@@ -476,6 +547,14 @@ HELP_POLLS_TEXT = (
 HELP_BR_TEXT = (
     "🎮 BLACK RUSSIA:\n"
     "1. Мд бр — список всех серверов BlackRussia и их онлайн."
+)
+
+HELP_MD_TEXT = (
+    "👊 Основной состав MD:\n"
+    "1. Мд объява — отправить объявление во все чаты (ответом на сообщение).\n\n"
+    "🛡️ Админские:\n"
+    "1. Мд кд объяв <минуты> — изменить КД отправки объявлений.\n"
+    "2. Мд объявы — разрешить/запретить объявления в этом чате."
 )
 
 
@@ -671,16 +750,30 @@ def handle_event(event):
                 print("BR event answer error:", e)
             return
 
-        if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_polls", "help_br", "help_back"]:
-            if cmd not in ["help_general", "help_back", "help_br"] and not is_admin(user_id, peer_id):
-                try:
-                    VK.messages.sendMessageEventAnswer(
-                        event_id=event_id, user_id=user_id, peer_id=peer_id,
-                        event_data=json.dumps({"type": "show_snackbar", "text": "У вас нет прав⛔️"})
-                    )
-                except:
-                    pass
-                return
+        if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_polls", "help_br", "help_md", "help_back"]:
+            # Проверка прав доступа к разделам справки
+            if cmd == "help_md":
+                # Кнопка MD доступна только участникам основной беседы
+                if not is_md_member(user_id):
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "У вас нет прав⛔️"})
+                        )
+                    except:
+                        pass
+                    return
+            elif cmd not in ["help_general", "help_back", "help_br"]:
+                if not is_admin(user_id, peer_id):
+                    try:
+                        VK.messages.sendMessageEventAnswer(
+                            event_id=event_id, user_id=user_id, peer_id=peer_id,
+                            event_data=json.dumps({"type": "show_snackbar", "text": "У вас нет прав⛔️"})
+                        )
+                    except:
+                        pass
+                    return
+
             conversation_message_id = obj.get("conversation_message_id")
             if cmd == "help_back":
                 message_text = "📖 Команды MD BOT"
@@ -702,6 +795,9 @@ def handle_event(event):
                 keyboard_json = json.dumps(get_help_back_button())
             elif cmd == "help_br":
                 message_text = HELP_BR_TEXT
+                keyboard_json = json.dumps(get_help_back_button())
+            elif cmd == "help_md":
+                message_text = HELP_MD_TEXT
                 keyboard_json = json.dumps(get_help_back_button())
             else:
                 return
@@ -1579,8 +1675,84 @@ def handle_message(peer, sender, text, msg_obj):
             print("бр error:", e)
             send_msg(peer, "❌ Ошибка при выполнении команды: {}".format(e))
 
+    # ===== НОВЫЕ КОМАНДЫ ОБЪЯВЛЕНИЙ =====
+    elif cmd == "объява":
+        # Работает только в основной беседе
+        if peer != MD_CHAT_PEER:
+            send_msg(peer, "❌ Эта команда работает только в основной беседе MD.")
+            return
+        # Проверка ответа на сообщение
+        reply = msg_obj.get("reply_message", {})
+        if not reply or not isinstance(reply, dict) or not reply.get("conversation_message_id"):
+            send_msg(peer, "❌ Ответь на сообщение, которое нужно объявить, и напиши `Мд объява`.")
+            return
+        # Проверка КД
+        cd_minutes = int(get_setting(MD_CHAT_PEER, "announce_cd", "60") or "60")
+        last_announce = int(get_setting(MD_CHAT_PEER, "last_announce_time", "0") or "0")
+        now = time.time()
+        if last_announce > 0 and (now - last_announce) < cd_minutes * 60:
+            remaining = int((cd_minutes * 60 - (now - last_announce)) / 60) + 1
+            send_msg(peer, "⏳ Объявление уже отправлялось недавно. Следующее можно отправить через {} мин.".format(remaining))
+            return
+        # Отправка во все чаты кроме основного
+        conv_msg_id = reply.get("conversation_message_id")
+        chats = get_all_bot_chats()
+        success_count = 0
+        fail_count = 0
+        for chat_peer in chats:
+            if chat_peer == MD_CHAT_PEER:
+                continue
+            if get_setting(chat_peer, "announcements_enabled", "1") != "1":
+                continue
+            try:
+                forward_json = json.dumps({"peer_id": MD_CHAT_PEER, "conversation_message_ids": [conv_msg_id]})
+                VK.messages.send(
+                    peer_id=chat_peer,
+                    message="📢 Объявление от семьи Million Dollars:",
+                    forward=forward_json,
+                    random_id=random.getrandbits(31)
+                )
+                success_count += 1
+                time.sleep(0.4)
+            except Exception as e:
+                print("announce send error to {}: {}".format(chat_peer, e))
+                fail_count += 1
+        set_setting(MD_CHAT_PEER, "last_announce_time", str(int(time.time())))
+        result_text = "✅ Объявление отправлено в {} чатов.".format(success_count)
+        if fail_count > 0:
+            result_text += " ({} ошибок)".format(fail_count)
+        send_msg(peer, result_text)
+
+    elif cmd == "кд_объяв":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы.")
+            return
+        if not args or not args[0].isdigit():
+            current = get_setting(MD_CHAT_PEER, "announce_cd", "60")
+            send_msg(peer, "📌 Текущий КД объявлений: {} мин.\nИспользуй: `Мд кд объяв <минуты>`".format(current))
+            return
+        minutes = int(args[0])
+        if minutes < 1:
+            send_msg(peer, "❌ КД должен быть не меньше 1 минуты.")
+            return
+        set_setting(MD_CHAT_PEER, "announce_cd", str(minutes))
+        send_msg(peer, "✅ КД объявлений установлен: {} мин.".format(minutes))
+
+    elif cmd == "объявы":
+        if not admin:
+            send_msg(peer, "⛔ Только администраторы.")
+            return
+        current = get_setting(peer, "announcements_enabled", "1")
+        if current == "1":
+            set_setting(peer, "announcements_enabled", "0")
+            send_msg(peer, "🔕 Объявления в этом чате теперь ВЫКЛЮЧЕНЫ.")
+        else:
+            set_setting(peer, "announcements_enabled", "1")
+            send_msg(peer, "🔔 Объявления в этом чате теперь ВКЛЮЧЕНЫ.")
+
 
 def timer_loop():
+    last_br_record_update = 0
     while True:
         try:
             time.sleep(10)
@@ -1632,6 +1804,11 @@ def timer_loop():
             if now_msk.hour == 0 and now_msk.minute == 0:
                 for p in bday_peers:
                     check_birthdays(p["peer_id"])
+
+            # Обновление рекорда онлайна BlackRussia раз в ~10 минут
+            if time.time() - last_br_record_update > 600:
+                update_br_record()
+                last_br_record_update = time.time()
 
             if now_msk.minute == 0:
                 peers_to_sync = list(set([p["peer_id"] for p in control_peers] + [p["peer_id"] for p in bday_peers]))
