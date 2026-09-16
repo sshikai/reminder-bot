@@ -66,6 +66,12 @@ VALID_COMMANDS = [
 
 ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
 
+def get_role_display(peer, user_id):
+    """Роль для отображения: создатель бота всегда '🔹Создатель'."""
+    if user_id == CREATOR_ID:
+        return "🔹Создатель"
+    return ROLE_NAMES.get(get_user_role(peer, user_id), "Участник")
+    
 def get_user_role(peer, user_id):
     if user_id == CREATOR_ID or user_id == get_chat_owner(peer):
         return 4
@@ -1562,7 +1568,6 @@ def handle_message(peer, sender, text, msg_obj):
         lines.append("🥷 Главные Админы(3): {}".format(", ".join(mention(u) for u in main_admins) if main_admins else "отсутствуют"))
         lines.append("🛡 Админы(2): {}".format(", ".join(mention(u) for u in admins_list) if admins_list else "отсутствуют"))
         lines.append("👮‍️ Модераторы(1): {}".format(", ".join(mention(u) for u in moderators_list) if moderators_list else "отсутствуют"))
-        lines.append("👑 chatbot creator: Саша Майер")
         send_msg(peer, "\n".join(lines))
 
     elif cmd == "участник":
@@ -1586,8 +1591,7 @@ def handle_message(peer, sender, text, msg_obj):
             days_str = "0"
         streak = row["streak"] or 0
         emoji = get_streak_emoji(streak)
-        role = get_user_role(peer, target_id)
-        role_str = ROLE_NAMES.get(role, "Участник")
+        role_str = get_role_display(peer, target_id)
         msg = (
             "👥 Участник {}:\n"
             "🎮 Ник: {}\n"
