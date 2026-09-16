@@ -67,12 +67,12 @@ def get_users_with_min_role(peer, min_role):
         return [int(r["user_id"]) for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role>=?", (peer, min_role)).fetchall()]
 
 # ===== ИСТОРИЯ НАКАЗАНИЙ =====
-def add_punishment(peer, user_id, p_type, reason, message_id, issued_by, duration_minutes=0):
+def add_punishment(peer, user_id, p_type, reason, message_id, message_text, issued_by, duration_minutes=0):
     with DB_LOCK:
         CONN.execute("""INSERT INTO punishment_history 
-                        (peer_id, user_id, type, reason, message_id, issued_by, issued_at, duration_minutes) 
-                        VALUES(?,?,?,?,?,?,?,?)""",
-                     (peer, user_id, p_type, reason, message_id or 0, issued_by, int(time.time()), duration_minutes))
+                        (peer_id, user_id, type, reason, message_id, message_text, issued_by, issued_at, duration_minutes) 
+                        VALUES(?,?,?,?,?,?,?,?,?)""",
+                     (peer, user_id, p_type, reason, message_id or 0, message_text or "", issued_by, int(time.time()), duration_minutes))
         CONN.commit()
 # ===== КОНЕЦ ИСТОРИИ =====
 
@@ -171,7 +171,7 @@ def init_db():
         CONN.execute("""CREATE TABLE IF NOT EXISTS punishment_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             peer_id INTEGER, user_id INTEGER, type TEXT, reason TEXT,
-            message_id INTEGER DEFAULT 0, issued_by INTEGER, issued_at INTEGER,
+            message_id INTEGER DEFAULT 0, message_text TEXT DEFAULT '', issued_by INTEGER, issued_at INTEGER,
             duration_minutes INTEGER DEFAULT 0)""")
         try:
             CONN.execute("ALTER TABLE poll_votes RENAME TO poll_votes_old")
@@ -191,7 +191,8 @@ def init_db():
             "ALTER TABLE members ADD COLUMN last_vote_warn_time INTEGER DEFAULT 0",
             "ALTER TABLE members ADD COLUMN mute_until INTEGER DEFAULT 0",
             "ALTER TABLE members ADD COLUMN mute_reason TEXT DEFAULT ''",
-            "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''"
+            "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''",
+            "ALTER TABLE punishment_history ADD COLUMN message_text TEXT DEFAULT ''"
         ]
         for sql in migrations:
             try:
@@ -456,21 +457,18 @@ def get_help_manage_buttons():
     }
 
 def get_help_back_button():
-    """Назад на главную"""
     return {
         "inline": True,
         "buttons": [[{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back"})}, "color": "secondary"}]]
     }
 
 def get_help_back_to_manage():
-    """Назад в меню Управление"""
     return {
         "inline": True,
         "buttons": [[{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_manage"})}, "color": "secondary"}]]
     }
 
 def get_help_back_to_systems():
-    """Назад в меню Системы MD"""
     return {
         "inline": True,
         "buttons": [[{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_systems"})}, "color": "secondary"}]]
@@ -745,7 +743,6 @@ def handle_event(event):
 
         if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls",
                    "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_back"]:
-            # Проверка прав доступа к разделам
             if cmd == "help_systems":
                 if not is_admin(user_id, peer_id):
                     try:
@@ -998,18 +995,15 @@ def handle_message(peer, sender, text, msg_obj):
 
     update_member_activity(peer, sender)
 
-    # Берём оригинальную строку для аргументов (чтобы сохранить регистр)
     first_line = text.split("\n")[0].strip()
     first = norm(first_line)
     if not first.startswith("мд "): return
 
-    # Нормализованные части (для поиска команды)
     parts_norm = first[3:].strip().split()
     if not parts_norm:
         send_msg(peer, "Меня кто то звал?🧐 «Мд команды» список команд.")
         return
 
-    # Оригинальные части (для аргументов с сохранением регистра)
     parts_orig = first_line[3:].strip().split()
 
     found_cmd = None
@@ -1028,7 +1022,6 @@ def handle_message(peer, sender, text, msg_obj):
         found_idx = 1
 
     cmd = found_cmd
-    # Оригинальные аргументы берём из parts_orig по найденному индексу
     args = parts_orig[found_idx:] if found_idx <= len(parts_orig) else []
 
     if cmd not in VALID_COMMANDS:
@@ -1045,6 +1038,7 @@ def handle_message(peer, sender, text, msg_obj):
     reply_obj = msg_obj.get("reply_message", {}) or {}
     has_reply = bool(reply_obj and isinstance(reply_obj, dict) and reply_obj.get("from_id"))
     reply_msg_id = reply_obj.get("conversation_message_id", 0) if has_reply else 0
+    reply_text = reply_obj.get("text", "") if has_reply else ""
 
     if cmd == "команды":
         send_msg(peer, "📖 Команды MD BOT", keyboard=get_help_main_buttons())
@@ -1181,7 +1175,7 @@ def handle_message(peer, sender, text, msg_obj):
         month_ago = int(time.time()) - 30 * 86400
         with DB_LOCK:
             rows = CONN.execute("""
-                SELECT type, reason, message_id, issued_by, issued_at, duration_minutes 
+                SELECT type, reason, message_id, message_text, issued_by, issued_at, duration_minutes 
                 FROM punishment_history 
                 WHERE peer_id=? AND user_id=? AND issued_at>=? 
                 ORDER BY issued_at DESC
@@ -1193,15 +1187,20 @@ def handle_message(peer, sender, text, msg_obj):
         for idx, r in enumerate(rows, 1):
             dt = datetime.datetime.fromtimestamp(r["issued_at"], MSK_TZ).strftime("%d.%m %H:%M")
             issuer = mention(r["issued_by"]) if r["issued_by"] else "Неизвестно"
-            ptype = "🔇 Мут" if r["type"] == "mute" else "🚫 Бан"
+            ptype = "🔇 Мут" if r["type"] == "mute" else "🚫 Бан" if r["type"] == "ban" else "⚠️ Пред"
             duration_text = ""
             if r["type"] == "mute" and r["duration_minutes"]:
                 duration_text = " на {} мин".format(r["duration_minutes"])
+            elif r["type"] == "warn" and r["duration_minutes"]:
+                duration_text = " на {} дн".format(r["duration_minutes"] // 1440 if r["duration_minutes"] >= 1440 else "∞")
             reason = r["reason"] or "Не указана"
             msg_ref = ""
-            if r["message_id"]:
-                msg_ref = "\n   📎 Ответом на сообщение #{}".format(r["message_id"])
-            lines.append("#{}. {} {} | {}{}".format(idx, ptype, duration_text, dt, msg_ref))
+            if r["message_text"]:
+                text_short = r["message_text"][:200] + ("..." if len(r["message_text"]) > 200 else "")
+                msg_ref = "\n   📎 Ответом на сообщение: {}".format(text_short)
+            lines.append("#{}. {} {} | {}".format(idx, ptype, duration_text, dt))
+            if msg_ref:
+                lines.append(msg_ref)
             lines.append("   👤 Выдал: {}".format(issuer))
             lines.append("   📝 Причина: {}".format(reason))
             lines.append("")
@@ -1314,7 +1313,7 @@ def handle_message(peer, sender, text, msg_obj):
                     CONN.execute("INSERT INTO members(user_id, peer_id, warnings, warn_durations, warn_expiry, warn_reasons) VALUES(?,?,?,?,?,?)",
                                  (t_id, peer, current_warns, new_durations, expiry, new_reasons))
                 CONN.commit()
-            add_punishment(peer, t_id, "warn", reason, reply_msg_id, sender, duration_days * 1440)
+            add_punishment(peer, t_id, "warn", reason, reply_msg_id, reply_text, sender, duration_days * 1440)
             send_msg(peer, "⚠️ {} получает предупреждение ({}/{}) ({} дн.). Причина: {}".format(mention(t_id), current_warns, max_warns, new_durations, reason))
             if current_warns >= max_warns:
                 try:
@@ -1323,7 +1322,7 @@ def handle_message(peer, sender, text, msg_obj):
                         nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (t_id, peer)).fetchone()
                     nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(t_id)
                     VK.messages.removeChatUser(chat_id=chat_id, member_id=t_id)
-                    add_punishment(peer, t_id, "ban", "Автокик за {} предупреждений".format(max_warns), 0, sender, 0)
+                    add_punishment(peer, t_id, "ban", "Автокик за {} предупреждений".format(max_warns), 0, "", sender, 0)
                     with DB_LOCK:
                         CONN.execute("UPDATE members SET warnings=0, warn_durations='', warn_expiry=0, warn_reasons='' WHERE user_id=? AND peer_id=?", (t_id, peer))
                         CONN.commit()
@@ -1400,7 +1399,7 @@ def handle_message(peer, sender, text, msg_obj):
                     nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (t_id, peer)).fetchone()
                 nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(t_id)
                 VK.messages.removeChatUser(chat_id=chat_id, member_id=t_id)
-                add_punishment(peer, t_id, "ban", "Бан через команду", reply_msg_id, sender, 0)
+                add_punishment(peer, t_id, "ban", "Бан через команду", reply_msg_id, reply_text, sender, 0)
                 with DB_LOCK:
                     CONN.execute("UPDATE members SET warnings=0, warn_durations='', warn_expiry=0, warn_reasons='' WHERE user_id=? AND peer_id=?", (t_id, peer))
                     CONN.commit()
@@ -1455,7 +1454,7 @@ def handle_message(peer, sender, text, msg_obj):
                 CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (t, peer))
                 CONN.execute("UPDATE members SET mute_until=?, mute_reason=? WHERE user_id=? AND peer_id=?", (mute_until, reason, t, peer))
                 CONN.commit()
-            add_punishment(peer, t, "mute", reason, reply_msg_id, sender, minutes)
+            add_punishment(peer, t, "mute", reason, reply_msg_id, reply_text, sender, minutes)
             send_msg(peer, "🔇 {} получил мут на {} мин. Причина: {}".format(mention(t), minutes, reason))
 
     elif cmd == "-мут":
@@ -2100,7 +2099,7 @@ def timer_loop():
                                             nick_row = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (u_id, peer)).fetchone()
                                         nick = nick_row["nickname"] if nick_row and nick_row["nickname"] else mention(u_id)
                                         VK.messages.removeChatUser(chat_id=chat_id, member_id=u_id)
-                                        add_punishment(peer, u_id, "ban", "Автокик за {} предупреждений (неактив)".format(max_warns), 0, 0, 0)
+                                        add_punishment(peer, u_id, "ban", "Автокик за {} предупреждений (неактив)".format(max_warns), 0, "", 0, 0)
                                         with DB_LOCK:
                                             CONN.execute("UPDATE members SET warnings=0, warn_durations='', warn_expiry=0 WHERE user_id=? AND peer_id=?", (u_id, peer))
                                             CONN.commit()
