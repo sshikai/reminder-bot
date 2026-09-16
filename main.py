@@ -96,7 +96,7 @@ def update_br_record():
                 pass
         today = get_msk_now().strftime("%Y-%m-%d")
         record_date = get_setting(0, "br_record_date", "")
-        record_online = int(get_setting(0, "br_record_online", "0") or 0)
+        record_online = int(get_setting(0, "br_record_online", "0") or "0")
         if record_date != today:
             set_setting(0, "br_record_date", today)
             set_setting(0, "br_record_online", str(total_online))
@@ -122,8 +122,7 @@ def build_br_page(page):
             total_online += int(s.get("online", 0) or 0)
         except Exception:
             pass
-    # Реальный рекорд онлайна за день (обновляется в timer_loop)
-    record_online = int(get_setting(0, "br_record_online", "0") or 0)
+    record_online = int(get_setting(0, "br_record_online", "0") or "0")
     if total_online > record_online:
         record_online = total_online
     chunk = servers[(page - 1) * BR_PER_PAGE: page * BR_PER_PAGE]
@@ -152,7 +151,6 @@ def build_br_page(page):
         buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "br_next", "page": page + 1})}, "color": "secondary"})
     keyboard_json = json.dumps({"inline": True, "buttons": [buttons]})
     return "\n".join(lines), keyboard_json, total_pages
-# ===== КОНЕЦ BLACK RUSSIA =====
 
 def init_db():
     with DB_LOCK:
@@ -751,9 +749,7 @@ def handle_event(event):
             return
 
         if cmd in ["help_general", "help_admin", "help_remind", "help_owner", "help_polls", "help_br", "help_md", "help_back"]:
-            # Проверка прав доступа к разделам справки
             if cmd == "help_md":
-                # Кнопка MD доступна только участникам основной беседы
                 if not is_md_member(user_id):
                     try:
                         VK.messages.sendMessageEventAnswer(
@@ -1675,30 +1671,25 @@ def handle_message(peer, sender, text, msg_obj):
             print("бр error:", e)
             send_msg(peer, "❌ Ошибка при выполнении команды: {}".format(e))
 
-    # ===== НОВЫЕ КОМАНДЫ ОБЪЯВЛЕНИЙ =====
     elif cmd == "объява":
-        # Работает только в основной беседе
         if peer != MD_CHAT_PEER:
             send_msg(peer, "❌ Эта команда работает только в основной беседе MD.")
             return
-        # Проверка ответа на сообщение
         reply = msg_obj.get("reply_message", {})
         if not reply or not isinstance(reply, dict) or not reply.get("conversation_message_id"):
             send_msg(peer, "❌ Ответь на сообщение, которое нужно объявить, и напиши `Мд объява`.")
             return
-        # Проверка КД
         cd_minutes = int(get_setting(MD_CHAT_PEER, "announce_cd", "60") or "60")
-        last_announce = int(get_setting(MD_CHAT_PEER, "last_announce_time", "0") or "0")
+        last_announce_key = "last_announce_{}".format(sender)
+        last_announce = int(get_setting(MD_CHAT_PEER, last_announce_key, "0") or "0")
         now = time.time()
         if last_announce > 0 and (now - last_announce) < cd_minutes * 60:
             remaining = int((cd_minutes * 60 - (now - last_announce)) / 60) + 1
             send_msg(peer, "⏳ Объявление уже отправлялось недавно. Следующее можно отправить через {} мин.".format(remaining))
             return
-        # Отправка во все чаты кроме основного
         conv_msg_id = reply.get("conversation_message_id")
         chats = get_all_bot_chats()
         success_count = 0
-        fail_count = 0
         for chat_peer in chats:
             if chat_peer == MD_CHAT_PEER:
                 continue
@@ -1716,12 +1707,8 @@ def handle_message(peer, sender, text, msg_obj):
                 time.sleep(0.4)
             except Exception as e:
                 print("announce send error to {}: {}".format(chat_peer, e))
-                fail_count += 1
-        set_setting(MD_CHAT_PEER, "last_announce_time", str(int(time.time())))
-        result_text = "✅ Объявление отправлено в {} чатов.".format(success_count)
-        if fail_count > 0:
-            result_text += " ({} ошибок)".format(fail_count)
-        send_msg(peer, result_text)
+        set_setting(MD_CHAT_PEER, last_announce_key, str(int(time.time())))
+        send_msg(peer, "✅ Объявление отправлено в {} чатов.".format(success_count))
 
     elif cmd == "кд_объяв":
         if not admin:
@@ -1805,7 +1792,6 @@ def timer_loop():
                 for p in bday_peers:
                     check_birthdays(p["peer_id"])
 
-            # Обновление рекорда онлайна BlackRussia раз в ~10 минут
             if time.time() - last_br_record_update > 600:
                 update_br_record()
                 last_br_record_update = time.time()
