@@ -438,29 +438,37 @@ def edit_game_message(peer, game_id, text, keyboard_json=None):
         row = CONN.execute("SELECT message_id FROM dice_games WHERE id=?", (game_id,)).fetchone()
     stored = row["message_id"] if row else 0
     kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
-    # Пытаемся по conversation_message_id
     try:
         VK.messages.edit(peer_id=peer, conversation_message_id=stored, message=text, keyboard=kb)
         return True
     except Exception:
         pass
-    # Пытаемся по глобальному message_id
     try:
         VK.messages.edit(peer_id=peer, message_id=stored, message=text, keyboard=kb)
         return True
     except Exception:
         pass
-    # Совсем не вышло — шлём новое и запоминаем его conversation_message_id
     try:
         new_id = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
-        cmid = get_cmid(peer, new_id)
+        new_cmid = get_cmid_from_message_id(peer, new_id)
+        store_id = new_cmid if new_cmid else new_id
         with DB_LOCK:
-            CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (cmid, game_id))
+            CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (store_id, game_id))
             CONN.commit()
         return True
     except Exception as e:
         print("edit_game_message fallback error:", e)
         return False
+
+def get_cmid_from_message_id(peer, message_id):
+    """Получить настоящий conversation_message_id по message_id от send()"""
+    try:
+        result = VK.messages.getById(message_ids=[message_id])
+        if result and result.get("items"):
+            return result["items"][0].get("conversation_message_id", 0)
+    except Exception as e:
+        print("get_cmid error:", e)
+    return 0
 
 def get_user_name(user_id):
     if user_id in NAME_CACHE: return NAME_CACHE[user_id]
@@ -2166,11 +2174,11 @@ def handle_message(peer, sender, text, msg_obj):
             mention(opponent), mention(sender)
         )
         try:
-         msg_id = VK.messages.send(peer_id=peer, message=msg_text, keyboard=keyboard_json, random_id=random.getrandbits(31))
-         cmid = get_cmid(peer, msg_id)
-         with DB_LOCK:
-             CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (cmid, game_id))
-             CONN.commit()
+        msg_id = VK.messages.send(peer_id=peer, message=msg_text, keyboard=keyboard_json, random_id=random.getrandbits(31))
+        cmid = get_cmid_from_message_id(peer, msg_id)
+        with DB_LOCK:
+            CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (cmid if cmid else msg_id, game_id))
+            CONN.commit()
         except Exception as e:
          print("dice_game send error:", e)
 
