@@ -2141,7 +2141,7 @@ def handle_message(peer, sender, text, msg_obj):
                 assigned.append(mention(t))
             send_msg(peer, "✅ Назначены на статус «{}»: {}".format(status_name, ", ".join(assigned)))
 
-        elif cmd == "кости":
+    elif cmd == "кости":
         targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
         if not targets:
             send_msg(peer, "❌ Укажите пользователя: `Мд кости @игрок`")
@@ -2183,19 +2183,12 @@ def handle_message(peer, sender, text, msg_obj):
         msg_text = "🎲 {}, {} вызывает вас сыграть в кости!\nНажмите кнопку ниже 👇\n Время на ответ: 1 минута".format(
             mention(opponent), mention(sender)
         )
-        
-        # --- ИСПРАВЛЕННЫЙ БЛОК ОТПРАВКИ И ОТСТУПОВ ---
         try:
-            # VK API при отправке в беседу возвращает словарь типа:
-            # {"peer_id": 200000000X, "conversation_message_id": XXX}
             send_result = VK.messages.send(peer_id=peer, message=msg_text, keyboard=keyboard_json, random_id=random.getrandbits(31))
-            
-            # Извлекаем правильный ID для бесед напрямую
             if isinstance(send_result, dict):
                 store_id = send_result.get("conversation_message_id", send_result.get("message_id", 0))
             else:
-                store_id = send_result  # на случай старых версий или ЛС
-
+                store_id = send_result
             with DB_LOCK:
                 CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (store_id, game_id))
                 CONN.commit()
