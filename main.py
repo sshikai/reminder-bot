@@ -84,8 +84,8 @@ def get_users_with_min_role(peer, min_role):
 
 def add_punishment(peer, user_id, p_type, reason, message_id, message_text, issued_by, duration_minutes=0):
     with DB_LOCK:
-        CONN.execute("""INSERT INTO punishment_history 
-                        (peer_id, user_id, type, reason, message_id, message_text, issued_by, issued_at, duration_minutes) 
+        CONN.execute("""INSERT INTO punishment_history
+                        (peer_id, user_id, type, reason, message_id, message_text, issued_by, issued_at, duration_minutes)
                         VALUES(?,?,?,?,?,?,?,?,?)""",
                      (peer, user_id, p_type, reason, message_id or 0, message_text or "", issued_by, int(time.time()), duration_minutes))
         CONN.commit()
@@ -724,7 +724,6 @@ def handle_event(event):
             try: payload = json.loads(payload)
             except: payload = {}
         cmd = payload.get("cmd", "")
-
         # ===== ИГРА В КОСТИ =====
         if cmd in ["dice_accept", "dice_decline", "dice_roll", "dice_punish_mute", "dice_punish_mention", "dice_punish_pardon"]:
             game_id = payload.get("game_id", 0)
@@ -780,7 +779,7 @@ def handle_event(event):
                     except: pass
                     return
                 with DB_LOCK:
-                    CONN.execute("UPDATE dice_games SET state='playing', current_turn=? WHERE id=?", (game["initiator"], game_id))
+                    CONN.execute("UPDATE dice_games SET state='playing', current_turn=?, created_at=? WHERE id=?", (game["initiator"], now, game_id))
                     CONN.commit()
                 edit_game_message(peer_id, game_id,
                     "✅ {} принял вызов! Начинаем! 🎲\n\n{}, твоя очередь кидать кость! 👇".format(
@@ -853,13 +852,13 @@ def handle_event(event):
                     new_opp_roll = roll
                     next_turn = initiator
                 with DB_LOCK:
-                    CONN.execute("UPDATE dice_games SET initiator_roll=?, opponent_roll=?, current_turn=? WHERE id=?",
-                                 (new_init_roll, new_opp_roll, next_turn, game_id))
+                    CONN.execute("UPDATE dice_games SET initiator_roll=?, opponent_roll=?, current_turn=?, created_at=? WHERE id=?",
+                                 (new_init_roll, new_opp_roll, next_turn, int(time.time()), game_id))
                     CONN.commit()
                 if new_init_roll > 0 and new_opp_roll > 0:
                     if new_init_roll == new_opp_roll:
                         with DB_LOCK:
-                            CONN.execute("UPDATE dice_games SET initiator_roll=0, opponent_roll=0, current_turn=? WHERE id=?", (initiator, game_id))
+                            CONN.execute("UPDATE dice_games SET initiator_roll=0, opponent_roll=0, current_turn=?, created_at=? WHERE id=?", (initiator, int(time.time()), game_id))
                             CONN.commit()
                         edit_game_message(peer_id, game_id,
                             "🤝 Ничья! {} выбросил {}, а {} выбросил {}.\nПерекидываем! 🔄\n{}, бросай снова!".format(
@@ -876,7 +875,7 @@ def handle_event(event):
                             CONN.execute("UPDATE dice_games SET state='finished' WHERE id=?", (game_id,))
                             CONN.commit()
                         edit_game_message(peer_id, game_id,
-                            "🎉 {} побеждает! 🏆\n{} выбросил {}, а {} выбросил {}.\n\n{}, выбирай наказание для {}:".format(
+                            "🎉 {} побеждает! 🏆\n\n{} выбросил {}, а {} выбросил {}.\n\n{}, выбирай наказание для {}:".format(
                                 mention(winner), mention(initiator), new_init_roll, mention(opponent), new_opp_roll,
                                 mention(winner), mention(loser)),
                             json.dumps({"inline": True, "buttons": [
@@ -886,7 +885,7 @@ def handle_event(event):
                             ]}))
                 else:
                     edit_game_message(peer_id, game_id,
-                        "🎲 {} бросил кость и выпало {}!\n{}, твоя очередь!".format(
+                        "🎲 {} бросил кость и выпало {}!\n\n{}, твоя очередь!".format(
                             mention(user_id), roll, mention(next_turn)),
                         json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "🎲 Бросить кость", "payload": json.dumps({"cmd": "dice_roll", "game_id": game_id})}, "color": "positive"}]]}))
                 try:
@@ -921,7 +920,6 @@ def handle_event(event):
                         )
                     except: pass
                     return
-                # НЕ СУММИРУЕТСЯ: если уже замучен — повторно не выдаём
                 muted_now, ment_now = has_active_dice_punishments(peer_id, loser)
                 if muted_now:
                     try:
@@ -974,7 +972,6 @@ def handle_event(event):
                         )
                     except: pass
                     return
-                # НЕ СУММИРУЕТСЯ: если упоминания уже активны — повторно не выдаём
                 muted_now, ment_now = has_active_dice_punishments(peer_id, loser)
                 if ment_now:
                     try:
@@ -1040,7 +1037,6 @@ def handle_event(event):
                 except: pass
                 return
         # ===== КОНЕЦ ИГРЫ В КОСТИ =====
-
         if cmd == "poll_vote":
             now_ts = int(time.time())
             today_str = get_msk_now().strftime("%Y-%m-%d")
@@ -1084,7 +1080,6 @@ def handle_event(event):
                     event_data=json.dumps({"type": "show_snackbar", "text": "❌ Ошибка базы данных!"})
                 )
             return
-
         if cmd == "page_info":
             page = payload.get("page", 1)
             total = payload.get("total", 1)
@@ -1093,7 +1088,6 @@ def handle_event(event):
                 event_data=json.dumps({"type": "show_snackbar", "text": "📄 Страница {} из {}".format(page, total)})
             )
             return
-
         if cmd in ["niki_prev", "niki_next"]:
             if not is_admin(user_id, peer_id):
                 try:
@@ -1147,7 +1141,6 @@ def handle_event(event):
                 )
             except: pass
             return
-
         if cmd in ["br_prev", "br_next"]:
             page = int(payload.get("page", 1))
             text, keyboard_json, total_pages = build_br_page(page)
@@ -1175,7 +1168,6 @@ def handle_event(event):
                 )
             except: pass
             return
-
         if cmd in ["status_prev", "status_next"]:
             page = int(payload.get("page", 1))
             text, keyboard_json, total_pages = build_status_page(peer_id, page)
@@ -1203,7 +1195,6 @@ def handle_event(event):
                 )
             except: pass
             return
-
         if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls",
                    "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_games", "help_md", "help_back"]:
             if cmd == "help_systems":
@@ -1541,7 +1532,7 @@ def handle_message(peer, sender, text, msg_obj):
             "👥 Участник {}:\n"
             "🎮 Ник: {}\n"
             "⚠️ Предупреждений: {}/{} ({} дн.)\n"
-            "🙆‍️Роль: {}\n"
+            "🙆‍♂️Роль: {}\n"
             "🔥 Серия посещения: {} дн. {}"
         ).format(mention(target_id), nick, warns, max_warns, durations, role_str, streak, emoji)
         send_msg(peer, msg)
@@ -1626,9 +1617,9 @@ def handle_message(peer, sender, text, msg_obj):
         month_ago = int(time.time()) - 30 * 86400
         with DB_LOCK:
             rows = CONN.execute("""
-                SELECT type, reason, message_id, message_text, issued_by, issued_at, duration_minutes 
-                FROM punishment_history 
-                WHERE peer_id=? AND user_id=? AND issued_at>=? 
+                SELECT type, reason, message_id, message_text, issued_by, issued_at, duration_minutes
+                FROM punishment_history
+                WHERE peer_id=? AND user_id=? AND issued_at>=?
                 ORDER BY issued_at DESC
             """, (peer, target_id, month_ago)).fetchall()
         if not rows:
@@ -2077,14 +2068,25 @@ def handle_message(peer, sender, text, msg_obj):
         if dice_blocked(peer, opponent):
             send_msg(peer, "❌ {} не может играть в кости: на нём висят оба наказания (мут и упоминания)! Дождись, пока одно спадёт. 🎲".format(mention(opponent)))
             return
+        now = int(time.time())
+        # Авто-очистка зависших игр: pending > 1 мин или playing без ходов > 5 мин
         with DB_LOCK:
+            stuck = CONN.execute("SELECT id, state, created_at FROM dice_games WHERE peer_id=? AND state IN ('pending', 'playing')", (peer,)).fetchall()
+            for g in stuck:
+                stale = False
+                if g["state"] == "pending" and (now - g["created_at"]) > 60:
+                    stale = True
+                if g["state"] == "playing" and (now - g["created_at"]) > 300:
+                    stale = True
+                if stale:
+                    CONN.execute("UPDATE dice_games SET state='expired' WHERE id=?", (g["id"],))
+            CONN.commit()
             active_game = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending', 'playing')", (peer,)).fetchone()
         if active_game:
             send_msg(peer, "❌ В этом чате уже идёт игра в кости! Дождитесь её окончания. 🎲")
             return
-        now = int(time.time())
         with DB_LOCK:
-            cursor = CONN.execute("""INSERT INTO dice_games (peer_id, initiator, opponent, state, created_at) 
+            cursor = CONN.execute("""INSERT INTO dice_games (peer_id, initiator, opponent, state, created_at)
                                       VALUES(?,?,?,?,?)""",
                                    (peer, sender, opponent, "pending", now))
             game_id = cursor.lastrowid
@@ -2538,6 +2540,25 @@ def timer_loop():
                     )
                 except Exception:
                     send_msg(g["peer_id"], exp_text)
+            # Авто-протухание брошенных игр: playing без ходов старше 5 минут
+            with DB_LOCK:
+                stale_games = CONN.execute("SELECT * FROM dice_games WHERE state='playing' AND created_at<=?", (now - 300,)).fetchall()
+                if stale_games:
+                    CONN.execute("UPDATE dice_games SET state='expired' WHERE state='playing' AND created_at<=?", (now - 300,))
+                    CONN.commit()
+            for g in stale_games:
+                st_text = "🕐 Игра между {} и {} протухла из-за неактивности (5 минут без ходов).".format(
+                    mention(g["initiator"]), mention(g["opponent"])
+                )
+                try:
+                    VK.messages.edit(
+                        peer_id=g["peer_id"],
+                        conversation_message_id=g["message_id"],
+                        message=st_text,
+                        keyboard=json.dumps({"inline": True, "buttons": []})
+                    )
+                except Exception:
+                    send_msg(g["peer_id"], st_text)
             # Обработка упоминаний за проигрыш в кости
             with DB_LOCK:
                 due_mentions = CONN.execute("SELECT * FROM dice_mentions WHERE next_trigger<=? AND end_time>?", (now, now)).fetchall()
