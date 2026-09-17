@@ -2171,7 +2171,7 @@ def handle_message(peer, sender, text, msg_obj):
          with DB_LOCK:
              CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (cmid, game_id))
              CONN.commit()
-     except Exception as e:
+        except Exception as e:
          print("dice_game send error:", e)
 
     elif cmd in ["адмчат", "admg"]:
