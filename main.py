@@ -438,20 +438,30 @@ def edit_game_message(peer, game_id, text, keyboard_json=None):
         row = CONN.execute("SELECT message_id FROM dice_games WHERE id=?", (game_id,)).fetchone()
     stored = row["message_id"] if row else 0
     kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
+    
+    # 1. Пробуем отредактировать по conversation_message_id (основной рабочий вариант для бесед)
     try:
         VK.messages.edit(peer_id=peer, conversation_message_id=stored, message=text, keyboard=kb)
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Edit by cmid failed: {e}")
         pass
+        
+    # 2. Пробуем по глобальному message_id (на случай ЛС)
     try:
         VK.messages.edit(peer_id=peer, message_id=stored, message=text, keyboard=kb)
         return True
     except Exception:
         pass
+        
+    # 3. Если всё упало (например, сообщение удалено) — шлем новое и сохраняем НОВЫЙ правильный ID
     try:
-        new_id = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
-        new_cmid = get_cmid_from_message_id(peer, new_id)
-        store_id = new_cmid if new_cmid else new_id
+        send_result = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
+        if isinstance(send_result, dict):
+            store_id = send_result.get("conversation_message_id", send_result.get("message_id", 0))
+        else:
+            store_id = send_result
+            
         with DB_LOCK:
             CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (store_id, game_id))
             CONN.commit()
@@ -2131,7 +2141,7 @@ def handle_message(peer, sender, text, msg_obj):
                 assigned.append(mention(t))
             send_msg(peer, "✅ Назначены на статус «{}»: {}".format(status_name, ", ".join(assigned)))
 
-    elif cmd == "кости":
+        elif cmd == "кости":
         targets = extract_targets(" ".join(args), msg_obj.get("reply_message", {}).get("from_id", 0))
         if not targets:
             send_msg(peer, "❌ Укажите пользователя: `Мд кости @игрок`")
@@ -2173,14 +2183,25 @@ def handle_message(peer, sender, text, msg_obj):
         msg_text = "🎲 {}, {} вызывает вас сыграть в кости!\nНажмите кнопку ниже 👇\n Время на ответ: 1 минута".format(
             mention(opponent), mention(sender)
         )
+        
+        # --- ИСПРАВЛЕННЫЙ БЛОК ОТПРАВКИ И ОТСТУПОВ ---
         try:
-        msg_id = VK.messages.send(peer_id=peer, message=msg_text, keyboard=keyboard_json, random_id=random.getrandbits(31))
-        cmid = get_cmid_from_message_id(peer, msg_id)
-        with DB_LOCK:
-            CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (cmid if cmid else msg_id, game_id))
-            CONN.commit()
+            # VK API при отправке в беседу возвращает словарь типа:
+            # {"peer_id": 200000000X, "conversation_message_id": XXX}
+            send_result = VK.messages.send(peer_id=peer, message=msg_text, keyboard=keyboard_json, random_id=random.getrandbits(31))
+            
+            # Извлекаем правильный ID для бесед напрямую
+            if isinstance(send_result, dict):
+                store_id = send_result.get("conversation_message_id", send_result.get("message_id", 0))
+            else:
+                store_id = send_result  # на случай старых версий или ЛС
+
+            with DB_LOCK:
+                CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (store_id, game_id))
+                CONN.commit()
         except Exception as e:
-         print("dice_game send error:", e)
+            print("dice_game send error:", e)
+
 
     elif cmd in ["адмчат", "admg"]:
         if not owner:
