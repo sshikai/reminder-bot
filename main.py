@@ -38,7 +38,7 @@ DICE_PHRASES = [
     "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬💀",
     "Пискоструй ты где? Не забыл? Ты проебал в кости. 📢",
     "Эй чепуха, твой проёб не забыли. 🤡",
-    "Ты проиграл, но ты держись там, хорошего настроения. 😔✊",
+    "Ты проиграл, но ты держись там, хорошего настроения. 😔",
     "Ну что, допизделся, фартовый? Кости легли раком, сиди теперь и обтекай. 🦀",
     "Удача сегодня посмотрела на твою рожу, плюнула и ушла ко мне. 🤮",
     "Твоя удача осталась где-то далеко, так что иди спокойно погрусти в углу. 😢",
@@ -49,11 +49,11 @@ DICE_PHRASES = [
     "Эй инопланетянин, ты помнишь как ты сыграл? Нет? Хуево! 👽",
     "В мире есть три вещи которые не меняются: вращение земли, рассвет солнца и твои проёбы! 🌍☀️",
     "Прикинь как было бы хорошо если бы ты выиграл? Но нет.... 😭",
-    "Я уверен что в параллельной вселенной ты бы смог выиграть, но ты проиграл. Поплачь. 🌌😢",
+    "Я уверен что в параллельной вселенной ты бы смог выиграть, но ты проиграл. Поплачь. 🌌",
     "Я бот - ты человек, разница в том что я не умею проигрывать как ты! 🤖",
     "Ничего лишнего, просто напомню что ты проиграл! 📋",
     "Тебе говорили не играй в кости казино? Тут походу тоже не стоит! 🎰",
-    "Прикинь, пересматривал код и увидел твой проёб, решил напомнить. 💻👀"
+    "Прикинь, пересматривал код и увидел твой проёб, решил напомнить. 💻"
 ]
 
 LEADER_BDAY_TEXT = (
@@ -78,7 +78,7 @@ VALID_COMMANDS = [
     "значок", "удалить_значок", "значки", "кмб", "чистка"
 ]
 
-ROLE_NAMES = {0: "Участник", 1: "👮‍♂️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
+ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
 
 def get_zodiac(day, month):
     if (month == 3 and day >= 21) or (month == 4 and day <= 19): return "♈"
@@ -141,6 +141,29 @@ def add_punishment(peer, user_id, p_type, reason, message_id, message_text, issu
             VALUES(?,?,?,?,?,?,?,?,?)""",
             (peer, user_id, p_type, reason, message_id or 0, message_text or "", issued_by, int(time.time()), duration_minutes))
         CONN.commit()
+
+# ===== ФОРМАТ СРОКОВ ДЛЯ ПРОВЕРКИ =====
+def fmt_mute_duration(mins):
+    try: mins = int(mins or 0)
+    except: mins = 0
+    if mins <= 0: return "—"
+    if mins >= 1440:
+        d = mins // 1440
+        h = (mins % 1440) // 60
+        return "{} дн".format(d) if h == 0 else "{} дн {} ч".format(d, h)
+    if mins >= 60:
+        h = mins // 60
+        m = mins % 60
+        return "{} ч".format(h) if m == 0 else "{} ч {} мин".format(h, m)
+    return "{} мин".format(mins)
+
+def fmt_warn_duration(mins):
+    try: mins = int(mins or 0)
+    except: mins = 0
+    if mins <= 0: return "—"
+    days = mins // 1440
+    if days >= 9999: return "∞"
+    return "{} дн".format(days)
 
 BR_API_URL = "https://api.blackrussia.online/servers.json"
 BR_CACHE = {"time": 0.0, "data": None}
@@ -636,7 +659,7 @@ HELP_ADMIN_TEXT = (
     "4. Мд тишина / тишина офф.\n"
     "5. Мд назначить @игрок <ранг> — ранг 1.\n"
     "6. Мд снять @игрок — снять роль.\n"
-    "7. Мд чистка @игрок — удалить 20 сообщений (КД 30 сек).\n"
+    "7. Мд чистка @игрок [число] — удалить сообщения (макс 50, КД 30 сек).\n"
     "Имеет возможности прошлых ролей."
 )
 HELP_REMIND_TEXT = (
@@ -727,12 +750,13 @@ def handle_event(event):
                     event_data=json.dumps({"type": "show_snackbar", "text": text}))
             except: pass
 
-        # ===== ПРОВЕРКА (кнопки Предупреждения / Муты) =====
+        # ===== ПРОВЕРКА: кнопки Предупреждения / Муты =====
         if cmd in ["check_warns", "check_mutes", "check_back"]:
             target_id = int(payload.get("target", 0))
             if not target_id: snackbar("❌ Ошибка"); return
-            target_name = get_user_name(target_id)
+            target_name = silent_mention_badge(target_id, peer_id)
             month_ago = int(time.time()) - 30 * 86400
+            cmid = obj.get("conversation_message_id")
 
             if cmd == "check_back":
                 kb = json.dumps({"inline": True, "buttons": [[
@@ -740,16 +764,17 @@ def handle_event(event):
                     {"action": {"type": "callback", "label": "🔇 Муты", "payload": json.dumps({"cmd": "check_mutes", "target": target_id})}, "color": "primary"}
                 ]]})
                 text = "📜 История наказаний {} за месяц:".format(target_name)
-                cmid = obj.get("conversation_message_id")
                 if cmid:
-                    try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=kb)
+                    try:
+                        VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=kb)
+                        snackbar("✅ Выполнено"); return
                     except: pass
-                snackbar("✅ Выполнено")
-                return
+                send_msg(peer_id, text, keyboard=kb)
+                snackbar("✅ Выполнено"); return
 
             if cmd == "check_warns":
                 with DB_LOCK:
-                    rows = CONN.execute("SELECT reason, message_text, issued_by, issued_at FROM punishment_history WHERE peer_id=? AND user_id=? AND type='warn' AND issued_at>=? ORDER BY issued_at DESC", (peer_id, target_id, month_ago)).fetchall()
+                    rows = CONN.execute("SELECT reason, message_text, issued_by, issued_at, duration_minutes FROM punishment_history WHERE peer_id=? AND user_id=? AND type='warn' AND issued_at>=? ORDER BY issued_at DESC", (peer_id, target_id, month_ago)).fetchall()
                 lines = ["📜 История предупреждений {} за месяц:\n".format(target_name)]
                 if not rows:
                     lines.append("Предупреждений нет.")
@@ -757,19 +782,21 @@ def handle_event(event):
                     for idx, r in enumerate(rows, 1):
                         dt = datetime.datetime.fromtimestamp(r["issued_at"], MSK_TZ).strftime("%d.%m %H:%M")
                         issuer = silent_mention_badge(r["issued_by"], peer_id) if r["issued_by"] else "Неизвестно"
+                        dur = fmt_warn_duration(r["duration_minutes"])
                         reason = r["reason"] or "Не указана"
                         if r["message_text"]:
                             reason += ' - "{}"'.format(r["message_text"][:100])
-                        lines.append("#{}. | {} | Выдал: {} | Причина: {}".format(idx, dt, issuer, reason))
+                        lines.append("{}. | {} | {} | Причина: {} | Выдал: {}|".format(idx, dt, dur, reason, issuer))
                 kb = json.dumps({"inline": True, "buttons": [[
                     {"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "check_back", "target": target_id})}, "color": "secondary"}
                 ]]})
-                cmid = obj.get("conversation_message_id")
                 if cmid:
-                    try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="\n".join(lines), keyboard=kb)
+                    try:
+                        VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="\n".join(lines), keyboard=kb)
+                        snackbar("✅ Выполнено"); return
                     except: pass
-                snackbar("✅ Выполнено")
-                return
+                send_msg(peer_id, "\n".join(lines), keyboard=kb)
+                snackbar("✅ Выполнено"); return
 
             if cmd == "check_mutes":
                 with DB_LOCK:
@@ -781,19 +808,21 @@ def handle_event(event):
                     for idx, r in enumerate(rows, 1):
                         dt = datetime.datetime.fromtimestamp(r["issued_at"], MSK_TZ).strftime("%d.%m %H:%M")
                         issuer = silent_mention_badge(r["issued_by"], peer_id) if r["issued_by"] else "Неизвестно"
+                        dur = fmt_mute_duration(r["duration_minutes"])
                         reason = r["reason"] or "Не указана"
                         if r["message_text"]:
                             reason += ' - "{}"'.format(r["message_text"][:100])
-                        lines.append("#{}. | {} | Выдал: {} | Причина: {}".format(idx, dt, issuer, reason))
+                        lines.append("{}. | {} | {} | Причина: {} | Выдал: {}|".format(idx, dt, dur, reason, issuer))
                 kb = json.dumps({"inline": True, "buttons": [[
                     {"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "check_back", "target": target_id})}, "color": "secondary"}
                 ]]})
-                cmid = obj.get("conversation_message_id")
                 if cmid:
-                    try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="\n".join(lines), keyboard=kb)
+                    try:
+                        VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="\n".join(lines), keyboard=kb)
+                        snackbar("✅ Выполнено"); return
                     except: pass
-                snackbar("✅ Выполнено")
-                return
+                send_msg(peer_id, "\n".join(lines), keyboard=kb)
+                snackbar("✅ Выполнено"); return
 
         # ===== КОСТИ =====
         if cmd in ["dice_accept", "dice_decline", "dice_roll", "dice_punish_mute", "dice_punish_mention", "dice_punish_pardon"]:
@@ -1208,8 +1237,7 @@ def handle_event(event):
                 else:
                     if not check_fn(user_id, peer_id): snackbar("У вас нет прав⛔️"); return
             if cmd in ["help_back", "help_back_main"]:
-                message_text = "📖 Команды MD BOT"
-                kb_dict = get_help_main_buttons()
+                message_text = "📖 Команды MD BOT"; kb_dict = get_help_main_buttons()
             elif cmd == "help_general": message_text = HELP_GENERAL_TEXT; kb_dict = get_help_back_button()
             elif cmd == "help_systems": message_text = "⚙️ Системы MD:\nВыберите раздел:"; kb_dict = get_help_systems_buttons()
             elif cmd == "help_manage": message_text = "🎛 Управление:\nВыберите роль:"; kb_dict = get_help_manage_buttons()
@@ -1419,7 +1447,7 @@ def handle_message(peer, sender, text, msg_obj):
         role_str = get_role_display(peer, target_id)
         marriage = get_marriage(peer, target_id)
         marriage_str = "💍 В браке с {}".format(silent_mention_badge(get_marriage_partner(marriage, target_id), peer)) if marriage else "💍 Не состоит в браке"
-        send_msg(peer, "👥 Участник {}:\n🎮 Ник: {}\n⚠️ Предупреждений: {}/{} ({} дн.)\n🙆‍♂️ Роль: {}\n{}\n🔥 Серия посещения: {} дн. {}".format(
+        send_msg(peer, "👥 Участник {}:\n🎮 Ник: {}\n⚠️ Предупреждений: {}/{} ({} дн.)\n🙆‍️ Роль: {}\n{}\n🔥 Серия посещения: {} дн. {}".format(
             silent_mention_badge(target_id, peer), nick, warns, max_warns, durations_raw, role_str, marriage_str, streak, emoji))
 
     elif cmd == "ники":
@@ -1484,7 +1512,6 @@ def handle_message(peer, sender, text, msg_obj):
                 CONN.commit()
             send_msg(peer, "✅ Твой ник установлен: **{}**".format(new_nick))
 
-    # ===== ПРОВЕРКА (НОВАЯ ВЕРСИЯ С КНОПКАМИ) =====
     elif cmd == "проверка":
         if not admin:
             send_msg(peer, "⛔ Только администратор и выше.")
@@ -1494,7 +1521,7 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, "❌ Укажите пользователя: `Мд проверка @игрок`")
             return
         target_id = targets[0]
-        target_name = get_user_name(target_id)
+        target_name = silent_mention_badge(target_id, peer)
         kb = json.dumps({"inline": True, "buttons": [[
             {"action": {"type": "callback", "label": "⚠️ Предупреждения", "payload": json.dumps({"cmd": "check_warns", "target": target_id})}, "color": "negative"},
             {"action": {"type": "callback", "label": "🔇 Муты", "payload": json.dumps({"cmd": "check_mutes", "target": target_id})}, "color": "primary"}
@@ -1677,7 +1704,6 @@ def handle_message(peer, sender, text, msg_obj):
                 CONN.commit()
             send_msg(peer, "🔊 Мут снят с {}.".format(silent_mention_badge(t, peer)))
 
-    # ===== МУТЫ (бывший мутлист) =====
     elif cmd == "муты":
         if not moderator: send_msg(peer, "⛔ Только модератор и выше."); return
         now_ts = int(time.time())
@@ -1834,7 +1860,7 @@ def handle_message(peer, sender, text, msg_obj):
                 CONN.commit()
         except: pass
 
-    # ===== ЧИСТКА (ФИКС: убираем peer_id из delete, добавляем delete_for_all) =====
+    # ===== ЧИСТКА (ТЕПЕРЬ КАК МУТ: conversation_message_ids) =====
     elif cmd == "чистка":
         if not admin:
             send_msg(peer, "⛔ Только администратор и выше.")
@@ -1847,36 +1873,51 @@ def handle_message(peer, sender, text, msg_obj):
                 return
         targets = extract_targets(" ".join(args), reply_from)
         if not targets:
-            send_msg(peer, "❌ Укажите пользователя: `Мд чистка @игрок`")
+            send_msg(peer, "❌ Укажите пользователя: `Мд чистка @игрок [число]`")
             return
         target_id = targets[0]
+        count = 20
+        for a in args:
+            if a.isdigit() and 1 <= len(a) <= 3:
+                count = min(max(1, int(a)), 50)
         try:
-            history = VK.messages.getHistory(peer_id=peer, count=100)
+            history = VK.messages.getHistory(peer_id=peer, count=200)
             items = history.get("items", [])
-            target_msgs = []
-            for msg in items:
-                if msg.get("from_id") == target_id:
-                    target_msgs.append(msg["id"])
-                    if len(target_msgs) >= 20:
-                        break
-            if not target_msgs:
-                send_msg(peer, "ℹ️ Сообщения {} не найдены в последних 100.".format(silent_mention_badge(target_id, peer)))
-                return
-            success = 0
-            for mid in target_msgs:
-                try:
-                    VK.messages.delete(message_ids=[mid], delete_for_all=1)
-                    success += 1
-                except Exception as e:
-                    print("clean delete error for msg {}: {}".format(mid, e))
-            if not real_owner:
-                set_setting(peer, "last_clean_{}".format(sender), str(int(time.time())))
-            if success > 0:
-                send_msg(peer, "🧹 Удалено {} сообщений {}.".format(success, silent_mention_badge(target_id, peer)))
-            else:
-                send_msg(peer, "❌ Не удалось удалить сообщения. Убедитесь что бот является админом беседы с правом удаления сообщений в настройках ВК.")
         except Exception as e:
-            send_msg(peer, "❌ Ошибка при очистке: {}".format(e))
+            send_msg(peer, "❌ Не удалось получить историю: {}".format(e))
+            return
+        target_cmids = []
+        for m in items:
+            if m.get("from_id") == target_id:
+                cm = m.get("conversation_message_id") or m.get("id")
+                if cm: target_cmids.append(cm)
+                if len(target_cmids) >= count: break
+        if not target_cmids:
+            send_msg(peer, "ℹ️ Сообщения {} не найдены среди последних.".format(silent_mention_badge(target_id, peer)))
+            return
+        success = 0
+        failed = 0
+        for cm in target_cmids:
+            ok = False
+            try:
+                VK.messages.delete(peer_id=peer, conversation_message_ids=[cm], delete_for_all=1)
+                ok = True
+            except Exception:
+                try:
+                    VK.messages.delete(peer_id=peer, message_ids=[cm], delete_for_all=1)
+                    ok = True
+                except Exception:
+                    failed += 1
+            if ok: success += 1
+        if not real_owner:
+            set_setting(peer, "last_clean_{}".format(sender), str(int(time.time())))
+        if success > 0:
+            msg = "🧹 Удалено {} сообщений {}.".format(success, silent_mention_badge(target_id, peer))
+            if failed:
+                msg += "\n⚠️ Не удалось удалить {}: VK не даёт удалить сообщения старше 24 часов.".format(failed)
+            send_msg(peer, msg)
+        else:
+            send_msg(peer, "❌ Не удалось удалить ни одного сообщения (VK [15]). Сообщения старше 24 часов ВК не даёт удалять для всех даже админам беседы.")
 
     elif cmd in ["адмчат", "admg"]:
         if not owner: send_msg(peer, "⛔ Только владелец."); return
@@ -2279,7 +2320,7 @@ def handle_message(peer, sender, text, msg_obj):
             user_ids = [p["id"] for p in profiles if p.get("id", 0) > 0]
             if not user_ids: send_msg(peer, "❌ Нет участников."); return
             chosen = random.choice(user_ids)
-            send_msg(peer, "💬 {}, 🎯 очевидно, {} — {}!".format(silent_mention_badge(sender, peer), word, silent_mention_badge(chosen, peer)))
+            send_msg(peer, "💬 {},  очевидно, {} — {}!".format(silent_mention_badge(sender, peer), word, silent_mention_badge(chosen, peer)))
         except: pass
 
     elif cmd == "инфа":
