@@ -601,6 +601,33 @@ def _ls_apply_top(body, field):
         out.append("✅ id{} → {} = {} (чат {})".format(uid, field, val, peer_id))
     return "\n".join(out) or "✅ Готово"
 
+def _ls_apply_rbrak(body):
+    out = []
+    now_ts = int(time.time())
+    for seg in _ls_segments(body):
+        uid, rest = _ls_user(seg)
+        peer_id = _ls_peer(seg)
+        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
+        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
+        if uid is None:
+            if len(nums) >= 2:
+                uid, days = nums[0], nums[1]
+            else:
+                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        else:
+            days = nums[0] if nums else None
+        if peer_id is None or days is None:
+            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        with DB_LOCK:
+            row = CONN.execute("SELECT id, user1, user2 FROM marriages WHERE peer_id=? AND (user1=? OR user2=?)", (peer_id, uid, uid)).fetchone()
+            if not row:
+                out.append("❌ id{} не состоит в браке в чате {}".format(uid, peer_id)); continue
+            new_created = now_ts - days * 86400
+            CONN.execute("UPDATE marriages SET created_at=? WHERE id=?", (new_created, row["id"]))
+            CONN.commit()
+        out.append("✅ id{} → брак {} дн. (чат {})".format(uid, days, peer_id))
+    return "\n".join(out) or "✅ Готово"
+
 def handle_creator_ls(peer, text):
     t = text.strip()
     low = t.lower()
@@ -612,6 +639,8 @@ def handle_creator_ls(peer, text):
         send_msg(peer, _ls_apply_top(t[len("/topmsg"):].strip(), "msg_count"))
     elif low.startswith("/topemj"):
         send_msg(peer, _ls_apply_top(t[len("/topemj"):].strip(), "sticker_count"))
+    elif low.startswith("/rbrak"):
+        send_msg(peer, _ls_apply_rbrak(t[len("/rbrak"):].strip()))
     else:
         send_msg(peer, "ℹ️ Неизвестная служебная команда.")
 
@@ -2329,7 +2358,7 @@ def handle_message(peer, sender, text, msg_obj):
         for idx, r in enumerate(rows, 1):
             rem = max(0, r["next_trigger"] - now)
             st = "🟢" if r["enabled"] else "🔴"
-            msg += "#{} {} {} | {} мин | {}м {}с\n".format(idx, r['name'], st, r['interval_minutes'], int(rem//60), int(rem%60))
+            msg += "#{} {} | {} мин | {}м {}с\n".format(idx, r['name'], r['interval_minutes'], int(rem//60), int(rem%60))
         send_msg(peer, msg)
 
     elif cmd == "удалить":
@@ -2624,7 +2653,7 @@ def handle_message(peer, sender, text, msg_obj):
             user_ids = [p["id"] for p in profiles if p.get("id", 0) > 0]
             if not user_ids: send_msg(peer, "❌ Нет участников."); return
             chosen = random.choice(user_ids)
-            send_msg(peer, "💬 {},  очевидно, {} — {}!".format(silent_mention_badge(sender, peer), word, silent_mention_badge(chosen, peer)))
+            send_msg(peer, "💬 {}, 🎯 очевидно, {} — {}!".format(silent_mention_badge(sender, peer), word, silent_mention_badge(chosen, peer)))
         except: pass
 
     elif cmd == "инфа":
