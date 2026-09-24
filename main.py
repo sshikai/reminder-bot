@@ -307,24 +307,25 @@ def get_marriage_partner(marriage, user_id):
     if not marriage: return None
     return marriage["user2"] if marriage["user1"] == user_id else marriage["user1"]
 
-def increment_msg_stat(peer, user_id, is_sticker=False):
+# ===== СТАТИСТИКА (теперь считаем и символы) =====
+def increment_msg_stat(peer, user_id, is_sticker=False, chars=0):
     with DB_LOCK:
-        CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins) VALUES(?,?,0,0,0,0)", (user_id, peer))
+        CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (user_id, peer))
         if is_sticker:
-            CONN.execute("UPDATE message_stats SET msg_count=msg_count+1, sticker_count=sticker_count+1 WHERE user_id=? AND peer_id=?", (user_id, peer))
+            CONN.execute("UPDATE message_stats SET msg_count=msg_count+1, sticker_count=sticker_count+1, char_count=char_count+? WHERE user_id=? AND peer_id=?", (chars, user_id, peer))
         else:
-            CONN.execute("UPDATE message_stats SET msg_count=msg_count+1 WHERE user_id=? AND peer_id=?", (user_id, peer))
+            CONN.execute("UPDATE message_stats SET msg_count=msg_count+1, char_count=char_count+? WHERE user_id=? AND peer_id=?", (chars, user_id, peer))
         CONN.commit()
 
 def increment_dice_win(peer, user_id):
     with DB_LOCK:
-        CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id) VALUES(?,?)", (user_id, peer))
+        CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (user_id, peer))
         CONN.execute("UPDATE message_stats SET dice_wins=dice_wins+1 WHERE user_id=? AND peer_id=?", (user_id, peer))
         CONN.commit()
 
 def increment_kmb_win(peer, user_id):
     with DB_LOCK:
-        CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id) VALUES(?,?)", (user_id, peer))
+        CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (user_id, peer))
         CONN.execute("UPDATE message_stats SET kmb_wins=kmb_wins+1 WHERE user_id=? AND peer_id=?", (user_id, peer))
         CONN.commit()
 
@@ -366,6 +367,7 @@ def init_db():
         CONN.execute("""CREATE TABLE IF NOT EXISTS message_stats (
             user_id INTEGER, peer_id INTEGER, msg_count INTEGER DEFAULT 0,
             sticker_count INTEGER DEFAULT 0, dice_wins INTEGER DEFAULT 0, kmb_wins INTEGER DEFAULT 0,
+            char_count INTEGER DEFAULT 0,
             PRIMARY KEY(user_id, peer_id))""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS bans (
             user_id INTEGER, peer_id INTEGER, banned_by INTEGER, ban_until INTEGER DEFAULT 0,
@@ -387,6 +389,7 @@ def init_db():
             "ALTER TABLE members ADD COLUMN mute_reason TEXT DEFAULT ''",
             "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''",
             "ALTER TABLE message_stats ADD COLUMN kmb_wins INTEGER DEFAULT 0",
+            "ALTER TABLE message_stats ADD COLUMN char_count INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try: CONN.execute(sql)
@@ -597,6 +600,33 @@ def _ls_apply_lastlogin(body):
         out.append("✅ id{} → последний вход {} (чат {})".format(uid, md.group(1), peer_id))
     return "\n".join(out) or "✅ Готово"
 
+# ===== /topmsg: ТЕПЕРЬ ДВА ЧИСЛА (символы, сообщения) =====
+def _ls_apply_topmsg(body):
+    out = []
+    for seg in _ls_segments(body):
+        uid, rest = _ls_user(seg)
+        peer_id = _ls_peer(seg)
+        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
+        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
+        if uid is None:
+            if len(nums) >= 3:
+                uid, chars, msgs = nums[0], nums[1], nums[2]
+            else:
+                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        else:
+            if len(nums) >= 2:
+                chars, msgs = nums[0], nums[1]
+            else:
+                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        if peer_id is None:
+            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        with DB_LOCK:
+            CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (uid, peer_id))
+            CONN.execute("UPDATE message_stats SET char_count=?, msg_count=? WHERE user_id=? AND peer_id=?", (chars, msgs, uid, peer_id))
+            CONN.commit()
+        out.append("✅ id{} → символы={}, сообщения={} (чат {})".format(uid, chars, msgs, peer_id))
+    return "\n".join(out) or "✅ Готово"
+
 def _ls_apply_top(body, field):
     out = []
     for seg in _ls_segments(body):
@@ -614,7 +644,7 @@ def _ls_apply_top(body, field):
         if peer_id is None or val is None:
             out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
         with DB_LOCK:
-            CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins) VALUES(?,?,0,0,0,0)", (uid, peer_id))
+            CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (uid, peer_id))
             CONN.execute("UPDATE message_stats SET {}=? WHERE user_id=? AND peer_id=?".format(field), (val, uid, peer_id))
             CONN.commit()
         out.append("✅ id{} → {} = {} (чат {})".format(uid, field, val, peer_id))
@@ -655,7 +685,7 @@ def handle_creator_ls(peer, text):
     elif low.startswith("/lastlogin"):
         send_msg(peer, _ls_apply_lastlogin(t[len("/lastlogin"):].strip()))
     elif low.startswith("/topmsg"):
-        send_msg(peer, _ls_apply_top(t[len("/topmsg"):].strip(), "msg_count"))
+        send_msg(peer, _ls_apply_topmsg(t[len("/topmsg"):].strip()))
     elif low.startswith("/topemj"):
         send_msg(peer, _ls_apply_top(t[len("/topemj"):].strip(), "sticker_count"))
     elif low.startswith("/rbrak"):
@@ -1376,10 +1406,11 @@ def handle_event(event):
             lines = []
             if top_type == "messages":
                 with DB_LOCK:
-                    total = CONN.execute("SELECT COUNT(*) FROM message_stats WHERE peer_id=? AND msg_count>0", (peer_id,)).fetchone()[0]
-                    rows = CONN.execute("SELECT user_id, msg_count FROM message_stats WHERE peer_id=? AND msg_count>0 ORDER BY msg_count DESC LIMIT ? OFFSET ?", (peer_id, per_page, (page-1)*per_page)).fetchall()
-                lines = ["💬 Топ сообщений:\n"]
-                for idx, r in enumerate(rows, (page-1)*per_page+1): lines.append("{}. {} — {}".format(idx, silent_mention_badge(r["user_id"], peer_id), r["msg_count"]))
+                    total = CONN.execute("SELECT COUNT(*) FROM message_stats WHERE peer_id=? AND (msg_count>0 OR char_count>0)", (peer_id,)).fetchone()[0]
+                    rows = CONN.execute("SELECT user_id, msg_count, char_count FROM message_stats WHERE peer_id=? AND (msg_count>0 OR char_count>0) ORDER BY char_count DESC LIMIT ? OFFSET ?", (peer_id, per_page, (page-1)*per_page)).fetchall()
+                lines = ["🏆 Топ пользователей", "[💬 символы | ✉ сообщения]\n"]
+                for idx, r in enumerate(rows, (page-1)*per_page+1):
+                    lines.append("{}. {} — {} | {}".format(idx, silent_mention_badge(r["user_id"], peer_id), r["char_count"], r["msg_count"]))
             elif top_type == "stickers":
                 with DB_LOCK:
                     total = CONN.execute("SELECT COUNT(*) FROM message_stats WHERE peer_id=? AND sticker_count>0", (peer_id,)).fetchone()[0]
@@ -1443,7 +1474,7 @@ def handle_event(event):
             nav.append({"action": {"type": "callback", "label": "{}/{}".format(page, total_pages), "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": cmd, "page": page+1})}, "color": "secondary"})
             cats1 = [
-                {"action": {"type": "callback", "label": "💬", "payload": json.dumps({"cmd": "top_messages", "page": 1})}, "color": "primary" if top_type=="messages" else "secondary"},
+                {"action": {"type": "callback", "label": "💬✉", "payload": json.dumps({"cmd": "top_messages", "page": 1})}, "color": "primary" if top_type=="messages" else "secondary"},
                 {"action": {"type": "callback", "label": "🎨", "payload": json.dumps({"cmd": "top_stickers", "page": 1})}, "color": "primary" if top_type=="stickers" else "secondary"},
                 {"action": {"type": "callback", "label": "🎲", "payload": json.dumps({"cmd": "top_dice", "page": 1})}, "color": "primary" if top_type=="dice" else "secondary"},
             ]
@@ -1578,7 +1609,8 @@ def handle_message(peer, sender, text, msg_obj):
 
     if sender > 0:
         is_sticker = any(att.get("type") == "sticker" for att in (msg_obj.get("attachments") or []))
-        try: increment_msg_stat(peer, sender, is_sticker)
+        chars = len(text or "")
+        try: increment_msg_stat(peer, sender, is_sticker, chars)
         except: pass
 
     action = msg_obj.get("action", {})
@@ -1668,7 +1700,7 @@ def handle_message(peer, sender, text, msg_obj):
                 if low == "отменить":
                     send_msg(peer, "❌ Очистка топа отменена.")
                     return
-                execute_top_clean(peer, pend.get("targets") or None, pend.get("types") or ["msg_count", "sticker_count", "dice_wins", "kmb_wins"])
+                execute_top_clean(peer, pend.get("targets") or None, pend.get("types") or ["msg_count", "char_count", "sticker_count", "dice_wins", "kmb_wins"])
                 send_msg(peer, "✅ Топ очищен.")
                 return
 
@@ -1763,7 +1795,6 @@ def handle_message(peer, sender, text, msg_obj):
                 JOIN statuses s ON us.status_id = s.id
                 WHERE us.user_id=? AND us.peer_id=?
             """, (target_id, peer)).fetchone()
-            all_st = CONN.execute("SELECT id FROM statuses WHERE peer_id=? ORDER BY id", (peer,)).fetchall()
         if not row and target_id not in (CREATOR_ID, LEADER_ID):
             send_msg(peer, "ℹ️ Участник {} еще не проявлял активность.".format(silent_mention_badge(target_id, peer)))
             return
@@ -1781,14 +1812,10 @@ def handle_message(peer, sender, text, msg_obj):
         first_ts = js_row["first_join"] if js_row else 0
         join_line = "📅 В чате: с {} ({} дн.)".format(fmt_join_date(join_ts), days_since(join_ts)) if join_ts else "📅 В чате: неизвестно"
         first_line_txt = "📅 Первый вход: {} ({} дн.)".format(fmt_join_date(first_ts), days_since(first_ts)) if first_ts else "📅 Первый вход: неизвестно"
+        # СТАТУС БЕЗ НОМЕРА
         status_str = "🎯Статус: Отсутствует."
         if st_row:
-            st_num = 0
-            for i, s in enumerate(all_st, 1):
-                if s["id"] == st_row["id"]:
-                    st_num = i
-                    break
-            status_str = "🎯Статус: {} ({})".format(st_row["name"], st_num)
+            status_str = "🎯Статус: {}".format(st_row["name"])
         msg = (
             "👥 Участник {}:\n"
             "🎮 Ник: {}\n"
@@ -2250,29 +2277,37 @@ def handle_message(peer, sender, text, msg_obj):
         if not main_admin:
             send_msg(peer, "⛔ Только главный админ и выше.")
             return
-        valid_types = {"сообщений": "msg_count", "эмодзи": "sticker_count", "стики": "sticker_count", "стикеров": "sticker_count", "кости": "dice_wins", "кнб": "kmb_wins"}
-        top_types = set()
+        group_fields = {
+            "сообщений": ["msg_count", "char_count"],
+            "эмодзи": ["sticker_count"],
+            "стики": ["sticker_count"],
+            "стикеров": ["sticker_count"],
+            "кости": ["dice_wins"],
+            "кнб": ["kmb_wins"],
+        }
+        group_names = {"сообщений": "символы/сообщения", "эмодзи": "эмодзи", "стики": "эмодзи", "стикеров": "эмодзи", "кости": "кости", "кнб": "кнб"}
+        selected = []
         for arg in args:
-            if arg.lower() in valid_types:
-                top_types.add(valid_types[arg.lower()])
-        if not top_types:
-            top_types = {"msg_count", "sticker_count", "dice_wins", "kmb_wins"}
+            g = arg.lower()
+            if g in group_fields and g not in selected:
+                selected.append(g)
+        if not selected:
+            selected = ["сообщений", "эмодзи", "кости", "кнб"]
+        top_types = []
+        for g in selected:
+            for f in group_fields[g]:
+                if f not in top_types: top_types.append(f)
         targets = extract_targets(" ".join(args), 0)
         if reply_from and reply_from not in targets:
             targets.append(reply_from)
-        pend = {"asker": sender, "ts": int(time.time()), "targets": targets, "types": list(top_types)}
+        pend = {"asker": sender, "ts": int(time.time()), "targets": targets, "types": top_types}
         set_setting(peer, "top_clean_pending", json.dumps(pend))
-        types_names = []
-        for t in top_types:
-            if t == "msg_count": types_names.append("сообщений")
-            elif t == "sticker_count": types_names.append("эмодзи")
-            elif t == "dice_wins": types_names.append("кости")
-            elif t == "kmb_wins": types_names.append("кнб")
+        names = ", ".join(group_names[g] for g in selected)
         if targets:
             who = ", ".join(silent_mention_badge(t, peer) for t in targets)
-            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ(ы): {} для: {}?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.".format(", ".join(types_names), who))
+            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ(ы): {} для: {}?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.".format(names, who))
         else:
-            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ(ы): {} для всех?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.".format(", ".join(types_names)))
+            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ(ы): {} для всех?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.".format(names))
 
     elif cmd == "чистка":
         if not admin:
@@ -2629,7 +2664,7 @@ def handle_message(peer, sender, text, msg_obj):
 
     elif cmd == "топ":
         kb = json.dumps({"inline": True, "buttons": [
-            [{"action": {"type": "callback", "label": "💬 Сообщения", "payload": json.dumps({"cmd": "top_messages", "page": 1})}, "color": "primary"},
+            [{"action": {"type": "callback", "label": "💬 Символы / ✉ Сообщения", "payload": json.dumps({"cmd": "top_messages", "page": 1})}, "color": "primary"},
              {"action": {"type": "callback", "label": "🎨 Стикеры", "payload": json.dumps({"cmd": "top_stickers", "page": 1})}, "color": "primary"}],
             [{"action": {"type": "callback", "label": "🎲 Кости", "payload": json.dumps({"cmd": "top_dice", "page": 1})}, "color": "primary"},
              {"action": {"type": "callback", "label": "✊✌️✋ КНБ", "payload": json.dumps({"cmd": "top_kmb", "page": 1})}, "color": "primary"}],
