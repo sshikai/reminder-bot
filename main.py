@@ -105,7 +105,7 @@ def get_zodiac(day, month):
     return "♓"
 
 def get_user_role(peer, user_id):
-    if user_id == CREATOR_ID or user_id == get_chat_owner(peer):
+    if user_id == CREATOR_ID or user_id == LEADER_ID or user_id == get_chat_owner(peer):
         return 4
     with DB_LOCK:
         row = CONN.execute("SELECT role FROM roles WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
@@ -114,6 +114,8 @@ def get_user_role(peer, user_id):
 def get_role_display(peer, user_id):
     if user_id == CREATOR_ID:
         return "🔹 Создатель бота"
+    if user_id == LEADER_ID:
+        return "🤴Лидер MD"
     return ROLE_NAMES.get(get_user_role(peer, user_id), "Участник")
 
 def set_user_role(peer, user_id, role):
@@ -136,8 +138,8 @@ def silent_mention_badge(user_id, peer_id):
     return "[https://vk.com/id{}|{}{}]".format(user_id, name, " " + badge if badge else "")
 
 def can_punish(sender, target, peer):
-    if sender == CREATOR_ID: return True
-    if target == CREATOR_ID: return False
+    if sender == CREATOR_ID or sender == LEADER_ID: return True
+    if target == CREATOR_ID or target == LEADER_ID: return False
     sender_role = get_user_role(peer, sender)
     target_role = get_user_role(peer, target)
     if sender == get_chat_owner(peer): return target_role < 4 or target != get_chat_owner(peer)
@@ -237,7 +239,7 @@ def build_br_page(page):
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
 def is_md_member(user_id):
-    if user_id == CREATOR_ID: return True
+    if user_id == CREATOR_ID or user_id == LEADER_ID: return True
     now = time.time()
     if now - MD_MEMBERS_CACHE["time"] > 300 or not MD_MEMBERS_CACHE["members"]:
         try:
@@ -422,21 +424,21 @@ def get_chat_owner(peer):
     return oid
 
 def is_real_owner(sender, peer):
-    return sender > 0 and (sender == CREATOR_ID or sender == get_chat_owner(peer))
+    return sender > 0 and (sender == CREATOR_ID or sender == LEADER_ID or sender == get_chat_owner(peer))
 
 def is_moderator(sender, peer):
     if sender <= 0: return False
-    if sender == CREATOR_ID or sender == get_chat_owner(peer): return True
+    if sender == CREATOR_ID or sender == LEADER_ID or sender == get_chat_owner(peer): return True
     return get_user_role(peer, sender) >= 1
 
 def is_admin(sender, peer):
     if sender <= 0: return False
-    if sender == CREATOR_ID or sender == get_chat_owner(peer): return True
+    if sender == CREATOR_ID or sender == LEADER_ID or sender == get_chat_owner(peer): return True
     return get_user_role(peer, sender) >= 2
 
 def is_main_admin(sender, peer):
     if sender <= 0: return False
-    if sender == CREATOR_ID or sender == get_chat_owner(peer): return True
+    if sender == CREATOR_ID or sender == LEADER_ID or sender == get_chat_owner(peer): return True
     return get_user_role(peer, sender) >= 3
 
 def is_owner(sender, peer):
@@ -504,6 +506,15 @@ def extract_targets(text, reply_from):
     for m in re.finditer(r"\[id(\d+)\|", text, re.I): ids.append(int(m.group(1)))
     for m in re.finditer(r"[@*]id(\d+)", text, re.I): ids.append(int(m.group(1)))
     for m in re.finditer(r"\b(\d{5,})\b", text): ids.append(int(m.group(1)))
+    for m in re.finditer(r"https?://vk\.(com|ru)/id(\d+)", text, re.I): ids.append(int(m.group(2)))
+    for m in re.finditer(r"https?://vk\.(com|ru)/([a-zA-Z0-9._]+)", text, re.I):
+        screen_name = m.group(2)
+        if screen_name.lower() not in ("id", "club", "public", "event", "app"):
+            try:
+                res = VK.utils.resolveScreenName(screen_name=screen_name)
+                if res and res.get("type") == "user":
+                    ids.append(int(res["object_id"]))
+            except: pass
     seen, result = set(), []
     for v in ids:
         if v not in seen: seen.add(v); result.append(v)
@@ -521,7 +532,6 @@ def parse_reply_attachments(reply_obj):
             if ph.get("owner_id") and ph.get("id"): parts.append("photo{}_{}".format(ph['owner_id'], ph['id']))
     return ", ".join(parts)
 
-# ===== СЛУЖЕБНЫЕ КОМАНДЫ СОЗДАТЕЛЯ (ТОЛЬКО ЛС) =====
 def _ls_segments(body):
     return [s.strip() for s in body.split(",") if s.strip()]
 
@@ -757,25 +767,15 @@ def check_birthdays(peer):
                 CONN.commit()
     set_setting(peer, "last_bday_check_date", today_str)
 
-def execute_top_clean(peer, targets):
+def execute_top_clean(peer, targets, top_types):
     with DB_LOCK:
-        cur_members = set(r["user_id"] for r in CONN.execute("SELECT user_id FROM members WHERE peer_id=?", (peer,)).fetchall())
         if targets:
             for t in targets:
-                CONN.execute("DELETE FROM message_stats WHERE user_id=? AND peer_id=?", (t, peer))
-                CONN.execute("UPDATE join_stats SET in_top=0 WHERE user_id=? AND peer_id=?", (t, peer))
+                for field in top_types:
+                    CONN.execute("UPDATE message_stats SET {}=0 WHERE user_id=? AND peer_id=?".format(field), (t, peer))
         else:
-            CONN.execute("DELETE FROM message_stats WHERE peer_id=?", (peer,))
-            CONN.execute("UPDATE join_stats SET in_top=0 WHERE peer_id=?", (peer,))
-        js_rows = CONN.execute("SELECT user_id FROM join_stats WHERE peer_id=? AND in_top=1", (peer,)).fetchall()
-        for r in js_rows:
-            if r["user_id"] not in cur_members:
-                CONN.execute("UPDATE join_stats SET in_top=0 WHERE user_id=? AND peer_id=?", (r["user_id"], peer))
-                CONN.execute("DELETE FROM message_stats WHERE user_id=? AND peer_id=?", (r["user_id"], peer))
-        ms_rows = CONN.execute("SELECT user_id FROM message_stats WHERE peer_id=?", (peer,)).fetchall()
-        for r in ms_rows:
-            if r["user_id"] not in cur_members:
-                CONN.execute("DELETE FROM message_stats WHERE user_id=? AND peer_id=?", (r["user_id"], peer))
+            for field in top_types:
+                CONN.execute("UPDATE message_stats SET {}=0 WHERE peer_id=?".format(field), (peer,))
         CONN.commit()
 
 def get_help_main_buttons():
@@ -904,8 +904,7 @@ HELP_MAIN_ADMIN_TEXT = (
     "4. Мд +приветствие / -приветствие (ответом)\n"
     "5. Мд запретить игры — запретить игры в чате.\n"
     "6. Мд разрешить игры — разрешить игры в чате.\n"
-    "7. Мд очистить топ @игроки — очистить конкретных из топа.\n"
-    "8. Мд очистить топ — очистить всех из топа.\n"
+    "7. Мд очистить топ [@игроки] [тип] — очистить топы.\n"
     "Имеет возможности прошлых ролей."
 )
 HELP_GAMES_TEXT = (
@@ -926,7 +925,6 @@ HELP_MD_TEXT = (
     "2. Мд объявы — вкл/выкл объявления."
 )
 
-# ===== HANDLE EVENT =====
 def handle_event(event):
     try:
         obj = event.object if hasattr(event, 'object') else event.obj
@@ -946,7 +944,6 @@ def handle_event(event):
                     event_data=json.dumps({"type": "show_snackbar", "text": text}))
             except: pass
 
-        # ===== ПРОВЕРКА: кнопки =====
         if cmd in ["check_warns", "check_mutes", "check_back"]:
             target_id = int(payload.get("target", 0))
             if not target_id: snackbar("❌ Ошибка"); return
@@ -1020,7 +1017,6 @@ def handle_event(event):
                 send_msg(peer_id, "\n".join(lines), keyboard=kb)
                 snackbar("✅ Выполнено"); return
 
-        # ===== КОСТИ =====
         if cmd in ["dice_accept", "dice_decline", "dice_roll", "dice_punish_mute", "dice_punish_mention", "dice_punish_pardon"]:
             game_id = payload.get("game_id", 0)
             with DB_LOCK:
@@ -1133,7 +1129,6 @@ def handle_event(event):
                     silent_mention_badge(winner, peer_id), silent_mention_badge(loser, peer_id)))
                 snackbar("🕊 Помилован!"); return
 
-        # ===== КНБ =====
         if cmd in ["kmb_accept", "kmb_decline", "kmb_choice"]:
             game_id = payload.get("game_id", 0)
             with DB_LOCK:
@@ -1216,7 +1211,6 @@ def handle_event(event):
                             silent_mention_badge(winner, chat_peer), emojis[wc]))
                 return
 
-        # ===== БРАК =====
         if cmd in ["marriage_accept", "marriage_decline"]:
             proposer = payload.get("proposer", 0)
             target = payload.get("target", 0)
@@ -1250,7 +1244,6 @@ def handle_event(event):
                     silent_mention_badge(target, peer_id), silent_mention_badge(proposer, peer_id)))
                 snackbar("❌ Отказ"); return
 
-        # ===== ОПРОСЫ =====
         if cmd == "poll_vote":
             now_ts = int(time.time())
             today_str = get_msk_now().strftime("%Y-%m-%d")
@@ -1272,7 +1265,6 @@ def handle_event(event):
                             snackbar("✅ Отметился!")
             except: snackbar("❌ Ошибка"); return
 
-        # ===== ПАГИНАЦИЯ =====
         if cmd == "page_info": snackbar("📄 Стр. {} из {}".format(payload.get("page",1), payload.get("total",1))); return
         cmid = obj.get("conversation_message_id")
 
@@ -1359,7 +1351,6 @@ def handle_event(event):
                 except: snackbar("⚠️ Не удалось обновить")
             snackbar("📄 Стр. {}".format(page)); return
 
-        # ===== ТОПЫ =====
         if cmd in ["top_messages", "top_stickers", "top_dice", "top_marriages", "top_kmb", "top_days"]:
             top_type = cmd.replace("top_", "")
             page = int(payload.get("page", 1))
@@ -1392,17 +1383,33 @@ def handle_event(event):
                 for idx, r in enumerate(rows, (page-1)*per_page+1): lines.append("{}. {} — {}".format(idx, silent_mention_badge(r["user_id"], peer_id), r["kmb_wins"]))
             elif top_type == "marriages":
                 with DB_LOCK:
-                    total = CONN.execute("SELECT COUNT(*) FROM marriages WHERE peer_id=?", (peer_id,)).fetchone()[0]
-                    rows = CONN.execute("SELECT user1, user2, created_at FROM marriages WHERE peer_id=? ORDER BY created_at ASC LIMIT ? OFFSET ?", (peer_id, per_page, (page-1)*per_page)).fetchall()
+                    rows_all = CONN.execute("SELECT user1, user2, created_at FROM marriages WHERE peer_id=? ORDER BY created_at ASC", (peer_id,)).fetchall()
+                    active_rows = []
+                    for r in rows_all:
+                        m1 = CONN.execute("SELECT 1 FROM members WHERE user_id=? AND peer_id=?", (r["user1"], peer_id)).fetchone()
+                        m2 = CONN.execute("SELECT 1 FROM members WHERE user_id=? AND peer_id=?", (r["user2"], peer_id)).fetchone()
+                        if m1 or m2: active_rows.append(r)
+                    total = len(active_rows)
+                    start = (page-1)*per_page
+                    end = start + per_page
+                    rows_page = active_rows[start:end]
                 lines = ["💒 Топ браков:\n"]
                 now_ts = int(time.time())
-                for idx, r in enumerate(rows, (page-1)*per_page+1):
+                for idx, r in enumerate(rows_page, start+1):
                     days = (now_ts - r["created_at"]) // 86400
                     lines.append("{}. {} и {} ({} дн.)".format(idx, silent_mention_badge(r["user1"], peer_id), silent_mention_badge(r["user2"], peer_id), days))
             elif top_type == "days":
                 with DB_LOCK:
-                    total = CONN.execute("SELECT COUNT(*) FROM join_stats WHERE peer_id=? AND in_top=1", (peer_id,)).fetchone()[0]
-                    rows = CONN.execute("SELECT user_id, first_join FROM join_stats WHERE peer_id=? AND in_top=1 ORDER BY first_join ASC LIMIT ? OFFSET ?", (peer_id, per_page, (page-1)*per_page)).fetchall()
+                    total = CONN.execute("""
+                        SELECT COUNT(*) FROM join_stats j
+                        JOIN members m ON j.user_id = m.user_id AND j.peer_id = m.peer_id
+                        WHERE j.peer_id=?
+                    """, (peer_id,)).fetchone()[0]
+                    rows = CONN.execute("""
+                        SELECT j.user_id, j.first_join FROM join_stats j
+                        JOIN members m ON j.user_id = m.user_id AND j.peer_id = m.peer_id
+                        WHERE j.peer_id=? ORDER BY j.first_join ASC LIMIT ? OFFSET ?
+                    """, (peer_id, per_page, (page-1)*per_page)).fetchall()
                 lines = ["📅 Топ дней в чате:\n"]
                 for idx, r in enumerate(rows, (page-1)*per_page+1):
                     lines.append("{}. {} — {} дн.".format(idx, silent_mention_badge(r["user_id"], peer_id), days_since(r["first_join"])))
@@ -1428,7 +1435,6 @@ def handle_event(event):
                 except: snackbar("⚠️ Не удалось обновить")
             snackbar("📄 Стр. {}".format(page)); return
 
-        # ===== HELP =====
         if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls",
                     "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_games", "help_md", "help_back", "help_back_main"]:
             checks = {
@@ -1498,10 +1504,37 @@ def build_status_page(peer, page):
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
 def handle_message(peer, sender, text, msg_obj):
-    # ===== СЛУЖЕБНЫЕ КОМАНДЫ СОЗДАТЕЛЯ В ЛС =====
     if peer < 2000000000:
-        if sender == CREATOR_ID and peer == CREATOR_ID and text.strip().startswith("/"):
-            handle_creator_ls(peer, text)
+        if sender in (CREATOR_ID, LEADER_ID) and peer == sender:
+            low = text.strip().lower()
+            if low == "/чаты":
+                send_msg(peer, "⏳ Загрузка списка бесед...")
+                chats = get_all_bot_chats()
+                if not chats:
+                    send_msg(peer, "📭 Бот пока не зафиксировал ни одной беседы.")
+                    return
+                lines = ["📊 Список бесед с ботом:\n"]
+                idx = 1
+                for i in range(0, len(chats), 100):
+                    chunk = chats[i:i+100]
+                    try:
+                        convos = VK.messages.getConversationsById(peer_ids=chunk)
+                        for item in convos.get("items", []):
+                            p_id = item.get("peer", {}).get("id", 0)
+                            title = item.get("chat_settings", {}).get("title", "Недоступно")
+                            owner = item.get("chat_settings", {}).get("owner_id", 0)
+                            owner_name = get_user_name(owner) if owner > 0 else "Нет/ЛС"
+                            lines.append("{}. {} | {} | {}".format(idx, p_id, title, owner_name))
+                            idx += 1
+                    except Exception as e:
+                        lines.append("Ошибка: {}".format(e))
+                msg_text = "\n".join(lines)
+                for i in range(0, len(msg_text), 4000):
+                    send_msg(peer, msg_text[i:i+4000])
+                return
+            elif text.strip().startswith("/"):
+                handle_creator_ls(peer, text)
+                return
         return
 
     if sender > 0:
@@ -1577,7 +1610,6 @@ def handle_message(peer, sender, text, msg_obj):
 
     update_member_activity(peer, sender)
 
-    # ===== ПОДТВЕРЖДЕНИЕ ОЧИСТКИ ТОПА =====
     pend_raw = get_setting(peer, "top_clean_pending", "")
     if pend_raw:
         try: pend = json.loads(pend_raw)
@@ -1596,11 +1628,10 @@ def handle_message(peer, sender, text, msg_obj):
                 if low == "отменить":
                     send_msg(peer, "❌ Очистка топа отменена.")
                     return
-                execute_top_clean(peer, pend.get("targets") or None)
+                execute_top_clean(peer, pend.get("targets") or None, pend.get("types") or ["msg_count", "sticker_count", "dice_wins", "kmb_wins"])
                 send_msg(peer, "✅ Топ очищен.")
                 return
 
-    # КЭШ СООБЩЕНИЙ ДЛЯ ЧИСТКИ
     if sender > 0:
         cmid0 = msg_obj.get("conversation_message_id") or 0
         if cmid0:
@@ -1666,7 +1697,7 @@ def handle_message(peer, sender, text, msg_obj):
         owners_line = []
         if chat_owner_id: owners_line.append(silent_mention_badge(chat_owner_id, peer))
         for u in co_owners:
-            if u != chat_owner_id: owners_line.append(silent_mention_badge(u, peer))
+            if u != chat_owner_id and u != LEADER_ID: owners_line.append(silent_mention_badge(u, peer))
         lines = []
         lines.append("👑 Владелец: {}".format(", ".join(owners_line) if owners_line else "не определён"))
         lines.append("🥷 Главные Админы(3): {}".format(", ".join(silent_mention_badge(u, peer) for u in main_admins) if main_admins else "отсутствуют"))
@@ -1686,7 +1717,13 @@ def handle_message(peer, sender, text, msg_obj):
         with DB_LOCK:
             row = CONN.execute("SELECT nickname, warnings, warn_durations, warn_expiry, streak, join_time FROM members WHERE user_id=? AND peer_id=?", (target_id, peer)).fetchone()
             js_row = CONN.execute("SELECT first_join FROM join_stats WHERE user_id=? AND peer_id=?", (target_id, peer)).fetchone()
-        if not row and target_id != CREATOR_ID:
+            st_row = CONN.execute("""
+                SELECT s.name, s.id FROM user_statuses us
+                JOIN statuses s ON us.status_id = s.id
+                WHERE us.user_id=? AND us.peer_id=?
+            """, (target_id, peer)).fetchone()
+            all_st = CONN.execute("SELECT id FROM statuses WHERE peer_id=? ORDER BY id", (peer,)).fetchall()
+        if not row and target_id not in (CREATOR_ID, LEADER_ID):
             send_msg(peer, "ℹ️ Участник {} еще не проявлял активность.".format(silent_mention_badge(target_id, peer)))
             return
         nick = row["nickname"] if row else "Не установлен"
@@ -1703,6 +1740,16 @@ def handle_message(peer, sender, text, msg_obj):
         first_ts = js_row["first_join"] if js_row else 0
         join_line = "📅 В чате: с {} ({} дн.)".format(fmt_join_date(join_ts), days_since(join_ts)) if join_ts else "📅 В чате: неизвестно"
         first_line_txt = "📅 Первый вход: {} ({} дн.)".format(fmt_join_date(first_ts), days_since(first_ts)) if first_ts else "📅 Первый вход: неизвестно"
+        
+        status_str = "🎯Статус: Отсутствует."
+        if st_row:
+            st_num = 0
+            for i, s in enumerate(all_st, 1):
+                if s["id"] == st_row["id"]:
+                    st_num = i
+                    break
+            status_str = "🎯Статус: {} ({})".format(st_row["name"], st_num)
+            
         msg = (
             "👥 Участник {}:\n"
             "🎮 Ник: {}\n"
@@ -1711,9 +1758,10 @@ def handle_message(peer, sender, text, msg_obj):
             "{}\n"
             "🙆‍️ Роль: {}\n"
             "{}\n"
+            "{}\n"
             "🔥 Серия посещения: {} дн. {}"
         ).format(silent_mention_badge(target_id, peer), nick, warns, max_warns, durations_raw,
-                 join_line, first_line_txt, role_str, marriage_str, streak, emoji)
+                 join_line, first_line_txt, role_str, status_str, marriage_str, streak, emoji)
         send_msg(peer, msg)
 
     elif cmd == "ники":
@@ -2077,7 +2125,7 @@ def handle_message(peer, sender, text, msg_obj):
         if not targets: send_msg(peer, "❌ Укажите пользователя: `Мд кости @игрок`"); return
         opponent = targets[0]
         if opponent == sender: send_msg(peer, "❌ Нельзя играть с самим собой!"); return
-        if opponent == CREATOR_ID or opponent == get_chat_owner(peer): send_msg(peer, "❌ Нельзя вызвать владельца."); return
+        if opponent == CREATOR_ID or opponent == LEADER_ID or opponent == get_chat_owner(peer): send_msg(peer, "❌ Нельзя вызвать владельца."); return
         if dice_blocked(peer, sender): send_msg(peer, "❌ Ты не можешь играть: оба наказания активны!"); return
         if dice_blocked(peer, opponent): send_msg(peer, "❌ {} не может играть!".format(silent_mention_badge(opponent, peer))); return
         with DB_LOCK:
@@ -2163,14 +2211,33 @@ def handle_message(peer, sender, text, msg_obj):
         if not main_admin:
             send_msg(peer, "⛔ Только главный админ и выше.")
             return
-        targets = extract_targets(" ".join(args), 0) if args else []
-        pend = {"asker": sender, "ts": int(time.time()), "targets": targets}
+        valid_types = {"сообщений": "msg_count", "эмодзи": "sticker_count", "стики": "sticker_count", "стикеров": "sticker_count", "кости": "dice_wins", "кнб": "kmb_wins"}
+        top_types = set()
+        for arg in args:
+            if arg.lower() in valid_types:
+                top_types.add(valid_types[arg.lower()])
+        if not top_types:
+            top_types = {"msg_count", "sticker_count", "dice_wins", "kmb_wins"}
+        
+        targets = extract_targets(" ".join(args), 0)
+        if reply_from and reply_from not in targets:
+            targets.append(reply_from)
+            
+        pend = {"asker": sender, "ts": int(time.time()), "targets": targets, "types": list(top_types)}
         set_setting(peer, "top_clean_pending", json.dumps(pend))
+        
+        types_names = []
+        for t in top_types:
+            if t == "msg_count": types_names.append("сообщений")
+            elif t == "sticker_count": types_names.append("эмодзи")
+            elif t == "dice_wins": types_names.append("кости")
+            elif t == "kmb_wins": types_names.append("кнб")
+            
         if targets:
             who = ", ".join(silent_mention_badge(t, peer) for t in targets)
-            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ для: {}?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.".format(who))
+            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ(ы): {} для: {}?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.".format(", ".join(types_names), who))
         else:
-            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ полностью (всех людей)?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.")
+            send_msg(peer, "⚠️ Вы уверены, что хотите очистить топ(ы): {} для всех?\nНапишите в чат «Подтвердить» или «Отменить». ⏰ 1 минута.".format(", ".join(types_names)))
 
     elif cmd == "чистка":
         if not admin:
@@ -2430,7 +2497,7 @@ def handle_message(peer, sender, text, msg_obj):
         targets = extract_targets(" ".join(args[:-1]), reply_from)
         if not targets: send_msg(peer, "❌ Укажите игрока."); return
         for t in targets:
-            if t == CREATOR_ID or t == get_chat_owner(peer): send_msg(peer, "❌ Нельзя менять роль владельца."); continue
+            if t == CREATOR_ID or t == LEADER_ID or t == get_chat_owner(peer): send_msg(peer, "❌ Нельзя менять роль владельца."); continue
             old = get_user_role(peer, t)
             if old == 4 and not real_owner: send_msg(peer, "⛔ Нельзя менять совладельца."); continue
             set_user_role(peer, t, target_role)
@@ -2443,7 +2510,7 @@ def handle_message(peer, sender, text, msg_obj):
         targets = extract_targets(" ".join(args), reply_from)
         if not targets: send_msg(peer, "❌ Укажите игрока."); return
         for t in targets:
-            if t == CREATOR_ID or t == get_chat_owner(peer): send_msg(peer, "❌ Нельзя снять владельца."); continue
+            if t == CREATOR_ID or t == LEADER_ID or t == get_chat_owner(peer): send_msg(peer, "❌ Нельзя снять владельца."); continue
             old = get_user_role(peer, t)
             if old == 0: send_msg(peer, "ℹ️ {} уже участник.".format(silent_mention_badge(t, peer))); continue
             if old == 4 and not real_owner: send_msg(peer, "⛔ Только владелец."); continue
@@ -2538,11 +2605,16 @@ def handle_message(peer, sender, text, msg_obj):
 
     elif cmd == "браки":
         with DB_LOCK:
-            rows = CONN.execute("SELECT user1, user2, created_at FROM marriages WHERE peer_id=? ORDER BY created_at DESC", (peer,)).fetchall()
-        if not rows: send_msg(peer, "💒 Браков пока нет."); return
+            rows_all = CONN.execute("SELECT user1, user2, created_at FROM marriages WHERE peer_id=? ORDER BY created_at DESC", (peer,)).fetchall()
+            active_rows = []
+            for r in rows_all:
+                m1 = CONN.execute("SELECT 1 FROM members WHERE user_id=? AND peer_id=?", (r["user1"], peer)).fetchone()
+                m2 = CONN.execute("SELECT 1 FROM members WHERE user_id=? AND peer_id=?", (r["user2"], peer)).fetchone()
+                if m1 or m2: active_rows.append(r)
+        if not active_rows: send_msg(peer, "💒 Браков пока нет."); return
         now_ts = int(time.time())
         lines = ["💒 Браки пользователей чата:\n"]
-        for r in rows:
+        for r in active_rows:
             days = (now_ts - r["created_at"]) // 86400
             lines.append("{} и {} ({} дн.)".format(silent_mention_badge(r["user1"], peer), silent_mention_badge(r["user2"], peer), days))
         send_msg(peer, "\n".join(lines))
@@ -2649,12 +2721,13 @@ def handle_message(peer, sender, text, msg_obj):
         word = " ".join(args) if args else "это"
         try:
             members_resp = VK.messages.getConversationMembers(peer_id=peer)
-            profiles = members_resp.get("profiles", [])
-            user_ids = [p["id"] for p in profiles if p.get("id", 0) > 0]
+            items = members_resp.get("items", [])
+            user_ids = [int(i.get("member_id", 0)) for i in items if int(i.get("member_id", 0)) > 0]
             if not user_ids: send_msg(peer, "❌ Нет участников."); return
             chosen = random.choice(user_ids)
             send_msg(peer, "💬 {}, 🎯 очевидно, {} — {}!".format(silent_mention_badge(sender, peer), word, silent_mention_badge(chosen, peer)))
-        except: pass
+        except Exception as e:
+            print("кто error:", e)
 
     elif cmd == "инфа":
         pct = random.randint(0, 100)
@@ -2700,16 +2773,25 @@ def handle_message(peer, sender, text, msg_obj):
         else: send_msg(peer, "ℹ️ Приветствие не установлено.")
 
     elif cmd == "значок":
-        if not args: send_msg(peer, "❌ Формат: `Мд значок <эмодзи>`"); return
-        emoji = args[0]
-        EMOJI_RE = re.compile("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\U0001F1E6-\U0001F1FF\u2190-\u21FF\u2B00-\u2BFF]+", flags=re.UNICODE)
-        if not re.fullmatch(EMOJI_RE, emoji):
-            send_msg(peer, "❌ Значок должен быть эмодзи!")
+        if not args: send_msg(peer, "❌ Формат: `Мд значок <эмодзи/цифры>`"); return
+        badge_str = args[0]
+        if len(badge_str) > 4:
+            send_msg(peer, "❌ Значок не может быть длиннее 4 символов!")
             return
+        without_digits = "".join(c for c in badge_str if not c.isdigit())
+        if without_digits:
+            if len(without_digits) > 2:
+                send_msg(peer, "❌ Значок может содержать максимум 1 эмодзи и цифры!")
+                return
+            EMOJI_RE = re.compile("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\U0001F1E6-\U0001F1FF\u2190-\u21FF\u2B00-\u2BFF]+")
+            stripped = EMOJI_RE.sub("", without_digits)
+            if stripped:
+                send_msg(peer, "❌ Значок может содержать только 1 эмодзи и цифры!")
+                return
         with DB_LOCK:
-            CONN.execute("INSERT OR REPLACE INTO badges(user_id, peer_id, emoji) VALUES(?,?,?)", (sender, peer, emoji))
+            CONN.execute("INSERT OR REPLACE INTO badges(user_id, peer_id, emoji) VALUES(?,?,?)", (sender, peer, badge_str))
             CONN.commit()
-        send_msg(peer, "✅ Значок {} установлен!".format(emoji))
+        send_msg(peer, "✅ Значок {} установлен!".format(badge_str))
 
     elif cmd == "удалить_значок":
         with DB_LOCK:
@@ -2841,6 +2923,7 @@ def timer_loop():
                     if get_setting(peer, "last_23_check", "") != today_str:
                         admins = set(get_users_with_min_role(peer, 2))
                         admins.add(CREATOR_ID)
+                        admins.add(LEADER_ID)
                         co = get_chat_owner(peer)
                         if co: admins.add(co)
                         with DB_LOCK:
