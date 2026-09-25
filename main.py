@@ -73,7 +73,7 @@ VALID_COMMANDS = [
     "назначить", "снять", "голоса", "тишина", "тишина_офф", "проверка_опроса", "бр",
     "мут", "снять_мут", "муты", "преды", "предлист", "статус", "статусы", "проверка", "кости",
     "объява", "обьява", "объявы", "обьявы", "объяв", "обьяв", "кд_объяв", "кд_обьяв",
-    "топ", "браки", "брак", "развод", "онлайн", "др", "кто", "инфа", "монетка",
+    "топ", "браки", "брак", "развод", "онлайн", "др", "кто", "кто_я", "инфа", "монетка",
     "+правила", "-правила", "правила", "+приветствие", "-приветствие", "приветствие",
     "значок", "удалить_значок", "значки", "кнб", "чистка", "айди", "запретить_игры", "разрешить_игры",
     "очистить_топ"
@@ -83,13 +83,90 @@ ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "�
 
 RU_MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 
-# ===== ВАЛИДАЦИЯ ЗНАЧКОВ: ровно 1 эмодзи-кластер + цифры =====
+# ===== ВАЛИДАЦИЯ ЗНАЧКОВ =====
 _EM_BASE = ("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F"
             "\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F"
             "\U0001FA70-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\u2B00-\u2BFF\u2190-\u21FF\u2300-\u23FF"
             "\U0001F1E6-\U0001F1FF\u24C2\u2702-\u27B0\U0001F004\U0001F0CF\U0001F170-\U0001F251]")
 _EM_ONE = _EM_BASE + "[\U0001F3FB-\U0001F3FF]?\uFE0F?"
 EM_CLUSTER = re.compile("^" + _EM_ONE + "(?:\u200D" + _EM_ONE + ")*$")
+
+# ===== МД КТО Я: СПИСКИ СЛОВ =====
+WHO_ADJ = [
+    "тайный", "безумный", "сонный", "хитрый", "гордый", "дерзкий", "мудрый", "лютый", "ленивый", "грустный",
+    "честный", "добрый", "грозный", "дикий", "верный", "робкий", "нежный", "бойкий", "строгий", "упрямый",
+    "мирный", "жуткий", "милый", "чудной", "скромный", "хмурый", "бодрый", "хладнокровный", "растерянный", "уставший",
+    "вдохновленный", "хвастливый", "мнительный", "отчаянный", "наивный", "суровый", "ласковый", "скрытный", "ревнивый", "азартный",
+    "космический", "призрачный", "огненный", "ледяной", "грозовой", "звездный", "теневой", "лунный", "солнечный", "ветреный",
+    "болотный", "подземный", "небесный", "морской", "туманный", "радиоактивный", "токсичный", "квантовый", "магический", "мистический",
+    "цифровой", "виртуальный", "неоновый", "пиксельный", "кибернетический", "древний", "вечный", "проклятый", "святой", "потусторонний",
+    "железный", "золотой", "алмазный", "плюшевый", "деревянный", "каменный", "стеклянный", "бархатный", "шелковый", "ватный",
+    "бумажный", "картонный", "пластиковый", "резиновый", "ржавый", "глянцевый", "матовый", "колючий", "пушистый", "гладкий",
+    "липкий", "скользкий", "твердый", "мягкий", "хрупкий", "жидкий", "газообразный", "порошковый", "шершавый", "летучий",
+    "гигантский", "крошечный", "круглый", "квадратный", "плоский", "кривой", "прямой", "бесконечный", "микроскопический", "массивный",
+    "тонкий", "толстый", "узкий", "широкий", "вытянутый", "раздутый", "сжатый", "угловатый", "симметричный", "безразмерный",
+    "кислый", "сладкий", "горький", "соленый", "острый", "пряный", "мятный", "шоколадный", "ванильный", "чесночный",
+    "сырный", "карамельный", "лимонный", "имбирный", "медовый", "жареный", "вареный", "сырой", "копченый", "тушеный",
+    "четкий", "хайповый", "кринжовый", "рофляный", "легендарный", "эпический", "дефолтный", "душный", "имбовый", "читерский",
+    "забивной", "суетной", "пафосный", "блатной", "козырной", "фартовый", "люксовый", "бюджетный", "запрещенный", "заряженный",
+    "базированный", "гигачадский", "мемный", "флексящий", "вайбовый", "чилловый", "попкорновый", "пельменный", "чебуречный",
+    "красный", "синий", "зеленый", "желтый", "фиолетовый", "оранжевый", "розовый", "черный", "белый", "серый",
+    "бордовый", "бирюзовый", "золотистый", "серебряный", "изумрудный", "яркий", "тусклый", "светящийся", "бледный", "разноцветный",
+    "богатый", "бедный", "успешный", "потерянный", "сломанный", "починенный", "забытый", "популярный", "секретный", "опасный",
+    "безопасный", "редкий", "обычный", "элитный", "финальный", "начальный", "главный", "запасной", "невидимый", "неуязвимый",
+    "серверный", "региональный", "деловой", "бригадный", "гаражный", "трассовый", "премиальный", "дрифтовый"
+]
+WHO_NOUN = [
+    "енот", "кот", "пес", "лис", "волк", "медведь", "лев", "тигр", "панда", "хомяк",
+    "суслик", "выдра", "бобр", "заяц", "еж", "крот", "олень", "лось", "кабан", "слон",
+    "жираф", "бегемот", "носорог", "обезьяна", "ленивец", "коала", "кенгуру", "утконос", "пингвин", "фламинго",
+    "сова", "орел", "ворон", "попугай", "голубь", "лебедь", "акула", "дельфин", "кит", "краб",
+    "кальмар", "осьминог", "креветка", "рак", "медуза", "ящерица", "змея", "хамелеон", "лягушка", "жаба",
+    "дракон", "феникс", "единорог", "грифон", "пегас", "кентавр", "минотавр", "сфинкс", "гарпия", "сирена",
+    "эльф", "гном", "орк", "гоблин", "тролль", "огр", "маг", "чародей", "шаман", "некромант",
+    "ведьма", "колдун", "алхимик", "рыцарь", "паладин", "самурай", "ниндзя", "викинг", "пират", "призрак",
+    "вампир", "оборотень", "зомби", "мумия", "демон", "ангел", "титан", "голем", "джинн", "леший",
+    "шпион", "детектив", "хакер", "программист", "геймер", "стример", "блогер", "админ", "модератор", "босс",
+    "директор", "шеф", "повар", "официант", "доктор", "хирург", "ученый", "профессор", "космонавт", "пилот",
+    "капитан", "штурман", "водитель", "гонщик", "каскадер", "строитель", "инженер", "архитектор", "художник", "музыкант",
+    "актер", "режиссер", "писатель", "поэт", "фотограф", "дизайнер", "модель", "стилист", "учитель", "тренер",
+    "синяк", "крекер", "торетто", "стрипуха",
+    "робот", "киборг", "андроид", "дрон", "процессор", "чип", "сервер", "ноут", "комп", "телефон",
+    "плеер", "калькулятор", "лазер", "бластер", "ракета", "спутник", "телескоп", "микроскоп", "радар", "компас",
+    "фонарик", "проектор", "экран", "монитор", "джойстик", "геймпад", "кабель", "провод", "переходник", "флешка",
+    "пельмень", "чебурек", "хинкали", "блин", "вареник", "пирожок", "пончик", "круассан", "кекс", "торт",
+    "пицца", "бургер", "хотдог", "суши", "ролл", "картофан", "огурец", "помидор", "баклажан", "кабачок",
+    "арбуз", "дыня", "ананас", "банан", "яблоко", "груша", "лимон", "апельсин", "орех", "гриб",
+    "суп", "борщ", "майонез", "кетчуп", "соус", "горчица", "сухарик", "чипс", "попкорн", "зефир",
+    "кактус", "фикус", "баобаб", "дуб", "цветок", "роза", "лотос", "кристалл", "алмаз", "изумруд",
+    "рубин", "янтарь", "метеорит", "астероид", "комета", "планета", "звезда", "галактика", "космос", "атом",
+    "ларгус", "приора", "бустер", "мент", "бандит", "бизнесмен", "шахтер", "дрифтер", "регион", "бизнес"
+]
+WHO_GENDER_EXCEPTIONS = {"торетто": "m", "кофе": "m"}
+_HARD_ENDINGS = set("гкхжчшщ")
+
+def noun_gender(n):
+    if n in WHO_GENDER_EXCEPTIONS: return WHO_GENDER_EXCEPTIONS[n]
+    if n.endswith(("а", "я")): return "f"
+    if n.endswith(("о", "е")): return "n"
+    if n.endswith("ь"): return "f"
+    return "m"
+
+def adj_form(adj, gender):
+    if gender == "m": return adj
+    if adj.endswith("ой"):
+        stem = adj[:-2]; fem, neu = stem + "ая", stem + "ое"
+    elif adj.endswith("ый"):
+        stem = adj[:-2]; fem, neu = stem + "ая", stem + "ое"
+    elif adj.endswith("ий"):
+        stem = adj[:-2]
+        if stem and stem[-1] in _HARD_ENDINGS:
+            fem, neu = stem + "ая", stem + "ое"
+        else:
+            fem, neu = stem + "яя", stem + "ее"
+    else:
+        return adj
+    return fem if gender == "f" else neu
 
 def fmt_join_date(ts):
     dt = datetime.datetime.fromtimestamp(ts, MSK_TZ)
@@ -307,7 +384,6 @@ def get_marriage_partner(marriage, user_id):
     if not marriage: return None
     return marriage["user2"] if marriage["user1"] == user_id else marriage["user1"]
 
-# ===== СТАТИСТИКА (теперь считаем и символы) =====
 def increment_msg_stat(peer, user_id, is_sticker=False, chars=0):
     with DB_LOCK:
         CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (user_id, peer))
@@ -342,7 +418,8 @@ def init_db():
             user_id INTEGER, peer_id INTEGER, nickname TEXT DEFAULT '', warnings INTEGER DEFAULT 0,
             warn_durations TEXT DEFAULT '', warn_expiry INTEGER DEFAULT 0, last_active TEXT DEFAULT '',
             streak INTEGER DEFAULT 0, poll_protected INTEGER DEFAULT 0, join_time INTEGER DEFAULT 0,
-            last_vote_time INTEGER DEFAULT 0, PRIMARY KEY(user_id, peer_id))""")
+            last_vote_time INTEGER DEFAULT 0, who_name TEXT DEFAULT '', who_ts INTEGER DEFAULT 0,
+            PRIMARY KEY(user_id, peer_id))""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS roles (user_id INTEGER, peer_id INTEGER, role INTEGER DEFAULT 0, UNIQUE(user_id, peer_id))""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS statuses (id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id INTEGER, name TEXT, UNIQUE(peer_id, name))""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS user_statuses (user_id INTEGER, peer_id INTEGER, status_id INTEGER, UNIQUE(user_id, peer_id))""")
@@ -390,6 +467,8 @@ def init_db():
             "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''",
             "ALTER TABLE message_stats ADD COLUMN kmb_wins INTEGER DEFAULT 0",
             "ALTER TABLE message_stats ADD COLUMN char_count INTEGER DEFAULT 0",
+            "ALTER TABLE members ADD COLUMN who_name TEXT DEFAULT ''",
+            "ALTER TABLE members ADD COLUMN who_ts INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try: CONN.execute(sql)
@@ -600,7 +679,6 @@ def _ls_apply_lastlogin(body):
         out.append("✅ id{} → последний вход {} (чат {})".format(uid, md.group(1), peer_id))
     return "\n".join(out) or "✅ Готово"
 
-# ===== /topmsg: ТЕПЕРЬ ДВА ЧИСЛА (символы, сообщения) =====
 def _ls_apply_topmsg(body):
     out = []
     for seg in _ls_segments(body):
@@ -874,11 +952,12 @@ HELP_GENERAL_TEXT = (
     "1. Мд браки — список браков.\n"
     "2. Мд др — ближайшие дни рождения.\n"
     "3. Мд кто <слово> — кто является словом.\n"
-    "4. Мд инфа <текст> — рандомные проценты.\n"
-    "5. Мд монетка — орёл или решка.\n"
-    "6. Мд значки — список значков.\n"
-    "7. Мд значок — установить/посмотреть значок.\n"
-    "8. Мд удалить значок — удалить значок."
+    "4. Мд кто я — кто ты сегодня.\n"
+    "5. Мд инфа <текст> — рандомные проценты.\n"
+    "6. Мд монетка — орёл или решка.\n"
+    "7. Мд значки — список значков.\n"
+    "8. Мд значок — установить/посмотреть значок.\n"
+    "9. Мд удалить значок — удалить значок."
 )
 HELP_ADMIN_TEXT = (
     "🛡 Команды Администратора:\n"
@@ -984,7 +1063,6 @@ def handle_event(event):
                     event_data=json.dumps({"type": "show_snackbar", "text": text}))
             except: pass
 
-        # ===== ПРОВЕРКА: кнопки =====
         if cmd in ["check_warns", "check_mutes", "check_back"]:
             target_id = int(payload.get("target", 0))
             if not target_id: snackbar("❌ Ошибка"); return
@@ -1058,7 +1136,6 @@ def handle_event(event):
                 send_msg(peer_id, "\n".join(lines), keyboard=kb)
                 snackbar("✅ Выполнено"); return
 
-        # ===== КОСТИ =====
         if cmd in ["dice_accept", "dice_decline", "dice_roll", "dice_punish_mute", "dice_punish_mention", "dice_punish_pardon"]:
             game_id = payload.get("game_id", 0)
             with DB_LOCK:
@@ -1171,7 +1248,6 @@ def handle_event(event):
                     silent_mention_badge(winner, peer_id), silent_mention_badge(loser, peer_id)))
                 snackbar("🕊 Помилован!"); return
 
-        # ===== КНБ =====
         if cmd in ["kmb_accept", "kmb_decline", "kmb_choice"]:
             game_id = payload.get("game_id", 0)
             with DB_LOCK:
@@ -1254,7 +1330,6 @@ def handle_event(event):
                             silent_mention_badge(winner, chat_peer), emojis[wc]))
                 return
 
-        # ===== БРАК =====
         if cmd in ["marriage_accept", "marriage_decline"]:
             proposer = payload.get("proposer", 0)
             target = payload.get("target", 0)
@@ -1288,7 +1363,6 @@ def handle_event(event):
                     silent_mention_badge(target, peer_id), silent_mention_badge(proposer, peer_id)))
                 snackbar("❌ Отказ"); return
 
-        # ===== ОПРОСЫ =====
         if cmd == "poll_vote":
             now_ts = int(time.time())
             today_str = get_msk_now().strftime("%Y-%m-%d")
@@ -1310,7 +1384,6 @@ def handle_event(event):
                             snackbar("✅ Отметился!")
             except: snackbar("❌ Ошибка"); return
 
-        # ===== ПАГИНАЦИЯ =====
         if cmd == "page_info": snackbar("📄 Стр. {} из {}".format(payload.get("page",1), payload.get("total",1))); return
         cmid = obj.get("conversation_message_id")
 
@@ -1397,7 +1470,6 @@ def handle_event(event):
                 except: snackbar("⚠️ Не удалось обновить")
             snackbar("📄 Стр. {}".format(page)); return
 
-        # ===== ТОПЫ =====
         if cmd in ["top_messages", "top_stickers", "top_dice", "top_marriages", "top_kmb", "top_days", "top_streaks"]:
             top_type = cmd.replace("top_", "")
             page = int(payload.get("page", 1))
@@ -1446,20 +1518,13 @@ def handle_event(event):
                     days = (now_ts - r["created_at"]) // 86400
                     lines.append("{}. {} и {} ({} дн.)".format(idx, silent_mention_badge(r["user1"], peer_id), silent_mention_badge(r["user2"], peer_id), days))
             elif top_type == "days":
+                # ТОП ПО ПОСЛЕДНЕМУ ЗАХОДУ
                 with DB_LOCK:
-                    total = CONN.execute("""
-                        SELECT COUNT(*) FROM join_stats j
-                        JOIN members m ON j.user_id = m.user_id AND j.peer_id = m.peer_id
-                        WHERE j.peer_id=?
-                    """, (peer_id,)).fetchone()[0]
-                    rows = CONN.execute("""
-                        SELECT j.user_id, j.first_join FROM join_stats j
-                        JOIN members m ON j.user_id = m.user_id AND j.peer_id = m.peer_id
-                        WHERE j.peer_id=? ORDER BY j.first_join ASC LIMIT ? OFFSET ?
-                    """, (peer_id, per_page, (page-1)*per_page)).fetchall()
-                lines = ["📅 Топ дней в чате:\n"]
+                    total = CONN.execute("SELECT COUNT(*) FROM members WHERE peer_id=? AND join_time>0", (peer_id,)).fetchone()[0]
+                    rows = CONN.execute("SELECT user_id, join_time FROM members WHERE peer_id=? AND join_time>0 ORDER BY join_time ASC LIMIT ? OFFSET ?", (peer_id, per_page, (page-1)*per_page)).fetchall()
+                lines = ["📅 Топ дней в чате (с последнего захода):\n"]
                 for idx, r in enumerate(rows, (page-1)*per_page+1):
-                    lines.append("{}. {} — {} дн.".format(idx, silent_mention_badge(r["user_id"], peer_id), days_since(r["first_join"])))
+                    lines.append("{}. {} — {} дн.".format(idx, silent_mention_badge(r["user_id"], peer_id), days_since(r["join_time"])))
             elif top_type == "streaks":
                 with DB_LOCK:
                     total = CONN.execute("SELECT COUNT(*) FROM members WHERE peer_id=? AND streak>0", (peer_id,)).fetchone()[0]
@@ -1492,7 +1557,6 @@ def handle_event(event):
                 except: snackbar("⚠️ Не удалось обновить")
             snackbar("📄 Стр. {}".format(page)); return
 
-        # ===== HELP =====
         if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls",
                     "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_games", "help_md", "help_back", "help_back_main"]:
             checks = {
@@ -1562,7 +1626,6 @@ def build_status_page(peer, page):
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
 def handle_message(peer, sender, text, msg_obj):
-    # ===== СЛУЖЕБНЫЕ КОМАНДЫ СОЗДАТЕЛЯ/ЛИДЕРА В ЛС =====
     if peer < 2000000000:
         if sender in (CREATOR_ID, LEADER_ID) and peer == sender:
             low = text.strip().lower()
@@ -1681,7 +1744,6 @@ def handle_message(peer, sender, text, msg_obj):
 
     update_member_activity(peer, sender)
 
-    # ===== ПОДТВЕРЖДЕНИЕ ОЧИСТКИ ТОПА =====
     pend_raw = get_setting(peer, "top_clean_pending", "")
     if pend_raw:
         try: pend = json.loads(pend_raw)
@@ -1704,7 +1766,6 @@ def handle_message(peer, sender, text, msg_obj):
                 send_msg(peer, "✅ Топ очищен.")
                 return
 
-    # КЭШ СООБЩЕНИЙ ДЛЯ ЧИСТКИ
     if sender > 0:
         cmid0 = msg_obj.get("conversation_message_id") or 0
         if cmid0:
@@ -1788,7 +1849,7 @@ def handle_message(peer, sender, text, msg_obj):
                     send_msg(peer, "⛔ Чужую статистику могут смотреть только модераторы и выше.")
                     return
         with DB_LOCK:
-            row = CONN.execute("SELECT nickname, warnings, warn_durations, warn_expiry, streak, join_time FROM members WHERE user_id=? AND peer_id=?", (target_id, peer)).fetchone()
+            row = CONN.execute("SELECT nickname, warnings, warn_durations, warn_expiry, streak, join_time, who_name, who_ts FROM members WHERE user_id=? AND peer_id=?", (target_id, peer)).fetchone()
             js_row = CONN.execute("SELECT first_join FROM join_stats WHERE user_id=? AND peer_id=?", (target_id, peer)).fetchone()
             st_row = CONN.execute("""
                 SELECT s.name, s.id FROM user_statuses us
@@ -1812,10 +1873,19 @@ def handle_message(peer, sender, text, msg_obj):
         first_ts = js_row["first_join"] if js_row else 0
         join_line = "📅 В чате: с {} ({} дн.)".format(fmt_join_date(join_ts), days_since(join_ts)) if join_ts else "📅 В чате: неизвестно"
         first_line_txt = "📅 Первый вход: {} ({} дн.)".format(fmt_join_date(first_ts), days_since(first_ts)) if first_ts else "📅 Первый вход: неизвестно"
-        # СТАТУС БЕЗ НОМЕРА
         status_str = "🎯Статус: Отсутствует."
         if st_row:
             status_str = "🎯Статус: {}".format(st_row["name"])
+        # КТО Я: последний титул
+        who_name = row["who_name"] if row and row["who_name"] else ""
+        who_ts = row["who_ts"] if row else 0
+        if who_name:
+            if int(time.time()) - who_ts <= 86400:
+                who_line = "👤 Кто это: {}".format(who_name)
+            else:
+                who_line = "🫆 Раньше был: {} ({})".format(who_name, fmt_join_date(who_ts))
+        else:
+            who_line = "👤 Кто это: не определено"
         msg = (
             "👥 Участник {}:\n"
             "🎮 Ник: {}\n"
@@ -1825,9 +1895,10 @@ def handle_message(peer, sender, text, msg_obj):
             "🙆‍️ Роль: {}\n"
             "{}\n"
             "{}\n"
-            "🔥 Серия посещения: {} дн. {}"
+            "🔥 Серия посещения: {} дн. {}\n"
+            "{}"
         ).format(silent_mention_badge(target_id, peer), nick, warns, max_warns, durations_raw,
-                 join_line, first_line_txt, role_str, status_str, marriage_str, streak, emoji)
+                 join_line, first_line_txt, role_str, status_str, marriage_str, streak, emoji, who_line)
         send_msg(peer, msg)
 
     elif cmd == "ники":
@@ -2737,7 +2808,7 @@ def handle_message(peer, sender, text, msg_obj):
                 chunk = user_ids[i:i+100]
                 try:
                     users_data = VK.users.get(user_ids=",".join(map(str, chunk)), fields="online,last_seen")
-                    for u in users_data:
+                    for u in users_
                         if u.get("online") == 1:
                             ls = u.get("last_seen", {})
                             platform = ls.get("platform", 0)
@@ -2788,6 +2859,18 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, "\n".join(lines))
         except Exception as e: send_msg(peer, "❌ Ошибка: {}".format(e))
 
+    elif cmd == "кто_я":
+        adj = random.choice(WHO_ADJ)
+        noun = random.choice(WHO_NOUN)
+        gender = noun_gender(noun)
+        phrase = "{} {}".format(adj_form(adj, gender), noun)
+        now_ts = int(time.time())
+        with DB_LOCK:
+            CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (sender, peer))
+            CONN.execute("UPDATE members SET who_name=?, who_ts=? WHERE user_id=? AND peer_id=?", (phrase, now_ts, sender, peer))
+            CONN.commit()
+        send_msg(peer, "🍀 {} ♠, вы - {}".format(silent_mention_badge(sender, peer), phrase))
+
     elif cmd == "кто":
         word = " ".join(args) if args else "это"
         try:
@@ -2796,7 +2879,7 @@ def handle_message(peer, sender, text, msg_obj):
             user_ids = [int(i.get("member_id", 0)) for i in items if int(i.get("member_id", 0)) > 0]
             if not user_ids: send_msg(peer, "❌ Нет участников."); return
             chosen = random.choice(user_ids)
-            send_msg(peer, "💬 {}, 🎯 очевидно, {} — {}!".format(silent_mention_badge(sender, peer), word, silent_mention_badge(chosen, peer)))
+            send_msg(peer, "💬 {},  очевидно, {} — {}!".format(silent_mention_badge(sender, peer), word, silent_mention_badge(chosen, peer)))
         except Exception as e:
             print("кто error:", e)
 
