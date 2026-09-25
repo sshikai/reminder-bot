@@ -2808,7 +2808,7 @@ def handle_message(peer, sender, text, msg_obj):
                 chunk = user_ids[i:i+100]
                 try:
                     users_data = VK.users.get(user_ids=",".join(map(str, chunk)), fields="online,last_seen")
-                    for u in users_
+                    for u in users:
                         if u.get("online") == 1:
                             ls = u.get("last_seen", {})
                             platform = ls.get("platform", 0)
