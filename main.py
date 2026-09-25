@@ -45,7 +45,7 @@ DICE_PHRASES = [
     "Твой максимум — это бросать кости собакам, к игральным тебе лучше не прикасаться. 🐕",
     "Удача сегодня посмотрела на тебя, посмеялась и ушла ко мне. 😏",
     "Кости любят смелых, а над наивными они просто ржут — прямо как я сейчас. 🦴",
-    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬",
+    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬💀",
     "Пискоструй ты где? Не забыл? Ты проебал в кости. 📢",
     "Эй чепуха, твой проёб не забыли. 🤡",
     "Ты проиграл, но ты держись там, хорошего настроения. 😔",
@@ -55,7 +55,7 @@ DICE_PHRASES = [
     "Твоя удача сегодня ушла к кому-то с нормальными руками. 🖐️",
     "У тебя руки из задницы растут, судя по результатам твоей игры. 🍑🌱",
     "Это не просто проигрыш, это историческое унижение. Можешь сворачивать свои пожитки. 🧳",
-    "Смирись, ты сегодня официально признан главным неудачником Million Dollars. 🏆💀",
+    "Смирись, ты сегодня официально признан главным неудачником Million Dollars. 🏆",
     "Эй инопланетянин, ты помнишь как ты сыграл? Нет? Хуево! 👽",
     "В мире есть три вещи которые не меняются: вращение земли, рассвет солнца и твои проёбы! 🌍️",
     "Прикинь как было бы хорошо если бы ты выиграл? Но нет.... 😭",
@@ -100,11 +100,13 @@ _EM_ONE = _EM_BASE + "[\U0001F3FB-\U0001F3FF]?\uFE0F?"
 EM_CLUSTER = re.compile("^" + _EM_ONE + "(?:\u200D" + _EM_ONE + ")*$")
 
 BUS_TYPES_ORDER = ["АЗС", "Амуниция", "Одежда", "Аксессуары", "24/7", "ТК", "СК", "ПВЗ",
-                   "Ларек", "Закуска", "Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк"]
-BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк"}
+                   "Ларек", "Закуска", "Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк",
+                   "Шинка", "Стайлинг", "Тех. Центр"]
+BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк",
+              "Шинка", "Стайлинг", "Тех. Центр"}
 BUS_SLOT2 = ("ТК", "СК", "Такопарк")
 BUS_TAKO = "Такопарк"
-BUS_PAGES = 3
+BUS_PAGES = 4
 BUS_PER_PAGE = 6
 CARD_FIELD_MAP = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property_val",
                   "гараж": "garage", "телефон": "phone", "имя": "name"}
@@ -697,11 +699,11 @@ def upload_photo(peer, img_buf):
 # ===== ОТРИСОВКА КАРТОЧКИ =====
 CARD_BOXES = {
     "name":   (0.035, 0.800, 0.340, 0.080),
-    "biz":    (0.500, 0.215, 0.480, 0.085),
+    "biz":    (0.468, 0.215, 0.525, 0.085),
     "realty": (0.500, 0.378, 0.480, 0.085),
     "prop":   (0.500, 0.520, 0.480, 0.085),
     "garage": (0.500, 0.680, 0.480, 0.085),
-    "phone":  (0.500, 0.840, 0.480, 0.085),
+    "phone":  (0.500, 0.825, 0.480, 0.085),
 }
 
 def render_card(user_id):
@@ -732,12 +734,12 @@ def render_card(user_id):
             try: return f.getsize(t)[0]
             except Exception: return len(t) * 10
 
-    def draw_box(key, text, color, center_x=False):
+    def draw_box(key, text, color, center_x=False, pad=6):
         rx, ry, rw, rh = CARD_BOXES[key]
         x, y, w, h = rx * W, ry * H, rw * W, rh * H
         size = max(14, int(h * 0.48))
         f = get_font(size)
-        while text_w(text, f) > w - 12 and size > 12:
+        while text_w(text, f) > w - pad * 2 and size > 10:
             size -= 1
             f = get_font(size)
         try:
@@ -748,7 +750,7 @@ def render_card(user_id):
             th, yoff = size, 0
         ty = y + (h - th) / 2 - yoff
         tw = text_w(text, f)
-        tx = x + (w - tw) / 2 if center_x else x + 6
+        tx = x + (w - tw) / 2 if center_x else x + pad
         draw.text((tx, ty), text, font=f, fill=color)
 
     biz = format_businesses(json.loads(card["businesses"] or "[]")) or "Неизвестно"
@@ -758,7 +760,7 @@ def render_card(user_id):
     phone = format_phone(card["phone"]) if card["phone"] else "Неизвестно"
     name = card["name"] or "Неизвестно"
     draw_box("name", name, (255, 255, 255), center_x=True)
-    draw_box("biz", biz, (30, 30, 30))
+    draw_box("biz", biz, (30, 30, 30), pad=3)
     draw_box("realty", realty, (30, 30, 30))
     draw_box("prop", prop, (30, 30, 30))
     draw_box("garage", garage, (30, 30, 30))
@@ -1428,7 +1430,6 @@ def card_edit_main_kb():
          {"action": {"type": "callback", "label": "Имя", "payload": P("name")}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
-# ===== МЕНЮ БИЗНЕСОВ: СТРАНИЦЫ, МАКС 10 КНОПОК (лимит VK) =====
 def card_bus_kb(page=1):
     page = max(1, min(page, BUS_PAGES))
     types = BUS_TYPES_ORDER[(page - 1) * BUS_PER_PAGE: page * BUS_PER_PAGE]
