@@ -602,10 +602,26 @@ def handle_card_input(sender, peer, text, cmid=None):
     return False
 
 def upload_photo(peer, img_buf):
+    try:
+        img_buf.seek(0)
+    except Exception:
+        pass
+    raw = img_buf.getvalue()
+    if not raw:
+        raise RuntimeError("EMPTY_IMAGE: картинка пустая")
     server = VK.photos.getMessagesUploadServer(peer_id=peer)
-    resp = requests.post(server["upload_url"], files={"photo": ("card.png", img_buf, "image/png")}, timeout=30)
+    resp = requests.post(
+        server["upload_url"],
+        files={"photo": ("card.png", raw, "image/png")},
+        timeout=30,
+    )
     data = resp.json()
+    print("card upload response:", data)
+    if not data.get("photo") or not data.get("hash") or not data.get("server"):
+        raise RuntimeError("UPLOAD_BAD_RESPONSE: {}".format(str(data)[:200]))
     saved = VK.photos.saveMessagesPhoto(photo=data["photo"], hash=data["hash"], server=data["server"])
+    if not saved:
+        raise RuntimeError("SAVE_EMPTY: ВК не вернул фото после сохранения")
     return "photo{}_{}".format(saved[0]["owner_id"], saved[0]["id"])
 
 def render_card(user_id):
@@ -3253,9 +3269,19 @@ def handle_message(peer, sender, text, msg_obj):
             att = upload_photo(peer, img_buf)
             send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
         except Exception as e:
-            print("card send error:", e)
-            send_msg(peer, "❌ Ошибка отправки карточки: {}".format(e))
-
+            err = str(e)
+            print("card send error:", err)
+            if "[15]" in err or "scope" in err.lower():
+                send_msg(peer,
+                    "❌ ВК не дал загрузить фото: у токена группы нет права «Фотографии».\n\n"
+                    "Что делать:\n"
+                    "1. Группа → Управление → «Использование API».\n"
+                    "2. Поставь галочку «Фотографии».\n"
+                    "3. Обязательно СОЗДАЙ ТОКЕН ЗАНОВО (старый не получит право).\n"
+                    "4. Замени VK_TOKEN на хостинге на новый и перезапусти бота.")
+            else:
+                send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
+                
     elif cmd == "карта_редактировать":
         set_card_state(sender, peer, "main_menu")
         send_msg(peer, "Какую информацию вы хотите отредактировать в личной карточке?", keyboard=card_edit_main_kb())
