@@ -45,7 +45,7 @@ DICE_PHRASES = [
     "Твой максимум — это бросать кости собакам, к игральным тебе лучше не прикасаться. 🐕",
     "Удача сегодня посмотрела на тебя, посмеялась и ушла ко мне. 😏",
     "Кости любят смелых, а над наивными они просто ржут — прямо как я сейчас. 🦴",
-    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬💀",
+    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬",
     "Пискоструй ты где? Не забыл? Ты проебал в кости. 📢",
     "Эй чепуха, твой проёб не забыли. 🤡",
     "Ты проиграл, но ты держись там, хорошего настроения. 😔",
@@ -104,6 +104,8 @@ BUS_TYPES_ORDER = ["АЗС", "Амуниция", "Одежда", "Аксессу
 BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк"}
 BUS_SLOT2 = ("ТК", "СК", "Такопарк")
 BUS_TAKO = "Такопарк"
+BUS_PAGES = 3
+BUS_PER_PAGE = 6
 CARD_FIELD_MAP = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property_val",
                   "гараж": "garage", "телефон": "phone", "имя": "name"}
 
@@ -605,7 +607,6 @@ FONT_CACHE = os.path.join(DATA_DIR, "card_font_cyr.ttf")
 _FONT_RESOLVED = {"path": None, "tried": False}
 
 def ensure_font():
-    # удаляем старый битый кэш без кириллицы
     old = os.path.join(DATA_DIR, "card_font.ttf")
     if os.path.isfile(old):
         try: os.remove(old)
@@ -697,7 +698,7 @@ def upload_photo(peer, img_buf):
 CARD_BOXES = {
     "name":   (0.035, 0.800, 0.340, 0.080),
     "biz":    (0.500, 0.215, 0.480, 0.085),
-    "realty": (0.500, 0.360, 0.480, 0.085),
+    "realty": (0.500, 0.378, 0.480, 0.085),
     "prop":   (0.500, 0.520, 0.480, 0.085),
     "garage": (0.500, 0.680, 0.480, 0.085),
     "phone":  (0.500, 0.840, 0.480, 0.085),
@@ -1411,8 +1412,10 @@ HELP_MD_TEXT = (
 )
 
 MAIN_CARD_TEXT = "Какую информацию вы хотите отредактировать в личной карточке?"
-BUS_MENU_TEXT = ("Какой бизнес вы хотите добавить?\n"
-                 "(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Такопарк занимает 2 слота!)")
+
+def bus_menu_text(page=1):
+    return ("Какой бизнес вы хотите добавить? (стр. {}/{})\n"
+            "(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Такопарк занимает 2 слота!)").format(page, BUS_PAGES)
 
 def card_edit_main_kb():
     P = lambda f: json.dumps({"cmd": "card_edit", "f": f, "field": f})
@@ -1425,17 +1428,19 @@ def card_edit_main_kb():
          {"action": {"type": "callback", "label": "Имя", "payload": P("name")}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
-def card_bus_kb():
+# ===== МЕНЮ БИЗНЕСОВ: СТРАНИЦЫ, МАКС 10 КНОПОК (лимит VK) =====
+def card_bus_kb(page=1):
+    page = max(1, min(page, BUS_PAGES))
+    types = BUS_TYPES_ORDER[(page - 1) * BUS_PER_PAGE: page * BUS_PER_PAGE]
     rows = []
-    row = []
-    for t in BUS_TYPES_ORDER:
-        row.append({"action": {"type": "callback", "label": t, "payload": json.dumps({"cmd": "card_bus", "t": t, "type": t})}, "color": "secondary"})
-        if len(row) == 5:
-            rows.append(row)
-            row = []
-    row.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
-    row.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
-    rows.append(row)
+    for i in range(0, len(types), 3):
+        rows.append([{"action": {"type": "callback", "label": t, "payload": json.dumps({"cmd": "card_bus", "t": t, "type": t, "p": page})}, "color": "secondary"} for t in types[i:i+3]])
+    nav = []
+    if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_bus_menu", "p": page - 1})}, "color": "primary"})
+    if page < BUS_PAGES: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_bus_menu", "p": page + 1})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
+    rows.append(nav)
     return {"inline": True, "buttons": rows}
 
 def card_realty_kb():
@@ -1445,10 +1450,12 @@ def card_realty_kb():
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
          {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"}]]}
 
-def card_input_kb(back_cmd):
+def card_input_kb(back_cmd, back_page=None):
+    back_payload = {"cmd": back_cmd}
+    if back_page: back_payload["p"] = back_page
     return {"inline": True, "buttons": [[
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
-        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": back_cmd})}, "color": "primary"}]]}
+        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps(back_payload)}, "color": "primary"}]]}
 
 def handle_event(event):
     try:
@@ -1500,7 +1507,7 @@ def handle_event(event):
                 elif cmd in ("card_edit", "card_field"):
                     f = payload.get("f") or payload.get("field") or ""
                     if f == "biz":
-                        show(BUS_MENU_TEXT, card_bus_kb())
+                        show(bus_menu_text(1), card_bus_kb(1))
                     elif f == "realty":
                         show("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
                     elif f == "prop":
@@ -1520,10 +1527,12 @@ def handle_event(event):
                         return
                     snackbar("✅ Выполнено")
                 elif cmd in ("card_bus_menu", "card_back_bus"):
-                    show(BUS_MENU_TEXT, card_bus_kb())
+                    p = int(payload.get("p", 1) or 1)
+                    show(bus_menu_text(p), card_bus_kb(p))
                     snackbar("✅ Бизнесы")
                 elif cmd in ("card_bus", "card_biz_select"):
                     t = payload.get("t") or payload.get("type") or ""
+                    p = int(payload.get("p", 1) or 1)
                     card = get_card(user_id)
                     blist = json.loads(card["businesses"] or "[]")
                     ok, mode = can_add_business(blist, t)
@@ -1533,11 +1542,11 @@ def handle_event(event):
                         return
                     if t in BUS_NO_NUM:
                         add_business(user_id, t, None)
-                        show("✅ Бизнес «{}» добавлен!\nКакой бизнес следующий?".format(t), card_bus_kb())
+                        show("✅ Бизнес «{}» добавлен!\n".format(t) + bus_menu_text(p), card_bus_kb(p))
                         snackbar("✅ Добавлено")
                     else:
-                        set_card_state(user_id, peer_id, "biz_input", {"t": t})
-                        show("Введите номер для «{}» (макс. 3 цифры, без нуля в начале, напр. 33):".format(t), card_input_kb("card_bus_menu"))
+                        set_card_state(user_id, peer_id, "biz_input", {"t": t, "p": p})
+                        show("Введите номер для «{}» (макс. 3 цифры, без нуля в начале, напр. 33):".format(t), card_input_kb("card_bus_menu", p))
                         snackbar("✅ Введите номер")
                 elif cmd in ("card_realty_menu", "card_back_realty"):
                     show("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
