@@ -40,7 +40,7 @@ MD_MEMBERS_CACHE = {"time": 0.0, "members": set()}
 
 DICE_PHRASES = [
     "Фортуна повернулась к тебе самым неприличным местом. 🍑",
-    "Твой максимум — это бросать кости собакам, к игральным тебе лучше не прикасаться. 🐕🎲",
+    "Твой максимум — это бросать кости собакам, к игральным тебе лучше не прикасаться. 🐕",
     "Удача сегодня посмотрела на тебя, посмеялась и ушла ко мне. 😏",
     "Кости любят смелых, а над наивными они просто ржут — прямо как я сейчас. 🦴",
     "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬💀",
@@ -103,6 +103,8 @@ BUS_TYPES_ORDER = ["АЗС", "Амуниция", "Одежда", "Аксессу
 BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк"}
 BUS_SLOT2 = ("ТК", "СК", "Такопарк")
 BUS_TAKO = "Такопарк"
+CARD_FIELD_MAP = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property_val",
+                  "гараж": "garage", "телефон": "phone", "имя": "name"}
 
 WHO_ADJ = [
     "тайный", "безумный", "сонный", "хитрый", "гордый", "дерзкий", "мудрый", "лютый", "ленивый", "грустный",
@@ -446,10 +448,7 @@ def format_phone(phone):
     if not phone: return "Неизвестно"
     return "-".join([phone[i:i+2] for i in range(0, len(phone), 2)])
 
-# ===== СЛОТЫ БИЗНЕСОВ =====
-# Слот A: АЗС (1). Слот B: ТК/СК/Такопарк (1). Слоты C+D: остальные (2).
-# Такопарк ставится в B и ДОПОЛНИТЕЛЬНО съедает один слот из C/D →
-# с таксопарком доступно: АЗС + таксопарк + 1 любой другой бизнес (кроме ТК/СК).
+# Слоты: A=АЗС, B=ТК/СК/Такопарк, C+D=остальные. Такопарк ест B + один слот C/D.
 def bus_slots_info(blist):
     types = [b["t"] for b in blist]
     has_azs = "АЗС" in types
@@ -538,7 +537,7 @@ def handle_card_input(sender, peer, text, cmid=None):
         return True
 
     if step == "biz_input":
-        biz_type = ctx["t"]
+        biz_type = ctx.get("t", "")
         if not re.match(r"^[1-9]\d{0,2}$", text.strip()):
             reply("❌ Неверный номер: максимум 3 цифры, без нуля в начале (нельзя 001, 099).")
             return True
@@ -554,7 +553,7 @@ def handle_card_input(sender, peer, text, cmid=None):
         return True
 
     if step == "realty_input":
-        realty_type = ctx["t"]
+        realty_type = ctx.get("t", "")
         if not re.match(r"^[1-9]\d{0,3}$", text.strip()):
             reply("❌ Неверный номер: максимум 4 цифры, без нуля в начале.")
             return True
@@ -613,7 +612,7 @@ def upload_photo(peer, img_buf):
         raise RuntimeError("TOO_BIG: файл {} байт (лимит ~5 МБ)".format(len(raw)))
     server = VK.photos.getMessagesUploadServer(peer_id=peer)
     data = None
-    for attempt in range(2):  # вторая попытка, если сервер глючанул
+    for attempt in range(2):
         resp = requests.post(
             server["upload_url"],
             files={"photo": ("card.jpg", raw, "image/jpeg")},
@@ -646,17 +645,11 @@ def render_card(user_id):
     if not template: return None
     img = Image.open(template).convert("RGB")
     W, H = img.size
-    # Сжимаем слишком большие шаблоны — ВК не любит огромные файлы
     if W > 1600:
         ratio = 1600.0 / W
         img = img.resize((1600, int(H * ratio)), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
         W, H = img.size
     draw = ImageDraw.Draw(img)
-    # ... дальше весь твой код отрисовки текста (get_font, draw_auto, поля) без изменений ...
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=88, optimize=True)   # <-- было PNG, стало JPEG
-    buf.seek(0)
-    return buf
     def get_font(size):
         for fp in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "arial.ttf", "DejaVuSans.ttf"]:
             if os.path.isfile(fp):
@@ -684,7 +677,7 @@ def render_card(user_id):
     draw_auto(int(W*0.455), int(H*0.710), int(W*0.48), garage, int(H*0.030), (25, 25, 25))
     draw_auto(int(W*0.455), int(H*0.865), int(W*0.48), phone, int(H*0.030), (25, 25, 25))
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="JPEG", quality=88, optimize=True)
     buf.seek(0)
     return buf
 
@@ -1284,10 +1277,8 @@ HELP_BR_TEXT = (
     "🗃️Личная карточка:\n"
     "1. Мд карта — выводит фото карты.\n"
     "2. Мд карта редактировать — редактирование.\n"
-    "3. Мд карта очистить [поле] — очистить карту.\n"
-    "🛡 Админские:\n"
-    "4. Мд карта @игрок — чужая карта.\n"
-    "5. Мд карта очистить @игрок — чужую карту."
+    "3. Мд карта очистить [поле] — очистить карту.\n\n"
+    "Желательно использовать в лс бота, чтобы не засорять чат😉"
 )
 HELP_MODERATOR_TEXT = (
     "👮‍️ Команды Модератора:\n"
@@ -1331,14 +1322,19 @@ HELP_MD_TEXT = (
     "2. Мд объявы — вкл/выкл объявления."
 )
 
+MAIN_CARD_TEXT = "Какую информацию вы хотите отредактировать в личной карточке?"
+BUS_MENU_TEXT = ("Какой бизнес вы хотите добавить?\n"
+                 "(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Такопарк занимает 2 слота!)")
+
 def card_edit_main_kb():
+    P = lambda f: json.dumps({"cmd": "card_edit", "f": f})
     return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "Бизнесы", "payload": json.dumps({"cmd": "card_biz_menu"})}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Недвижимость", "payload": json.dumps({"cmd": "card_realty_menu"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Имущество", "payload": json.dumps({"cmd": "card_prop"})}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Гараж", "payload": json.dumps({"cmd": "card_garage"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Телефон", "payload": json.dumps({"cmd": "card_phone"})}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Имя", "payload": json.dumps({"cmd": "card_name"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Бизнесы", "payload": P("biz")}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Недвижимость", "payload": P("realty")}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Имущество", "payload": P("prop")}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Гараж", "payload": P("garage")}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Телефон", "payload": P("phone")}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Имя", "payload": P("name")}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
 def card_bus_kb():
@@ -1347,7 +1343,7 @@ def card_bus_kb():
         rows.append([{"action": {"type": "callback", "label": t, "payload": json.dumps({"cmd": "card_bus", "t": t})}, "color": "secondary"} for t in BUS_TYPES_ORDER[i:i+4]])
     rows.append([
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
-        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_back_main"})}, "color": "primary"}])
+        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"}])
     return {"inline": True, "buttons": rows}
 
 def card_realty_kb():
@@ -1355,12 +1351,46 @@ def card_realty_kb():
         [{"action": {"type": "callback", "label": "Дом", "payload": json.dumps({"cmd": "card_realty", "t": "Дом"})}, "color": "secondary"},
          {"action": {"type": "callback", "label": "Квартира", "payload": json.dumps({"cmd": "card_realty", "t": "Квартира"})}, "color": "secondary"}],
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
-         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_back_main"})}, "color": "primary"}]]}
+         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"}]]}
 
 def card_input_kb(back_cmd):
     return {"inline": True, "buttons": [[
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": back_cmd})}, "color": "primary"}]]}
+
+def handle_ls_card(peer, sender, cmd, args):
+    if cmd == "карта":
+        targets = extract_targets(" ".join(args), 0)
+        target_id = targets[0] if (targets and sender in (CREATOR_ID, LEADER_ID)) else sender
+        img_buf = render_card(target_id)
+        if not img_buf:
+            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
+            return
+        try:
+            att = upload_photo(peer, img_buf)
+            send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
+        except Exception as e:
+            err = str(e)
+            if "[15]" in err or "scope" in err.lower():
+                send_msg(peer, "❌ У токена нет права «Фотографии»: Управление → Использование API → галочка «Фото» → пересоздать токен.")
+            else:
+                send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
+    elif cmd == "карта_редактировать":
+        set_card_state(sender, peer, "main_menu")
+        send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
+    elif cmd == "карта_очистить":
+        fld = None
+        for a in args:
+            if a.lower() in CARD_FIELD_MAP: fld = CARD_FIELD_MAP[a.lower()]
+        if fld:
+            default = "[]" if fld in ("businesses", "realty") else ""
+            set_card_field(sender, **{fld: default})
+            send_msg(peer, "✅ Очищено поле карточки: {}.".format(fld))
+        else:
+            with DB_LOCK:
+                CONN.execute("DELETE FROM player_cards WHERE user_id=?", (sender,))
+                CONN.commit()
+            send_msg(peer, "✅ Ваша карточка очищена полностью.")
 
 def handle_event(event):
     try:
@@ -1391,69 +1421,93 @@ def handle_event(event):
                 except: pass
             send_msg(peer_id, text, keyboard=kb)
 
-        # ===== КАРТОЧКА: CALLBACK =====
-        if cmd == "card_main":
-            edit_msg("Какую информацию вы хотите отредактировать в личной карточке?", card_edit_main_kb())
-            snackbar("✅ Меню карточки"); return
-        if cmd == "card_cancel":
-            clear_card_state(user_id, peer_id)
-            edit_msg("❌ Редактирование карточки отменено.")
-            snackbar("❌ Отменено"); return
-        if cmd == "card_back_main":
-            edit_msg("Какую информацию вы хотите отредактировать в личной карточке?", card_edit_main_kb())
-            snackbar("✅ Меню"); return
-        if cmd == "card_back_bus":
-            edit_msg("Какой бизнес вы хотите добавить?\n(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Такопарк занимает 2 слота!)", card_bus_kb())
-            snackbar("✅ Бизнесы"); return
-        if cmd == "card_field":
-            f = payload.get("f")
-            if f == "biz":
-                edit_msg("Какой бизнес вы хотите добавить?\n(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Такопарк занимает 2 слота!)", card_bus_kb())
-            elif f == "realty":
-                edit_msg("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
-            elif f == "prop":
-                set_card_state(user_id, peer_id, "property_input")
-                edit_msg("Введите сумму, в которую вы оцениваете имущество аккаунта (только цифры):", card_input_kb("card_back_main"))
-            elif f == "garage":
-                set_card_state(user_id, peer_id, "garage_input")
-                edit_msg("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_back_main"))
-            elif f == "phone":
-                set_card_state(user_id, peer_id, "phone_input")
-                edit_msg("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_back_main"))
-            elif f == "name":
-                set_card_state(user_id, peer_id, "name_input")
-                edit_msg("Введите имя формата Имя_Фамилия (только англ. буквы, макс. 15+15):", card_input_kb("card_back_main"))
-            snackbar("✅ Выполнено"); return
-        if cmd == "card_bus":
-            t = payload.get("t")
-            card = get_card(user_id)
-            blist = json.loads(card["businesses"] or "[]")
-            ok, mode = can_add_business(blist, t)
-            if not ok:
-                if mode == "exists": snackbar("ℹ️ Уже есть в карточке")
-                else: snackbar("⛔ Нет слотов! Такопарк съел доп. слот / лимит 2 остальных")
-                return
-            if t in BUS_NO_NUM:
-                add_business(user_id, t, None)
-                edit_msg("✅ Бизнес «{}» добавлен!\nКакой бизнес вы хотите добавить ещё?".format(t), card_bus_kb())
-                snackbar("✅ Добавлено")
-            else:
-                set_card_state(user_id, peer_id, "biz_input", {"t": t})
-                if mode == "replace":
-                    edit_msg("Введите НОВЫЙ номер для «{}» (макс. 3 цифры, без нуля в начале):".format(t), card_input_kb("card_back_bus"))
+        # ===== КАРТОЧКА: КОЛБЭКИ =====
+        if cmd.startswith("card_"):
+            try:
+                if cmd == "card_cancel":
+                    clear_card_state(user_id, peer_id)
+                    edit_msg("❌ Редактирование карточки отменено.")
+                    snackbar("❌ Отменено")
+                elif cmd in ("card_main", "card_edit_menu", "card_back_main"):
+                    edit_msg(MAIN_CARD_TEXT, card_edit_main_kb())
+                    snackbar("✅ Меню")
+                elif cmd in ("card_edit", "card_field"):
+                    f = payload.get("f", "")
+                    if f == "biz":
+                        edit_msg(BUS_MENU_TEXT, card_bus_kb())
+                    elif f == "realty":
+                        edit_msg("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
+                    elif f == "prop":
+                        set_card_state(user_id, peer_id, "property_input")
+                        edit_msg("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
+                    elif f == "garage":
+                        set_card_state(user_id, peer_id, "garage_input")
+                        edit_msg("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu"))
+                    elif f == "phone":
+                        set_card_state(user_id, peer_id, "phone_input")
+                        edit_msg("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu"))
+                    elif f == "name":
+                        set_card_state(user_id, peer_id, "name_input")
+                        edit_msg("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu"))
+                    else:
+                        edit_msg(MAIN_CARD_TEXT, card_edit_main_kb())
+                    snackbar("✅ Выполнено")
+                elif cmd in ("card_bus_menu", "card_back_bus"):
+                    edit_msg(BUS_MENU_TEXT, card_bus_kb())
+                    snackbar("✅ Бизнесы")
+                elif cmd in ("card_bus", "card_biz_select"):
+                    t = payload.get("t", "")
+                    card = get_card(user_id)
+                    blist = json.loads(card["businesses"] or "[]")
+                    ok, mode = can_add_business(blist, t)
+                    if not ok:
+                        if mode == "exists": snackbar("ℹ️ «{}» уже есть в карточке".format(t))
+                        else: snackbar("⛔ Нет слотов! Макс 4 бизнеса, Такопарк занимает 2 слота")
+                        return
+                    if t in BUS_NO_NUM:
+                        add_business(user_id, t, None)
+                        edit_msg("✅ Бизнес «{}» добавлен!\nКакой бизнес следующий?".format(t), card_bus_kb())
+                        snackbar("✅ Добавлено")
+                    else:
+                        set_card_state(user_id, peer_id, "biz_input", {"t": t})
+                        edit_msg("Введите номер для «{}» (макс. 3 цифры, без нуля в начале, напр. 33):".format(t), card_input_kb("card_bus_menu"))
+                        snackbar("✅ Введите номер")
+                elif cmd in ("card_realty_menu", "card_back_realty"):
+                    edit_msg("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
+                    snackbar("✅ Недвижимость")
+                elif cmd in ("card_realty", "card_realty_select"):
+                    t = payload.get("t", "")
+                    card = get_card(user_id)
+                    rlist = json.loads(card["realty"] or "[]")
+                    if len(rlist) >= 2:
+                        snackbar("⛔ Максимум 2 недвижимости!")
+                        return
+                    set_card_state(user_id, peer_id, "realty_input", {"t": t})
+                    edit_msg("Введите номер для «{}» (макс. 4 цифры, без нуля в начале):".format(t), card_input_kb("card_realty_menu"))
+                    snackbar("✅ Введите номер")
+                elif cmd == "card_garage":
+                    set_card_state(user_id, peer_id, "garage_input")
+                    edit_msg("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu"))
+                    snackbar("✅ Введите номер")
+                elif cmd == "card_phone":
+                    set_card_state(user_id, peer_id, "phone_input")
+                    edit_msg("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu"))
+                    snackbar("✅ Введите номер")
+                elif cmd == "card_name":
+                    set_card_state(user_id, peer_id, "name_input")
+                    edit_msg("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu"))
+                    snackbar("✅ Введите имя")
+                elif cmd in ("card_prop", "card_property"):
+                    set_card_state(user_id, peer_id, "property_input")
+                    edit_msg("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
+                    snackbar("✅ Введите сумму")
                 else:
-                    edit_msg("Введите номер для «{}» (макс. 3 цифры, без нуля в начале):".format(t), card_input_kb("card_back_bus"))
-                snackbar("✅ Введите номер")
+                    snackbar("❌ Неизвестная кнопка карточки")
+            except Exception as e:
+                print("card callback error:", e)
+                try: snackbar("❌ Ошибка карточки: {}".format(str(e)[:60]))
+                except: pass
             return
-        if cmd == "card_realty":
-            t = payload.get("t")
-            card = get_card(user_id)
-            rlist = json.loads(card["realty"] or "[]")
-            if len(rlist) >= 2:
-                snackbar("⛔ Максимум 2 недвижимости!"); return
-            set_card_state(user_id, peer_id, "realty_input", {"t": t})
-            edit_msg("Введите номер для «{}» (макс. 4 цифры, без нуля в начале):".format(t), card_input_kb("card_back_main"))
-            snackbar("✅ Введите номер"); return
 
         # ===== ПРОВЕРКА: кнопки =====
         if cmd in ["check_warns", "check_mutes", "check_back"]:
@@ -2000,9 +2054,23 @@ def handle_message(peer, sender, text, msg_obj):
             elif text.strip().startswith("/"):
                 handle_creator_ls(peer, text)
                 return
+        # Карточные команды работают в ЛС
+        if first.startswith("мд "):
+            pn = first[3:].strip().split()
+            if pn:
+                c2 = "_".join(pn[:2])
+                if c2 == "карта_редактировать":
+                    handle_ls_card(peer, sender, "карта_редактировать", pn[2:]); return
+                if c2 == "карта_очистить":
+                    handle_ls_card(peer, sender, "карта_очистить", pn[2:]); return
+                if pn[0] == "карта":
+                    handle_ls_card(peer, sender, "карта", pn[1:]); return
+        # Ввод для карточки в ЛС
+        if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id")):
+            return
         return
 
-    # Ввод для карточки (не команда)
+    # Ввод для карточки в чате (не команда)
     if not first.startswith("мд "):
         if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id")):
             return
@@ -3279,7 +3347,7 @@ def handle_message(peer, sender, text, msg_obj):
             return
         img_buf = render_card(target_id)
         if not img_buf:
-            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png или card_female.jpg/png) в папке бота, либо не установлен Pillow.")
+            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
             return
         try:
             att = upload_photo(peer, img_buf)
@@ -3288,25 +3356,18 @@ def handle_message(peer, sender, text, msg_obj):
             err = str(e)
             print("card send error:", err)
             if "[15]" in err or "scope" in err.lower():
-                send_msg(peer,
-                    "❌ ВК не дал загрузить фото: у токена группы нет права «Фотографии».\n\n"
-                    "Что делать:\n"
-                    "1. Группа → Управление → «Использование API».\n"
-                    "2. Поставь галочку «Фотографии».\n"
-                    "3. Обязательно СОЗДАЙ ТОКЕН ЗАНОВО (старый не получит право).\n"
-                    "4. Замени VK_TOKEN на хостинге на новый и перезапусти бота.")
+                send_msg(peer, "❌ У токена нет права «Фотографии»: Управление → Использование API → галочка «Фото» → пересоздать токен.")
             else:
                 send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
-                
+
     elif cmd == "карта_редактировать":
         set_card_state(sender, peer, "main_menu")
-        send_msg(peer, "Какую информацию вы хотите отредактировать в личной карточке?", keyboard=card_edit_main_kb())
+        send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
 
     elif cmd == "карта_очистить":
-        field_map = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property", "гараж": "garage", "телефон": "phone", "имя": "name"}
         fld = None
         for a in args:
-            if a.lower() in field_map: fld = field_map[a.lower()]
+            if a.lower() in CARD_FIELD_MAP: fld = CARD_FIELD_MAP[a.lower()]
         targets = extract_targets(" ".join(args), 0)
         if targets:
             if not admin:
