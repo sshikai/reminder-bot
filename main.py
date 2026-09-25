@@ -1,6 +1,7 @@
 import os
 import re
 import io
+import glob
 import time
 import random
 import sqlite3
@@ -97,7 +98,6 @@ _EM_BASE = ("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0
 _EM_ONE = _EM_BASE + "[\U0001F3FB-\U0001F3FF]?\uFE0F?"
 EM_CLUSTER = re.compile("^" + _EM_ONE + "(?:\u200D" + _EM_ONE + ")*$")
 
-# ===== КАРТОЧКА: БИЗНЕСЫ =====
 BUS_TYPES_ORDER = ["АЗС", "Амуниция", "Одежда", "Аксессуары", "24/7", "ТК", "СК", "ПВЗ",
                    "Ларек", "Закуска", "Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк"]
 BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк"}
@@ -448,7 +448,6 @@ def format_phone(phone):
     if not phone: return "Неизвестно"
     return "-".join([phone[i:i+2] for i in range(0, len(phone), 2)])
 
-# Слоты: A=АЗС, B=ТК/СК/Такопарк, C+D=остальные. Такопарк ест B + один слот C/D.
 def bus_slots_info(blist):
     types = [b["t"] for b in blist]
     has_azs = "АЗС" in types
@@ -600,6 +599,63 @@ def handle_card_input(sender, peer, text, cmid=None):
 
     return False
 
+# ===== ШРИФТ ДЛЯ КАРТОЧКИ =====
+_FONT_RESOLVED = {"path": None, "tried": False}
+
+def ensure_font():
+    cache = os.path.join(DATA_DIR, "card_font.ttf")
+    if os.path.isfile(cache):
+        return cache
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freesans.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/system/fonts/Roboto.ttf",
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    try:
+        hits = glob.glob("/usr/share/fonts/**/*.ttf", recursive=True)
+        if hits:
+            return hits[0]
+    except Exception:
+        pass
+    urls = [
+        "https://raw.githubusercontent.com/python-pillow/Pillow/main/Tests/images/DejaVuSans.ttf",
+        "https://github.com/python-pillow/Pillow/raw/main/Tests/images/DejaVuSans.ttf",
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+            with urllib.request.urlopen(req, timeout=25) as r:
+                data = r.read()
+            if len(data) > 10000:
+                with open(cache, "wb") as f:
+                    f.write(data)
+                return cache
+        except Exception as e:
+            print("font download error:", e)
+    return None
+
+def get_font(size):
+    if not _FONT_RESOLVED["tried"]:
+        _FONT_RESOLVED["path"] = ensure_font()
+        _FONT_RESOLVED["tried"] = True
+        print("card font resolved:", _FONT_RESOLVED["path"])
+    p = _FONT_RESOLVED["path"]
+    if p:
+        try:
+            return ImageFont.truetype(p, size)
+        except Exception:
+            pass
+    try:
+        return ImageFont.load_default(size)
+    except Exception:
+        return ImageFont.load_default()
+
 def upload_photo(peer, img_buf):
     try:
         img_buf.seek(0)
@@ -629,6 +685,16 @@ def upload_photo(peer, img_buf):
         raise RuntimeError("SAVE_EMPTY: ВК не вернул фото после сохранения")
     return "photo{}_{}".format(saved[0]["owner_id"], saved[0]["id"])
 
+# ===== ОТРИСОВКА КАРТОЧКИ =====
+CARD_BOXES = {
+    "name":   (0.035, 0.827, 0.340, 0.095),
+    "biz":    (0.500, 0.200, 0.480, 0.085),
+    "realty": (0.500, 0.360, 0.480, 0.085),
+    "prop":   (0.500, 0.520, 0.480, 0.085),
+    "garage": (0.500, 0.680, 0.480, 0.085),
+    "phone":  (0.500, 0.840, 0.480, 0.085),
+}
+
 def render_card(user_id):
     if not PIL_OK: return None
     card = get_card(user_id)
@@ -650,32 +716,44 @@ def render_card(user_id):
         img = img.resize((1600, int(H * ratio)), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
         W, H = img.size
     draw = ImageDraw.Draw(img)
-    def get_font(size):
-        for fp in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "arial.ttf", "DejaVuSans.ttf"]:
-            if os.path.isfile(fp):
-                try: return ImageFont.truetype(fp, size)
-                except: pass
-        return ImageFont.load_default()
-    def draw_auto(x, y, max_w, text, base_size, color):
-        size = base_size
+
+    def text_w(t, f):
+        try: return draw.textlength(t, font=f)
+        except Exception:
+            try: return f.getsize(t)[0]
+            except Exception: return len(t) * 10
+
+    def draw_box(key, text, color, center_x=False):
+        rx, ry, rw, rh = CARD_BOXES[key]
+        x, y, w, h = rx * W, ry * H, rw * W, rh * H
+        size = max(14, int(h * 0.48))
         f = get_font(size)
+        while text_w(text, f) > w - 12 and size > 12:
+            size -= 1
+            f = get_font(size)
         try:
-            while draw.textlength(text, font=f) > max_w and size > 10:
-                size -= 2; f = get_font(size)
-        except: pass
-        draw.text((x, y), text, font=f, fill=color)
+            bb = draw.textbbox((0, 0), text, font=f)
+            th = bb[3] - bb[1]
+            yoff = bb[1]
+        except Exception:
+            th, yoff = size, 0
+        ty = y + (h - th) / 2 - yoff
+        tw = text_w(text, f)
+        tx = x + (w - tw) / 2 if center_x else x + 6
+        draw.text((tx, ty), text, font=f, fill=color)
+
     biz = format_businesses(json.loads(card["businesses"] or "[]")) or "Неизвестно"
     realty = format_realty(json.loads(card["realty"] or "[]")) or "Неизвестно"
     prop = format_property(card["property_val"])
     garage = ("#" + card["garage"]) if card["garage"] else "Неизвестно"
     phone = format_phone(card["phone"]) if card["phone"] else "Неизвестно"
     name = card["name"] or "Неизвестно"
-    draw_auto(int(W*0.06), int(H*0.815), int(W*0.28), name, int(H*0.035), (255, 255, 255))
-    draw_auto(int(W*0.455), int(H*0.245), int(W*0.48), biz, int(H*0.030), (25, 25, 25))
-    draw_auto(int(W*0.455), int(H*0.400), int(W*0.48), realty, int(H*0.030), (25, 25, 25))
-    draw_auto(int(W*0.455), int(H*0.555), int(W*0.48), prop, int(H*0.030), (25, 25, 25))
-    draw_auto(int(W*0.455), int(H*0.710), int(W*0.48), garage, int(H*0.030), (25, 25, 25))
-    draw_auto(int(W*0.455), int(H*0.865), int(W*0.48), phone, int(H*0.030), (25, 25, 25))
+    draw_box("name", name, (255, 255, 255), center_x=True)
+    draw_box("biz", biz, (30, 30, 30))
+    draw_box("realty", realty, (30, 30, 30))
+    draw_box("prop", prop, (30, 30, 30))
+    draw_box("garage", garage, (30, 30, 30))
+    draw_box("phone", phone, (30, 30, 30))
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=88, optimize=True)
     buf.seek(0)
@@ -903,7 +981,6 @@ def parse_reply_attachments(reply_obj):
             if ph.get("owner_id") and ph.get("id"): parts.append("photo{}_{}".format(ph['owner_id'], ph['id']))
     return ", ".join(parts)
 
-# ===== СЛУЖЕБНЫЕ КОМАНДЫ ЛС =====
 def _ls_segments(body):
     return [s.strip() for s in body.split(",") if s.strip()]
 
@@ -1338,12 +1415,17 @@ def card_edit_main_kb():
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
 def card_bus_kb():
+    # МАКСИМУМ 4 РЯДА: 3 ряда по 5 бизнесов + последний ряд (1 бизнес + Отмена + Назад)
     rows = []
-    for i in range(0, len(BUS_TYPES_ORDER), 4):
-        rows.append([{"action": {"type": "callback", "label": t, "payload": json.dumps({"cmd": "card_bus", "t": t})}, "color": "secondary"} for t in BUS_TYPES_ORDER[i:i+4]])
-    rows.append([
-        {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
-        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"}])
+    row = []
+    for t in BUS_TYPES_ORDER:
+        row.append({"action": {"type": "callback", "label": t, "payload": json.dumps({"cmd": "card_bus", "t": t})}, "color": "secondary"})
+        if len(row) == 5:
+            rows.append(row)
+            row = []
+    row.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
+    row.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
+    rows.append(row)
     return {"inline": True, "buttons": rows}
 
 def card_realty_kb():
@@ -1357,40 +1439,6 @@ def card_input_kb(back_cmd):
     return {"inline": True, "buttons": [[
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": back_cmd})}, "color": "primary"}]]}
-
-def handle_ls_card(peer, sender, cmd, args):
-    if cmd == "карта":
-        targets = extract_targets(" ".join(args), 0)
-        target_id = targets[0] if (targets and sender in (CREATOR_ID, LEADER_ID)) else sender
-        img_buf = render_card(target_id)
-        if not img_buf:
-            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
-            return
-        try:
-            att = upload_photo(peer, img_buf)
-            send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
-        except Exception as e:
-            err = str(e)
-            if "[15]" in err or "scope" in err.lower():
-                send_msg(peer, "❌ У токена нет права «Фотографии»: Управление → Использование API → галочка «Фото» → пересоздать токен.")
-            else:
-                send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
-    elif cmd == "карта_редактировать":
-        set_card_state(sender, peer, "main_menu")
-        send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
-    elif cmd == "карта_очистить":
-        fld = None
-        for a in args:
-            if a.lower() in CARD_FIELD_MAP: fld = CARD_FIELD_MAP[a.lower()]
-        if fld:
-            default = "[]" if fld in ("businesses", "realty") else ""
-            set_card_field(sender, **{fld: default})
-            send_msg(peer, "✅ Очищено поле карточки: {}.".format(fld))
-        else:
-            with DB_LOCK:
-                CONN.execute("DELETE FROM player_cards WHERE user_id=?", (sender,))
-                CONN.commit()
-            send_msg(peer, "✅ Ваша карточка очищена полностью.")
 
 def handle_event(event):
     try:
@@ -1418,7 +1466,8 @@ def handle_event(event):
                 try:
                     VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=kbj)
                     return
-                except: pass
+                except Exception as e:
+                    print("card edit error:", e)
             send_msg(peer_id, text, keyboard=kb)
 
         # ===== КАРТОЧКА: КОЛБЭКИ =====
@@ -2011,6 +2060,40 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
+def handle_ls_card(peer, sender, cmd, args):
+    if cmd == "карта":
+        targets = extract_targets(" ".join(args), 0)
+        target_id = targets[0] if (targets and sender in (CREATOR_ID, LEADER_ID)) else sender
+        img_buf = render_card(target_id)
+        if not img_buf:
+            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
+            return
+        try:
+            att = upload_photo(peer, img_buf)
+            send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
+        except Exception as e:
+            err = str(e)
+            if "[15]" in err or "scope" in err.lower():
+                send_msg(peer, "❌ У токена нет права «Фотографии»: Управление → Использование API → галочка «Фото» → пересоздать токен.")
+            else:
+                send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
+    elif cmd == "карта_редактировать":
+        set_card_state(sender, peer, "main_menu")
+        send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
+    elif cmd == "карта_очистить":
+        fld = None
+        for a in args:
+            if a.lower() in CARD_FIELD_MAP: fld = CARD_FIELD_MAP[a.lower()]
+        if fld:
+            default = "[]" if fld in ("businesses", "realty") else ""
+            set_card_field(sender, **{fld: default})
+            send_msg(peer, "✅ Очищено поле карточки: {}.".format(fld))
+        else:
+            with DB_LOCK:
+                CONN.execute("DELETE FROM player_cards WHERE user_id=?", (sender,))
+                CONN.commit()
+            send_msg(peer, "✅ Ваша карточка очищена полностью.")
+
 def handle_message(peer, sender, text, msg_obj):
     first_line = text.split("\n")[0].strip()
     first = norm(first_line)
@@ -2054,7 +2137,6 @@ def handle_message(peer, sender, text, msg_obj):
             elif text.strip().startswith("/"):
                 handle_creator_ls(peer, text)
                 return
-        # Карточные команды работают в ЛС
         if first.startswith("мд "):
             pn = first[3:].strip().split()
             if pn:
@@ -2065,12 +2147,10 @@ def handle_message(peer, sender, text, msg_obj):
                     handle_ls_card(peer, sender, "карта_очистить", pn[2:]); return
                 if pn[0] == "карта":
                     handle_ls_card(peer, sender, "карта", pn[1:]); return
-        # Ввод для карточки в ЛС
         if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id")):
             return
         return
 
-    # Ввод для карточки в чате (не команда)
     if not first.startswith("мд "):
         if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id")):
             return
@@ -2595,7 +2675,7 @@ def handle_message(peer, sender, text, msg_obj):
 
     elif cmd == "статус":
         if not main_admin: send_msg(peer, "⛔ Только главный админ и выше."); return
-        if not args: send_msg(peer, "❌ Формат: `Мд статус @игрок <номер>` / `создать` / `удалить` / `редактировать` / `снять`"); return
+        if not args: send_msg(peer, "❌ Формат:\n`Мд статус @игрок <номер>` — назначить\n`Мд статус создать <название>` — создать\n`Мд статус удалить <номер>` — удалить\n`Мд статус редактировать <номер> <название>` — переименовать\n`Мд статус снять @игрок` — снять"); return
         subcmd = args[0].lower()
         if subcmd == "создать":
             name = " ".join(args[1:])
