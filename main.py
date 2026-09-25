@@ -609,16 +609,22 @@ def upload_photo(peer, img_buf):
     raw = img_buf.getvalue()
     if not raw:
         raise RuntimeError("EMPTY_IMAGE: картинка пустая")
+    if len(raw) > 4500000:
+        raise RuntimeError("TOO_BIG: файл {} байт (лимит ~5 МБ)".format(len(raw)))
     server = VK.photos.getMessagesUploadServer(peer_id=peer)
-    resp = requests.post(
-        server["upload_url"],
-        files={"photo": ("card.png", raw, "image/png")},
-        timeout=30,
-    )
-    data = resp.json()
-    print("card upload response:", data)
-    if not data.get("photo") or not data.get("hash") or not data.get("server"):
-        raise RuntimeError("UPLOAD_BAD_RESPONSE: {}".format(str(data)[:200]))
+    data = None
+    for attempt in range(2):  # вторая попытка, если сервер глючанул
+        resp = requests.post(
+            server["upload_url"],
+            files={"photo": ("card.jpg", raw, "image/jpeg")},
+            timeout=30,
+        )
+        data = resp.json()
+        print("card upload attempt {}: size={} resp={}".format(attempt + 1, len(raw), data))
+        if data.get("photo"):
+            break
+    if not data or not data.get("photo") or not data.get("hash") or not data.get("server"):
+        raise RuntimeError("UPLOAD_BAD_RESPONSE: {} (размер файла: {} байт)".format(str(data)[:200], len(raw)))
     saved = VK.photos.saveMessagesPhoto(photo=data["photo"], hash=data["hash"], server=data["server"])
     if not saved:
         raise RuntimeError("SAVE_EMPTY: ВК не вернул фото после сохранения")
@@ -640,7 +646,17 @@ def render_card(user_id):
     if not template: return None
     img = Image.open(template).convert("RGB")
     W, H = img.size
+    # Сжимаем слишком большие шаблоны — ВК не любит огромные файлы
+    if W > 1600:
+        ratio = 1600.0 / W
+        img = img.resize((1600, int(H * ratio)), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
+        W, H = img.size
     draw = ImageDraw.Draw(img)
+    # ... дальше весь твой код отрисовки текста (get_font, draw_auto, поля) без изменений ...
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=88, optimize=True)   # <-- было PNG, стало JPEG
+    buf.seek(0)
+    return buf
     def get_font(size):
         for fp in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "arial.ttf", "DejaVuSans.ttf"]:
             if os.path.isfile(fp):
