@@ -45,7 +45,7 @@ DICE_PHRASES = [
     "Твоя удача сегодня ушла к кому-то с нормальными руками. 🖐️",
     "У тебя руки из задницы растут, судя по результатам твоей игры. 🍑🌱",
     "Это не просто проигрыш, это историческое унижение. Можешь сворачивать свои пожитки. 🧳",
-    "Смирись, ты сегодня официально признан главным неудачником Million Dollars. 🏆💀",
+    "Смирись, ты сегодня официально признан главным неудачником Million Dollars. 🏆",
     "Эй инопланетянин, ты помнишь как ты сыграл? Нет? Хуево! 👽",
     "В мире есть три вещи которые не меняются: вращение земли, рассвет солнца и твои проёбы! 🌍️",
     "Прикинь как было бы хорошо если бы ты выиграл? Но нет.... 😭",
@@ -83,7 +83,7 @@ ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "�
 
 RU_MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 
-# ===== ВАЛИДАЦИЯ ЗНАЧКОВ =====
+# ===== ВАЛИДАЦИЯ ЗНАЧКОВ: ровно 1 эмодзи-кластер + цифры =====
 _EM_BASE = ("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F"
             "\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F"
             "\U0001FA70-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\u2B00-\u2BFF\u2190-\u21FF\u2300-\u23FF"
@@ -1518,7 +1518,6 @@ def handle_event(event):
                     days = (now_ts - r["created_at"]) // 86400
                     lines.append("{}. {} и {} ({} дн.)".format(idx, silent_mention_badge(r["user1"], peer_id), silent_mention_badge(r["user2"], peer_id), days))
             elif top_type == "days":
-                # ТОП ПО ПОСЛЕДНЕМУ ЗАХОДУ
                 with DB_LOCK:
                     total = CONN.execute("SELECT COUNT(*) FROM members WHERE peer_id=? AND join_time>0", (peer_id,)).fetchone()[0]
                     rows = CONN.execute("SELECT user_id, join_time FROM members WHERE peer_id=? AND join_time>0 ORDER BY join_time ASC LIMIT ? OFFSET ?", (peer_id, per_page, (page-1)*per_page)).fetchall()
@@ -1876,7 +1875,6 @@ def handle_message(peer, sender, text, msg_obj):
         status_str = "🎯Статус: Отсутствует."
         if st_row:
             status_str = "🎯Статус: {}".format(st_row["name"])
-        # КТО Я: последний титул
         who_name = row["who_name"] if row and row["who_name"] else ""
         who_ts = row["who_ts"] if row else 0
         if who_name:
@@ -2808,7 +2806,7 @@ def handle_message(peer, sender, text, msg_obj):
                 chunk = user_ids[i:i+100]
                 try:
                     users_data = VK.users.get(user_ids=",".join(map(str, chunk)), fields="online,last_seen")
-                    for u in users:
+                    for u in users_data:
                         if u.get("online") == 1:
                             ls = u.get("last_seen", {})
                             platform = ls.get("platform", 0)
@@ -2869,7 +2867,7 @@ def handle_message(peer, sender, text, msg_obj):
             CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (sender, peer))
             CONN.execute("UPDATE members SET who_name=?, who_ts=? WHERE user_id=? AND peer_id=?", (phrase, now_ts, sender, peer))
             CONN.commit()
-        send_msg(peer, "🍀 {} ♠, вы - {}".format(silent_mention_badge(sender, peer), phrase))
+        send_msg(peer, "🍀 {}, вы - {}".format(silent_mention_badge(sender, peer), phrase))
 
     elif cmd == "кто":
         word = " ".join(args) if args else "это"
