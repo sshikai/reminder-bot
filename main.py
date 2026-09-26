@@ -47,7 +47,7 @@ DICE_PHRASES = [
     "Твой максимум — это бросать кости собакам, к игральным тебе лучше не прикасаться. 🐕",
     "Удача сегодня посмотрела на тебя, посмеялась и ушла ко мне. 😏",
     "Кости любят смелых, а над наивными они просто ржут — прямо как я сейчас. 🦴",
-    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬💀",
+    "Ты проиграл генератору случайных чисел, каково это — быть неудачником на генетическом уровне? 🧬",
     "Пискоструй ты где? Не забыл? Ты проебал в кости. 📢",
     "Эй чепуха, твой проёб не забыли. 🤡",
     "Ты проиграл, но ты держись там, хорошего настроения. 😔",
@@ -2330,15 +2330,16 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
+LEGENDARY_WHO = ["Пират🏴‍️", "Босс ", "Абсолют ", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
-                 "феникс": "Феникс🐦‍", "мафиози": "Мафиози🕴️"}
+                 "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
 
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
                      "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
                      "/verify @ - подтвердить карту.\n"
                      "/deny @ - отменить подтверждение.\n"
+                     "/card @ - посмотреть карту любого.\n"
                      "/clearcard @ [праметр] - очистить любую карту.\n\n"
                      "параметры: бизнесы, недвижимость, имущество, гараж, телефон, фото, имя. "
                      "(если не указать то очистит все кроме цвета)")
@@ -2389,6 +2390,13 @@ def handle_clearcard(peer, sender, raw):
     else:
         clear_card_data(t)
         send_msg(peer, "✅ Карта {} очищена (кроме цвета).".format(silent_mention_badge(t, peer)))
+
+def handle_card_ls(peer, sender, raw):
+    targets = extract_targets(raw, 0)
+    if not targets:
+        send_msg(peer, "❌ Формат: /card @юзер")
+        return
+    send_card_to(peer, targets[0])
 
 def handle_setkto(peer, sender, raw):
     m_id = re.search(r"(?:@|https?://vk\.(?:com|ru)/|https?://m\.vk\.(?:com|ru)/|\[id)(\d+|[a-zA-Z0-9._]+)", raw, re.I)
@@ -2461,7 +2469,7 @@ def handle_inspector(peer, sender, raw):
     if get_setting(0, key, "0") == "1":
         set_setting(0, key, "0")
         send_msg(peer, "✅ С {} снята роль инспектора.".format(silent_mention_badge(t, peer)))
-        send_msg(t, "📋 Вас сняли с роли проверяющего. Команды /verify, /deny и /clearcard больше недоступны.")
+        send_msg(t, "📋 Вас сняли с роли проверяющего. Команды /verify, /deny, /card и /clearcard больше недоступны.")
     else:
         set_setting(0, key, "1")
         send_msg(peer, "✅ {} назначен инспектором.".format(silent_mention_badge(t, peer)))
@@ -2559,6 +2567,9 @@ def handle_message(peer, sender, text, msg_obj):
             elif low.startswith("/clearcard"):
                 handle_clearcard(peer, sender, text[len("/clearcard"):].strip())
                 return
+            elif low.startswith("/card"):
+                handle_card_ls(peer, sender, text[len("/card"):].strip())
+                return
             elif low.startswith("/verify"):
                 handle_verify(peer, sender, text[len("/verify"):].strip(), True)
                 return
@@ -2571,6 +2582,9 @@ def handle_message(peer, sender, text, msg_obj):
         elif is_insp:
             if low.startswith("/clearcard"):
                 handle_clearcard(peer, sender, text[len("/clearcard"):].strip())
+                return
+            elif low.startswith("/card"):
+                handle_card_ls(peer, sender, text[len("/card"):].strip())
                 return
             elif low.startswith("/verify"):
                 handle_verify(peer, sender, text[len("/verify"):].strip(), True)
@@ -3243,9 +3257,7 @@ def handle_message(peer, sender, text, msg_obj):
         count = None
         for a in args:
             if a.isdigit() and 1 <= len(a) <= 3: count = int(a)
-        if count is None:
-            send_msg(peer, "❌ Укажите число сообщений: `Мд чистка @игрок <число>` (максимум 50).")
-            return
+        if count is None: send_msg(peer, "❌ Укажите число сообщений: `Мд чистка @игрок <число>` (максимум 50)."); return
         count = max(1, min(count, 50))
         cmids = []; history_ok = True
         try:
@@ -3755,7 +3767,8 @@ def handle_message(peer, sender, text, msg_obj):
         targets = extract_targets(" ".join(args), reply_from)
         target_id = targets[0] if targets else sender
         if target_id != sender and not admin:
-            send_msg(peer, "⛔ Только админы могут смотреть чужие карты."); return
+            send_msg(peer, "⛔ Только админы могут смотреть чужие карты."). 
+            return
         send_card_to(peer, target_id)
 
     elif cmd == "карта_редактировать":
