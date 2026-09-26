@@ -117,6 +117,7 @@ CARD_DATA_KEYS = set(CARD_FIELD_MAP.values())
 PARAM_MAP = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property_val",
              "гараж": "garage", "телефон": "phone", "имя": "name", "фото": "photo"}
 FIELD_DEFAULT = {"businesses": "[]", "realty": "[]", "property_val": "", "garage": "", "phone": "", "name": ""}
+PARAM_HINT = "бизнесы, недвижимость, имущество, гараж, телефон, фото, имя"
 
 COLORS_ORDER = [
     ("red", "Красный"), ("red_full", "Полностью красный"),
@@ -555,29 +556,47 @@ def clear_card_state(user_id, peer_id):
         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (user_id, peer_id))
         CONN.commit()
 
+def resolve_cmid_retry(peer, sent_id, tries=3):
+    for i in range(tries):
+        try:
+            resp = VK.messages.getById(message_ids=[sent_id])
+            items = resp.get("items", [])
+            if items:
+                cm = items[0].get("conversation_message_id")
+                if cm: return int(cm)
+        except Exception:
+            pass
+        time.sleep(0.35)
+    return sent_id
+
 def close_card_session(peer, ctx, txt):
     cm = ctx.get("msg_cmid"); mid = ctx.get("msg_id")
-    attempts = []
-    if cm: attempts.append({"conversation_message_ids": [cm], "delete_for_all": 1})
-    if mid: attempts.append({"message_ids": [mid], "delete_for_all": 1})
-    if mid: attempts.append({"message_ids": [mid]})
-    if cm: attempts.append({"conversation_message_ids": [cm]})
-    for a in attempts:
+    deletes = []
+    if cm: deletes.append({"conversation_message_ids": [cm], "delete_for_all": 1})
+    if mid: deletes.append({"message_ids": [mid], "delete_for_all": 1})
+    if mid: deletes.append({"message_ids": [mid]})
+    if cm: deletes.append({"conversation_message_ids": [cm]})
+    for a in deletes:
         try:
             VK.messages.delete(peer_id=peer, **a)
             send_msg(peer, txt)
-            return
+            return True
         except Exception:
             continue
-    target = cm or mid
-    if target:
-        for kw in ({"conversation_message_id": target}, {"message_id": target}):
-            try:
-                VK.messages.edit(peer_id=peer, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}), **kw)
-                return
-            except Exception:
-                continue
+    edits = []
+    if cm: edits.append({"conversation_message_id": cm})
+    if mid: edits.append({"message_id": mid})
+    if cm: edits.append({"message_id": cm})
+    if mid: edits.append({"conversation_message_id": mid})
+    for kw in edits:
+        try:
+            VK.messages.edit(peer_id=peer, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}), **kw)
+            return True
+        except Exception:
+            continue
+    print("card close FAIL peer={} ctx={}".format(peer, ctx))
     send_msg(peer, txt)
+    return False
 
 def extract_photo_url(msg_obj):
     for att in (msg_obj.get("attachments") or []):
@@ -622,6 +641,20 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             except: pass
         send_msg(peer, msg)
 
+    def reply_kb(msg, back_payload, menu_step, menu_ctx=None):
+        kb = {"inline": True, "buttons": [[
+            {"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps(back_payload)}, "color": "primary"},
+            {"action": {"type": "callback", "label": "✅ Готово", "payload": json.dumps({"cmd": "card_finish"})}, "color": "positive"}]]}
+        c = dict(menu_ctx or {})
+        c["msg_cmid"] = prompt_cmid
+        set_card_state(sender, peer, menu_step, c)
+        if prompt_cmid:
+            try:
+                VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message=msg, keyboard=json.dumps(kb))
+                return
+            except: pass
+        send_msg(peer, msg, keyboard=kb)
+
     if text.lower() in ["отмена", "отменить"]:
         clear_card_state(sender, peer)
         reply("❌ Редактирование отменено.")
@@ -630,8 +663,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
     if step == "design_photo_wait":
         if text.strip().lower() in ["дефолт", "default"]:
             set_design(sender, photo="")
-            clear_card_state(sender, peer)
-            reply("✅ Возвращена дефолтная фотография карточки.")
+            reply_kb("✅ Возвращена дефолтная фотография карточки.", {"cmd": "card_edit_menu"}, "edit_menu")
             return True
         url = extract_photo_url({"attachments": attachments}) if attachments else None
         if not url:
@@ -639,8 +671,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             return True
         if save_design_photo(sender, url):
             set_design(sender, photo="custom")
-            clear_card_state(sender, peer)
-            reply("✅ Твоя фотография установлена на карточку!")
+            reply_kb("✅ Твоя фотография установлена на карточку!", {"cmd": "card_edit_menu"}, "edit_menu")
         else:
             reply("❌ Не удалось скачать фото, попробуй другое.")
         return True
@@ -657,8 +688,9 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Нет свободных слотов под этот бизнес.")
             return True
         add_business(sender, biz_type, text.strip())
-        clear_card_state(sender, peer)
-        reply("✅ Бизнес {} #{} успешно добавлен!".format(biz_type, text.strip()))
+        p = ctx.get("p", 1)
+        reply_kb("✅ Бизнес {} #{} успешно добавлен!".format(biz_type, text.strip()),
+                 {"cmd": "card_bus_menu", "p": p}, "bus_menu", {"p": p})
         return True
 
     if step == "realty_input":
@@ -667,8 +699,8 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Неверный номер: максимум 4 цифры, без нуля в начале.")
             return True
         add_realty(sender, realty_type, text.strip())
-        clear_card_state(sender, peer)
-        reply("✅ Недвижимость {} #{} успешно добавлена!".format(realty_type, text.strip()))
+        reply_kb("✅ Недвижимость {} #{} успешно добавлена!".format(realty_type, text.strip()),
+                 {"cmd": "card_realty_menu"}, "realty_menu")
         return True
 
     if step == "garage_input":
@@ -676,8 +708,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Неверный номер гаража: максимум 4 цифры, без нуля в начале.")
             return True
         set_card_field(sender, garage=text.strip())
-        clear_card_state(sender, peer)
-        reply("✅ Гараж #{} успешно добавлен!".format(text.strip()))
+        reply_kb("✅ Гараж #{} успешно добавлен!".format(text.strip()), {"cmd": "card_edit_menu"}, "edit_menu")
         return True
 
     if step == "phone_input":
@@ -685,8 +716,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Неверный телефон: 4–7 цифр, без нуля в начале.")
             return True
         set_card_field(sender, phone=text.strip())
-        clear_card_state(sender, peer)
-        reply("✅ Телефон {} успешно добавлен!".format(format_phone(text.strip())))
+        reply_kb("✅ Телефон {} успешно добавлен!".format(format_phone(text.strip())), {"cmd": "card_edit_menu"}, "edit_menu")
         return True
 
     if step == "name_input":
@@ -694,8 +724,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Неверный формат: Имя_Фамилия, только английские буквы, макс. 15+15 символов.")
             return True
         set_card_field(sender, name=text.strip())
-        clear_card_state(sender, peer)
-        reply("✅ Имя {} успешно установлено!".format(text.strip()))
+        reply_kb("✅ Имя {} успешно установлено!".format(text.strip()), {"cmd": "card_edit_menu"}, "edit_menu")
         return True
 
     if step == "property_input":
@@ -703,8 +732,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Введите сумму цифрами (например 12000000000).")
             return True
         set_card_field(sender, property_val=text.strip())
-        clear_card_state(sender, peer)
-        reply("✅ Имущество оценено в {}!".format(format_property(text.strip())))
+        reply_kb("✅ Имущество оценено в {}!".format(format_property(text.strip())), {"cmd": "card_edit_menu"}, "edit_menu")
         return True
 
     return False
@@ -824,8 +852,7 @@ def send_card_to(peer, target_id):
         return
     card = get_card(target_id)
     txt = "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer))
-    if card.get("verified"):
-        txt += " | Информация карточки подтверждена✅"
+    txt += " | Информация карточки подтверждена✅" if card.get("verified") else " | Информация карточки не подтверждена❌"
     send_msg(peer, txt, attachments=att)
 
 # ===== ОТРИСОВКА =====
@@ -1179,7 +1206,7 @@ def parse_reply_attachments(reply_obj):
             if ph.get("owner_id") and ph.get("id"): parts.append("photo{}_{}".format(ph['owner_id'], ph['id']))
     return ", ".join(parts)
 
-# ===== СЛУЖЕБНЫЕ КОМАНДЫ (ЛС СОЗДАТЕЛЯ/ЛИДЕРА, несколько человек через запятую) =====
+# ===== СЛУЖЕБНЫЕ КОМАНДЫ =====
 def _ls_segments(body):
     return [s.strip() for s in body.split(",") if s.strip()]
 
@@ -1546,7 +1573,9 @@ HELP_BR_TEXT = (
     "🗃️Личная карточка:\n"
     "1. Мд карта — выводит фото карты.\n"
     "2. Мд карта редактировать — редактирование, цвет и фото.\n"
-    "3. Мд очистить карту [параметр] — очистить свою карту.\n\n"
+    "3. Мд очистить карту [параметр] — очистить свою карту.\n"
+    "(параметры: бизнесы, недвижимость, имущество, гараж, телефон, фото, имя. "
+    "(если не указать то очистит все кроме цвета).\n\n"
     "Желательно использовать в лс бота, чтобы не засорять чат😉"
 )
 HELP_MODERATOR_TEXT = (
@@ -1723,6 +1752,11 @@ def handle_event(event):
                 clear_card_state(user_id, peer_id)
                 show("❌ Редактирование карточки отменено.", None)
                 snackbar("❌ Отменено")
+                return
+            if cmd == "card_finish":
+                clear_card_state(user_id, peer_id)
+                show("✅ Редактирование завершено.", None)
+                snackbar("✅ Готово")
                 return
             ctx = state.get("context", {})
             if time.time() - ctx.get("ts", 0) > 60:
@@ -2312,7 +2346,7 @@ INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
 def open_edit_menu(peer, sender):
     try:
         msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, keyboard=json.dumps(card_edit_main_kb()), random_id=random.getrandbits(31))
-        cmid = resolve_cmid(peer, msg_id)
+        cmid = resolve_cmid_retry(peer, msg_id)
     except Exception:
         msg_id = None; cmid = None
     set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id})
@@ -2340,10 +2374,16 @@ def handle_clearcard(peer, sender, raw):
         return
     t = targets[0]
     param = None
+    extra = []
     for tok in re.split(r"\s+", raw):
         tl = tok.strip(".,!?").lower()
         if tl in PARAM_MAP:
-            param = tl; break
+            if param is None: param = tl
+        elif not re.match(r"^[\[@]", tok) and not re.search(r"vk\.(com|ru)/", tok) and not re.match(r"^\d{5,}$", tok):
+            extra.append(tok)
+    if param is None and extra:
+        send_msg(peer, "❌ Нет такого параметра: {}. Доступные: {}.".format(" ".join(extra), PARAM_HINT))
+        return
     if param:
         send_msg(peer, apply_clear_param(peer, t, param))
     else:
@@ -2433,6 +2473,9 @@ def do_clear_card_command(peer, sender, args):
         al = a.strip(".,!?").lower()
         if al in PARAM_MAP:
             param = al; break
+    if args and param is None:
+        send_msg(peer, "❌ Нет такого параметра: {}. Доступные параметры: {} (или без параметра — очистит всё кроме цвета).".format(" ".join(args), PARAM_HINT))
+        return
     if param:
         if param == "фото":
             set_design(sender, photo="")
@@ -3026,6 +3069,10 @@ def handle_message(peer, sender, text, msg_obj):
         if not main_admin: send_msg(peer, "⛔ Только главный админ и выше."); return
         if not args: send_msg(peer, "❌ Формат: `Мд статус @игрок <номер>` / `создать` / `удалить` / `редактировать` / `снять`"); return
         subcmd = args[0].lower()
+        known_subs = ("создать", "удалить", "редактировать", "снять")
+        if subcmd not in known_subs and not re.search(r"\[id\d+\||@id\d+|\b\d{5,}\b|vk\.(com|ru)/", args[0], re.I):
+            send_msg(peer, "❌ Нет такой подкоманды: {}. Подкоманды: создать, удалить, редактировать, снять. Или `Мд статус @игрок <номер>`.".format(subcmd))
+            return
         if subcmd == "создать":
             name = " ".join(args[1:])
             if not name: send_msg(peer, "❌ Формат: `Мд статус создать <название>`"); return
@@ -3160,9 +3207,16 @@ def handle_message(peer, sender, text, msg_obj):
                         "стикеров": ["sticker_count"], "кости": ["dice_wins"], "кнб": ["kmb_wins"]}
         group_names = {"сообщений": "символы/сообщения", "эмодзи": "эмодзи", "стики": "эмодзи", "стикеров": "эмодзи", "кости": "кости", "кнб": "кнб"}
         selected = []
+        bad = []
         for arg in args:
             g = arg.lower()
-            if g in group_fields and g not in selected: selected.append(g)
+            if g in group_fields:
+                if g not in selected: selected.append(g)
+            elif not re.search(r"\[id\d+\||@id\d+|\b\d{5,}\b|vk\.(com|ru)/", arg, re.I):
+                bad.append(arg)
+        if bad:
+            send_msg(peer, "❌ Нет такого типа топа: {}. Доступные: сообщений, эмодзи, кости, кнб.".format(" ".join(bad)))
+            return
         if not selected: selected = ["сообщений", "эмодзи", "кости", "кнб"]
         top_types = []
         for g in selected:
@@ -3189,7 +3243,9 @@ def handle_message(peer, sender, text, msg_obj):
         count = None
         for a in args:
             if a.isdigit() and 1 <= len(a) <= 3: count = int(a)
-        if count is None: send_msg(peer, "❌ Укажите число сообщений: `Мд чистка @игрок <число>` (максимум 50)."); return
+        if count is None:
+            send_msg(peer, "❌ Укажите число сообщений: `Мд чистка @игрок <число>` (максимум 50).")
+            return
         count = max(1, min(count, 50))
         cmids = []; history_ok = True
         try:
@@ -3703,6 +3759,9 @@ def handle_message(peer, sender, text, msg_obj):
         send_card_to(peer, target_id)
 
     elif cmd == "карта_редактировать":
+        if args:
+            send_msg(peer, "❌ У команды `Мд карта редактировать` нет параметров.")
+            return
         if get_setting(peer, "card_edit_disabled", "0") == "1":
             send_msg(peer, "❌ Редактирование карт в данном чате запрещено, используйте в ЛС с ботом.")
             return
