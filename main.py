@@ -1343,7 +1343,10 @@ def handle_creator_ls(peer, text):
     elif low.startswith("/rbrak"):
         send_msg(peer, _ls_apply_rbrak(t[len("/rbrak"):].strip()))
     else:
-        send_msg(peer, "ℹ️ Неизвестная служебная команда.")
+        send_msg(peer, "ℹ️ Неизвестная служебная команда.\n\n" + ls_help_text(sender_if_needed(peer)))
+
+def sender_if_needed(peer):
+    return peer
 
 def sync_members(peer):
     now = time.time()
@@ -1398,6 +1401,34 @@ def get_streak_emoji(streak):
     if streak >= 10: return "😇"
     if streak >= 5: return "😎"
     return "🤓"
+
+def ls_help_text(user_id):
+    lines = [
+        "📖 Команды, доступные тебе в ЛС с ботом:",
+        "1. Мд карта — посмотреть свою карту.",
+        "2. Мд карта редактировать — редактировать карту (данные, цвет, фото).",
+        "3. Мд очистить карту [параметр] — очистить свою карту (параметры: бизнесы, недвижимость, имущество, гараж, телефон, фото, имя; без параметра — всё кроме цвета).",
+        "4. Мд команды — этот список.",
+    ]
+    if is_inspector(user_id) or user_id in (CREATOR_ID, LEADER_ID):
+        lines += [
+            "",
+            "🕵 Скрытые команды проверяющего:",
+            "/verify @ - подтвердить карту.",
+            "/deny @ - отменить подтверждение.",
+            "/card @ - посмотреть карту любого.",
+            "/clearcard @ [параметр] - очистить любую карту.",
+        ]
+    if user_id in (CREATOR_ID, LEADER_ID):
+        lines += [
+            "",
+            "👑 Скрытые команды создателя/лидера:",
+            "/inspector @ - назначить/снять проверяющего.",
+            "/setkto @ <слова> <номер чата> - поставить статус «кто я».",
+            "/чаты - список бесед бота.",
+            "/firstlogin, /lastlogin, /topmsg, /topemj, /rbrak - служебный занос данных.",
+        ]
+    return "\n".join(lines)
 
 def get_bdate_map(member_ids):
     bdate_map = {}
@@ -2330,10 +2361,10 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍️", "Босс ", "Абсолют ", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
+LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
-                 "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
+                 "феникс": "Феникс🐦‍", "мафиози": "Мафиози🕴️"}
 
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
                      "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
@@ -2592,6 +2623,9 @@ def handle_message(peer, sender, text, msg_obj):
             elif low.startswith("/deny"):
                 handle_verify(peer, sender, text[len("/deny"):].strip(), False)
                 return
+            elif low.startswith("/"):
+                send_msg(peer, "❌ Неизвестная команда: {}\n\n".format(text.strip().split("\n")[0]) + ls_help_text(sender))
+                return
         if check_clear_pending(peer, sender, text):
             return
         if first.startswith("мд "):
@@ -2604,6 +2638,13 @@ def handle_message(peer, sender, text, msg_obj):
                     do_clear_card_command(peer, sender, pn[2:]); return
                 if pn[0] == "карта":
                     handle_ls_card(peer, sender, "карта", pn[1:]); return
+                if pn[0] == "команды":
+                    send_msg(peer, ls_help_text(sender)); return
+                send_msg(peer, "❌ Неизвестная команда: `мд {}`\n\n".format(" ".join(pn)) + ls_help_text(sender))
+                return
+        if text.strip().startswith("/"):
+            send_msg(peer, "❌ Неизвестная команда: {}\n\n".format(text.strip().split("\n")[0]) + ls_help_text(sender))
+            return
         if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id"), attachments=msg_obj.get("attachments")):
             return
         return
@@ -3767,7 +3808,7 @@ def handle_message(peer, sender, text, msg_obj):
         targets = extract_targets(" ".join(args), reply_from)
         target_id = targets[0] if targets else sender
         if target_id != sender and not admin:
-            send_msg(peer, "⛔ Только админы могут смотреть чужие карты."). 
+            send_msg(peer, "⛔ Только админы могут смотреть чужие карты.")
             return
         send_card_to(peer, target_id)
 
