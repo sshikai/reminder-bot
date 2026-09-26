@@ -1179,6 +1179,145 @@ def parse_reply_attachments(reply_obj):
             if ph.get("owner_id") and ph.get("id"): parts.append("photo{}_{}".format(ph['owner_id'], ph['id']))
     return ", ".join(parts)
 
+# ===== СЛУЖЕБНЫЕ КОМАНДЫ (ЛС СОЗДАТЕЛЯ/ЛИДЕРА, несколько человек через запятую) =====
+def _ls_segments(body):
+    return [s.strip() for s in body.split(",") if s.strip()]
+
+def _ls_date_ts(dstr):
+    try:
+        d, m, y = [int(x) for x in dstr.split(".")]
+        return int(datetime.datetime(y, m, d, 12, 0, 0, tzinfo=MSK_TZ).timestamp())
+    except Exception:
+        return None
+
+def _ls_user(seg):
+    m = re.search(r"\[id(\d+)\|", seg)
+    if m: return int(m.group(1)), re.sub(r"\[id\d+\|[^\]]*\]", " ", seg)
+    m = re.search(r"@id(\d+)", seg, re.I)
+    if m: return int(m.group(1)), re.sub(r"@id\d+", " ", seg, flags=re.I)
+    m = re.search(r"https?://vk\.(?:com|ru)/id(\d+)", seg, re.I)
+    if m: return int(m.group(1)), re.sub(r"https?://vk\.(?:com|ru)/id\d+", " ", seg, flags=re.I)
+    m = re.search(r"@(\d{6,})", seg)
+    if m: return int(m.group(1)), re.sub(r"@\d{6,}", " ", seg)
+    return None, seg
+
+def _ls_peer(seg):
+    m = re.search(r"\b(2\d{9})\b", seg)
+    return int(m.group(1)) if m else None
+
+def _ls_apply_firstlogin(body):
+    out = []
+    for seg in _ls_segments(body):
+        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
+        md = re.search(r"\b(\d{1,2}\.\d{1,2}\.\d{4})\b", seg)
+        ts = _ls_date_ts(md.group(1)) if md else None
+        if not uid or not peer_id or ts is None:
+            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        with DB_LOCK:
+            CONN.execute("INSERT OR IGNORE INTO join_stats(user_id, peer_id, first_join, in_top) VALUES(?,?,?,1)", (uid, peer_id, ts))
+            CONN.execute("UPDATE join_stats SET first_join=?, in_top=1 WHERE user_id=? AND peer_id=?", (ts, uid, peer_id))
+            CONN.commit()
+        out.append("✅ id{} → первый вход {} (чат {})".format(uid, md.group(1), peer_id))
+    return "\n".join(out) or "✅ Готово"
+
+def _ls_apply_lastlogin(body):
+    out = []
+    for seg in _ls_segments(body):
+        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
+        md = re.search(r"\b(\d{1,2}\.\d{1,2}\.\d{4})\b", seg)
+        ts = _ls_date_ts(md.group(1)) if md else None
+        if not uid or not peer_id or ts is None:
+            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        with DB_LOCK:
+            CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (uid, peer_id))
+            CONN.execute("UPDATE members SET join_time=? WHERE user_id=? AND peer_id=?", (ts, uid, peer_id))
+            CONN.commit()
+        out.append("✅ id{} → последний вход {} (чат {})".format(uid, md.group(1), peer_id))
+    return "\n".join(out) or "✅ Готово"
+
+def _ls_apply_topmsg(body):
+    out = []
+    for seg in _ls_segments(body):
+        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
+        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
+        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
+        if uid is None:
+            if len(nums) >= 3: uid, chars, msgs = nums[0], nums[1], nums[2]
+            else:
+                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        else:
+            if len(nums) >= 2: chars, msgs = nums[0], nums[1]
+            else:
+                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        if peer_id is None:
+            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        with DB_LOCK:
+            CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (uid, peer_id))
+            CONN.execute("UPDATE message_stats SET char_count=?, msg_count=? WHERE user_id=? AND peer_id=?", (chars, msgs, uid, peer_id))
+            CONN.commit()
+        out.append("✅ id{} → символы={}, сообщения={} (чат {})".format(uid, chars, msgs, peer_id))
+    return "\n".join(out) or "✅ Готово"
+
+def _ls_apply_top(body, field):
+    out = []
+    for seg in _ls_segments(body):
+        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
+        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
+        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
+        if uid is None:
+            if len(nums) >= 2: uid, val = nums[0], nums[1]
+            else:
+                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        else:
+            val = nums[0] if nums else None
+        if peer_id is None or val is None:
+            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        with DB_LOCK:
+            CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (uid, peer_id))
+            CONN.execute("UPDATE message_stats SET {}=? WHERE user_id=? AND peer_id=?".format(field), (val, uid, peer_id))
+            CONN.commit()
+        out.append("✅ id{} → {} = {} (чат {})".format(uid, field, val, peer_id))
+    return "\n".join(out) or "✅ Готово"
+
+def _ls_apply_rbrak(body):
+    out = []
+    now_ts = int(time.time())
+    for seg in _ls_segments(body):
+        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
+        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
+        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
+        if uid is None:
+            if len(nums) >= 2: uid, days = nums[0], nums[1]
+            else:
+                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        else:
+            days = nums[0] if nums else None
+        if peer_id is None or days is None:
+            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
+        with DB_LOCK:
+            row = CONN.execute("SELECT id FROM marriages WHERE peer_id=? AND (user1=? OR user2=?)", (peer_id, uid, uid)).fetchone()
+            if not row:
+                out.append("❌ id{} не состоит в браке в чате {}".format(uid, peer_id)); continue
+            CONN.execute("UPDATE marriages SET created_at=? WHERE id=?", (now_ts - days * 86400, row["id"]))
+            CONN.commit()
+        out.append("✅ id{} → брак {} дн. (чат {})".format(uid, days, peer_id))
+    return "\n".join(out) or "✅ Готово"
+
+def handle_creator_ls(peer, text):
+    t = text.strip(); low = t.lower()
+    if low.startswith("/firstlogin"):
+        send_msg(peer, _ls_apply_firstlogin(t[len("/firstlogin"):].strip()))
+    elif low.startswith("/lastlogin"):
+        send_msg(peer, _ls_apply_lastlogin(t[len("/lastlogin"):].strip()))
+    elif low.startswith("/topmsg"):
+        send_msg(peer, _ls_apply_topmsg(t[len("/topmsg"):].strip()))
+    elif low.startswith("/topemj"):
+        send_msg(peer, _ls_apply_top(t[len("/topemj"):].strip(), "sticker_count"))
+    elif low.startswith("/rbrak"):
+        send_msg(peer, _ls_apply_rbrak(t[len("/rbrak"):].strip()))
+    else:
+        send_msg(peer, "ℹ️ Неизвестная служебная команда.")
+
 def sync_members(peer):
     now = time.time()
     if peer in MEMBER_SYNC_CACHE and (now - MEMBER_SYNC_CACHE[peer]) < 300: return
@@ -2157,10 +2296,10 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍️", "Босс ", "Абсолют ", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦", "Мафиози🕴️"]
+LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
-                 "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
+                 "феникс": "Феникс🐦‍", "мафиози": "Мафиози🕴️"}
 
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
                      "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
@@ -2307,7 +2446,6 @@ def do_clear_card_command(peer, sender, args):
     send_msg(peer, CLEAR_CONFIRM_TEXT)
 
 def check_clear_pending(peer, sender, text):
-    # возвращает True, если сообщение обработано как подтверждение/отказ и его не надо обрабатывать дальше
     ts = CLEAR_PENDING.get((peer, sender))
     if ts is None:
         return False
@@ -2385,7 +2523,7 @@ def handle_message(peer, sender, text, msg_obj):
                 handle_verify(peer, sender, text[len("/deny"):].strip(), False)
                 return
             elif text.strip().startswith("/"):
-                send_msg(peer, "ℹ️ Неизвестная служебная команда.")
+                handle_creator_ls(peer, text)
                 return
         elif is_insp:
             if low.startswith("/clearcard"):
@@ -3591,10 +3729,9 @@ def timer_loop():
                 except Exception: ctx = {}
                 if now - ctx.get("ts", 0) > 60:
                     uid, pid = row["user_id"], row["peer_id"]
-                    cm = ctx.get("msg_cmid")
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
-                    close_card_session(pid, cm, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
+                    close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
             with DB_LOCK:
                 expired = CONN.execute("SELECT * FROM dice_games WHERE state='pending' AND created_at<=?", (now-60,)).fetchall()
                 if expired:
