@@ -30,6 +30,7 @@ def get_msk_now():
 
 DATA_DIR = "/app/data" if os.path.isdir("/app/data") else os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(DATA_DIR, "bot.db")
+PHOTO_DIR = os.path.join(DATA_DIR, "card_photos")
 CONN = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
 CONN.row_factory = sqlite3.Row
 DB_LOCK = threading.RLock()
@@ -86,7 +87,7 @@ VALID_COMMANDS = [
     "топ", "браки", "брак", "развод", "онлайн", "др", "кто", "кто_я", "инфа", "монетка",
     "+правила", "-правила", "правила", "+приветствие", "-приветствие", "приветствие",
     "значок", "удалить_значок", "значки", "кнб", "чистка", "айди", "запретить_игры", "разрешить_игры",
-    "очистить_топ", "карта", "карта_редактировать", "карта_очистить"
+    "очистить_топ", "карта", "карта_редактировать", "карта_очистить", "карта_дизайн"
 ]
 
 ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
@@ -106,10 +107,28 @@ BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон"
               "Шинка", "Стайлинг", "Тех. Центр"}
 BUS_SLOT2 = ("ТК", "СК", "Такопарк")
 BUS_TAKO = "Такопарк"
+BUS_SINGLE = ("АЗС", "ТК", "СК", "Такопарк")
 BUS_PAGES = 4
 BUS_PER_PAGE = 6
 CARD_FIELD_MAP = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property_val",
                   "гараж": "garage", "телефон": "phone", "имя": "name"}
+
+# ===== ЦВЕТА КАРТОЧКИ (файлы шаблонов) =====
+COLORS_ORDER = [
+    ("red", "Красный"), ("red_full", "Полностью красный"),
+    ("green", "Зеленый"), ("green_full", "Полностью зеленый"),
+    ("blue", "Синий"), ("blue_full", "Полностью синий"),
+    ("lblue", "Голубой"), ("lblue_full", "Полностью голубой"),
+    ("yellow", "Желтый"), ("yellow_full", "Полностью желтый"),
+    ("orange", "Оранжевый"), ("orange_full", "Полностью оранжевый"),
+    ("pink", "Розовый"), ("pink_full", "Полностью розовый"),
+    ("violet", "Фиолетовый"), ("violet_full", "Полностью фиолетовый"),
+    ("gray", "Серый"),
+]
+ALL_COLOR_KEYS = set(k for k, _ in COLORS_ORDER)
+DESIGN_PAGES = 3
+DESIGN_PER_PAGE = 6
+FRAME_BOX = (0.052, 0.152, 0.306, 0.640)
 
 WHO_ADJ = [
     "тайный", "безумный", "сонный", "хитрый", "гордый", "дерзкий", "мудрый", "лютый", "ленивый", "грустный",
@@ -424,8 +443,12 @@ def increment_kmb_win(peer, user_id):
 def get_card(user_id):
     with DB_LOCK:
         row = CONN.execute("SELECT * FROM player_cards WHERE user_id=?", (user_id,)).fetchone()
-    if row: return dict(row)
-    return {"user_id": user_id, "name": "", "businesses": "[]", "realty": "[]", "property_val": "", "garage": "", "phone": "", "updated_at": 0}
+    if row:
+        d = dict(row)
+        d.setdefault("design", "{}")
+        return d
+    return {"user_id": user_id, "name": "", "businesses": "[]", "realty": "[]", "property_val": "",
+            "garage": "", "phone": "", "updated_at": 0, "design": "{}"}
 
 def set_card_field(user_id, **kw):
     with DB_LOCK:
@@ -434,6 +457,15 @@ def set_card_field(user_id, **kw):
             CONN.execute("UPDATE player_cards SET {}=? WHERE user_id=?".format(k), (v, user_id))
         CONN.execute("UPDATE player_cards SET updated_at=? WHERE user_id=?", (int(time.time()), user_id))
         CONN.commit()
+
+def get_design(user_id):
+    try: return json.loads(get_card(user_id).get("design") or "{}")
+    except Exception: return {}
+
+def set_design(user_id, **kw):
+    design = get_design(user_id)
+    design.update(kw)
+    set_card_field(user_id, design=json.dumps(design, ensure_ascii=False))
 
 def format_businesses(blist):
     return " | ".join("{} #{}".format(b["t"], b["n"]) if b.get("n") else b["t"] for b in blist)
@@ -449,6 +481,10 @@ def format_phone(phone):
     if not phone: return "Неизвестно"
     return "-".join([phone[i:i+2] for i in range(0, len(phone), 2)])
 
+# ===== СЛОТЫ БИЗНЕСОВ =====
+# АЗС/ТК/СК/Такопарк — только 1 экземпляр (ТК/СК/Такопарк взаимно исключают друг друга).
+# Остальные бизнесы — до 2 экземпляров одного вида, но всего слотов "остальных" = 2
+# (Такопарк занимает слот ТК/СК + один слот остальных).
 def bus_slots_info(blist):
     types = [b["t"] for b in blist]
     has_azs = "АЗС" in types
@@ -460,10 +496,8 @@ def bus_slots_info(blist):
 
 def can_add_business(blist, biz_type):
     has_azs, slot2, others, has_tako, used_other = bus_slots_info(blist)
-    types = [b["t"] for b in blist]
     if biz_type == "АЗС":
-        if has_azs: return True, "replace"
-        return True, "add"
+        return (True, "replace") if has_azs else (True, "add")
     if biz_type in BUS_SLOT2:
         if slot2 == biz_type:
             if biz_type in BUS_NO_NUM: return False, "exists"
@@ -472,21 +506,26 @@ def can_add_business(blist, biz_type):
             if len(others) + 1 > 2: return False, "full"
             return True, "add"
         return True, "add"
-    if biz_type in types:
-        if biz_type in BUS_NO_NUM: return False, "exists"
-        return True, "replace"
+    count_same = others.count(biz_type)
+    if count_same >= 2: return False, "max2"
     if used_other >= 2: return False, "full"
     return True, "add"
 
 def add_business(user_id, biz_type, num=None):
     card = get_card(user_id)
     blist = json.loads(card["businesses"] or "[]")
-    for b in blist:
-        if b["t"] == biz_type:
-            b["n"] = num
+    if biz_type == "АЗС":
+        for b in blist:
+            if b["t"] == biz_type:
+                b["n"] = num
+                set_card_field(user_id, businesses=json.dumps(blist, ensure_ascii=False))
+                return
+    if biz_type in BUS_SLOT2:
+        same = [b for b in blist if b["t"] == biz_type]
+        if same:
+            same[0]["n"] = num
             set_card_field(user_id, businesses=json.dumps(blist, ensure_ascii=False))
             return
-    if biz_type in BUS_SLOT2:
         blist = [b for b in blist if b["t"] not in BUS_SLOT2]
     entry = {"t": biz_type}
     if num: entry["n"] = num
@@ -519,34 +558,78 @@ def clear_card_state(user_id, peer_id):
         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (user_id, peer_id))
         CONN.commit()
 
-def handle_card_input(sender, peer, text, cmid=None):
+def extract_photo_url(msg_obj):
+    for att in (msg_obj.get("attachments") or []):
+        if att.get("type") == "photo":
+            sizes = (att.get("photo") or {}).get("sizes") or []
+            if sizes:
+                best = max(sizes, key=lambda s: (s.get("width", 0) * s.get("height", 0)))
+                return best.get("url")
+    return None
+
+def save_design_photo(user_id, url):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read()
+        if len(data) < 1000: return False
+        try: os.makedirs(PHOTO_DIR, exist_ok=True)
+        except Exception: pass
+        path = os.path.join(PHOTO_DIR, "{}.jpg".format(user_id))
+        with open(path, "wb") as f: f.write(data)
+        return True
+    except Exception as e:
+        print("save_design_photo error:", e)
+        return False
+
+def handle_card_input(sender, peer, text, cmid=None, attachments=None):
     state = get_card_state(sender, peer)
     if not state: return False
     step = state["step"]
     ctx = state.get("context", {})
+    prompt_cmid = ctx.get("msg_cmid") or cmid
     if time.time() - ctx.get("ts", 0) > 60:
         clear_card_state(sender, peer)
         msg = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(sender))
-        if cmid:
+        if prompt_cmid:
             try:
-                VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=msg, keyboard="{}")
+                VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message=msg, keyboard=json.dumps({"inline": True, "buttons": []}))
                 return True
             except: pass
         send_msg(peer, msg)
         return True
 
     def reply(msg):
-        if cmid:
+        if prompt_cmid:
             try:
-                VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=msg, keyboard="{}")
+                VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message=msg, keyboard=json.dumps({"inline": True, "buttons": []}))
                 return
             except: pass
         send_msg(peer, msg)
 
     if text.lower() in ["отмена", "отменить"]:
         clear_card_state(sender, peer)
-        reply("❌ Редактирование карточки отменено.")
+        reply("❌ Редактирование отменено.")
         return True
+
+    if step == "design_photo_wait":
+        if text.strip().lower() in ["дефолт", "default"]:
+            set_design(sender, photo="")
+            set_card_state(sender, peer, "design_main", {"msg_cmid": prompt_cmid})
+            reply("✅ Возвращена дефолтная фотография карточки.")
+            return True
+        url = extract_photo_url({"attachments": attachments}) if attachments else None
+        if not url:
+            reply("❌ Прикрепи фото к сообщению (или напиши «дефолт»).")
+            return True
+        if save_design_photo(sender, url):
+            set_design(sender, photo="custom")
+            set_card_state(sender, peer, "design_main", {"msg_cmid": prompt_cmid})
+            reply("✅ Твоя фотография установлена на карточку!")
+        else:
+            reply("❌ Не удалось скачать фото, попробуй другое.")
+        return True
+
     if step == "biz_input":
         biz_type = ctx.get("t", "")
         if not re.match(r"^[1-9]\d{0,2}$", text.strip()):
@@ -559,50 +642,56 @@ def handle_card_input(sender, peer, text, cmid=None):
             reply("❌ Нет свободных слотов под этот бизнес.")
             return True
         add_business(sender, biz_type, text.strip())
-        clear_card_state(sender, peer)
+        set_card_state(sender, peer, "bus_menu", {"p": ctx.get("p", 1), "msg_cmid": prompt_cmid})
         reply("✅ Бизнес {} #{} успешно добавлен!".format(biz_type, text.strip()))
         return True
+
     if step == "realty_input":
         realty_type = ctx.get("t", "")
         if not re.match(r"^[1-9]\d{0,3}$", text.strip()):
             reply("❌ Неверный номер: максимум 4 цифры, без нуля в начале.")
             return True
         add_realty(sender, realty_type, text.strip())
-        clear_card_state(sender, peer)
+        set_card_state(sender, peer, "realty_menu", {"msg_cmid": prompt_cmid})
         reply("✅ Недвижимость {} #{} успешно добавлена!".format(realty_type, text.strip()))
         return True
+
     if step == "garage_input":
         if not re.match(r"^[1-9]\d{0,3}$", text.strip()):
             reply("❌ Неверный номер гаража: максимум 4 цифры, без нуля в начале.")
             return True
         set_card_field(sender, garage=text.strip())
-        clear_card_state(sender, peer)
+        set_card_state(sender, peer, "edit_menu", {"msg_cmid": prompt_cmid})
         reply("✅ Гараж #{} успешно добавлен!".format(text.strip()))
         return True
+
     if step == "phone_input":
         if not re.match(r"^[1-9]\d{3,6}$", text.strip()):
             reply("❌ Неверный телефон: 4–7 цифр, без нуля в начале.")
             return True
         set_card_field(sender, phone=text.strip())
-        clear_card_state(sender, peer)
+        set_card_state(sender, peer, "edit_menu", {"msg_cmid": prompt_cmid})
         reply("✅ Телефон {} успешно добавлен!".format(format_phone(text.strip())))
         return True
+
     if step == "name_input":
         if not re.match(r"^[A-Za-z]{1,15}_[A-Za-z]{1,15}$", text.strip()):
             reply("❌ Неверный формат: Имя_Фамилия, только английские буквы, макс. 15+15 символов.")
             return True
         set_card_field(sender, name=text.strip())
-        clear_card_state(sender, peer)
+        set_card_state(sender, peer, "edit_menu", {"msg_cmid": prompt_cmid})
         reply("✅ Имя {} успешно установлено!".format(text.strip()))
         return True
+
     if step == "property_input":
         if not re.match(r"^\d+$", text.strip()):
             reply("❌ Введите сумму цифрами (например 12000000000).")
             return True
         set_card_field(sender, property_val=text.strip())
-        clear_card_state(sender, peer)
+        set_card_state(sender, peer, "edit_menu", {"msg_cmid": prompt_cmid})
         reply("✅ Имущество оценено в {}!".format(format_property(text.strip())))
         return True
+
     return False
 
 # ===== ШРИФТ =====
@@ -659,7 +748,7 @@ def get_font(size):
     try: return ImageFont.load_default(size)
     except Exception: return ImageFont.load_default()
 
-# ===== ЗАГРУЗКА ФОТО В ВК (4 попытки, свежий сервер) + КЭШ =====
+# ===== ЗАГРУЗКА ФОТО В ВК + КЭШ =====
 def upload_photo(peer, img_buf):
     try: img_buf.seek(0)
     except Exception: pass
@@ -705,12 +794,10 @@ def send_card_image(peer, user_id):
     return att
 
 def send_card_to(peer, target_id):
-    err = ""
-    att = None
+    err = ""; att = None
     try: att = send_card_image(peer, target_id)
     except Exception as e:
-        err = str(e)
-        print("card send error:", err)
+        err = str(e); print("card send error:", err)
     if not att:
         if err:
             if "[15]" in err or "scope" in err.lower():
@@ -718,7 +805,7 @@ def send_card_to(peer, target_id):
             else:
                 send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
         else:
-            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
+            send_msg(peer, "❌ Не найден шаблон карточки (card_male.jpg/png) или не установлен Pillow.")
         return
     send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
 
@@ -732,19 +819,45 @@ CARD_BOXES = {
     "phone":  (0.468, 0.825, 0.525, 0.085),
 }
 
+def card_template_path(color_key):
+    base = "card_male" if (not color_key or color_key == "red") else "card_male_{}".format(color_key)
+    for b in (base, "card_male"):
+        for ext in (".jpg", ".png", ".jpeg"):
+            p = os.path.join(DATA_DIR, b + ext)
+            if os.path.isfile(p): return p
+            if os.path.isfile(b + ext): return b + ext
+    return None
+
+def paste_custom_photo(img, user_id):
+    path = os.path.join(PHOTO_DIR, "{}.jpg".format(user_id))
+    if not os.path.isfile(path): return img
+    try:
+        ph = Image.open(path).convert("RGB")
+        W, H = img.size
+        rx, ry, rw, rh = FRAME_BOX
+        fx, fy, fw, fh = int(rx * W), int(ry * H), int(rw * W), int(rh * H)
+        target_ratio = fw / float(fh)
+        pw, phh = ph.size
+        cur = pw / float(phh)
+        if cur > target_ratio:
+            new_w = int(phh * target_ratio)
+            left = (pw - new_w) // 2
+            ph = ph.crop((left, 0, left + new_w, phh))
+        else:
+            new_h = int(pw / target_ratio)
+            top = (phh - new_h) // 2
+            ph = ph.crop((0, top, pw, top + new_h))
+        ph = ph.resize((fw, fh), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
+        img.paste(ph, (fx, fy))
+    except Exception as e:
+        print("paste_custom_photo error:", e)
+    return img
+
 def render_card(user_id):
     if not PIL_OK: return None
     card = get_card(user_id)
-    sex = 2
-    try:
-        u = VK.users.get(user_ids=user_id, fields="sex")
-        if u: sex = u[0].get("sex", 2) or 2
-    except: pass
-    paths = ["card_female.jpg", "card_female.png", "card_female.jpeg"] if sex == 1 else ["card_male.jpg", "card_male.png", "card_male.jpeg"]
-    template = None
-    for p in paths:
-        if os.path.exists(os.path.join(DATA_DIR, p)): template = os.path.join(DATA_DIR, p); break
-        if os.path.exists(p): template = p; break
+    design = get_design(user_id)
+    template = card_template_path(design.get("color", "red"))
     if not template: return None
     img = Image.open(template).convert("RGB")
     W, H = img.size
@@ -752,6 +865,8 @@ def render_card(user_id):
         ratio = 1600.0 / W
         img = img.resize((1600, int(H * ratio)), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
         W, H = img.size
+    if design.get("photo"):
+        img = paste_custom_photo(img, user_id)
     draw = ImageDraw.Draw(img)
 
     def text_w(t, f):
@@ -796,6 +911,8 @@ def render_card(user_id):
     return buf
 
 def init_db():
+    try: os.makedirs(PHOTO_DIR, exist_ok=True)
+    except Exception: pass
     with DB_LOCK:
         CONN.execute("""CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id INTEGER, name TEXT, text TEXT,
@@ -851,7 +968,7 @@ def init_db():
         CONN.execute("""CREATE TABLE IF NOT EXISTS player_cards (
             user_id INTEGER PRIMARY KEY, name TEXT DEFAULT '', businesses TEXT DEFAULT '[]',
             realty TEXT DEFAULT '[]', property_val TEXT DEFAULT '', garage TEXT DEFAULT '',
-            phone TEXT DEFAULT '', updated_at INTEGER DEFAULT 0)""")
+            phone TEXT DEFAULT '', design TEXT DEFAULT '{}', updated_at INTEGER DEFAULT 0)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS card_edit_state (
             user_id INTEGER, peer_id INTEGER, step TEXT, context TEXT, PRIMARY KEY(user_id, peer_id))""")
         migrations = [
@@ -864,6 +981,7 @@ def init_db():
             "ALTER TABLE message_stats ADD COLUMN char_count INTEGER DEFAULT 0",
             "ALTER TABLE members ADD COLUMN who_name TEXT DEFAULT ''",
             "ALTER TABLE members ADD COLUMN who_ts INTEGER DEFAULT 0",
+            "ALTER TABLE player_cards ADD COLUMN design TEXT DEFAULT '{}'",
         ]
         for sql in migrations:
             try: CONN.execute(sql)
@@ -1014,135 +1132,6 @@ def parse_reply_attachments(reply_obj):
             ph = att.get("photo", {})
             if ph.get("owner_id") and ph.get("id"): parts.append("photo{}_{}".format(ph['owner_id'], ph['id']))
     return ", ".join(parts)
-
-# ===== СЛУЖЕБНЫЕ ЛС =====
-def _ls_segments(body): return [s.strip() for s in body.split(",") if s.strip()]
-
-def _ls_date_ts(dstr):
-    try:
-        d, m, y = [int(x) for x in dstr.split(".")]
-        return int(datetime.datetime(y, m, d, 12, 0, 0, tzinfo=MSK_TZ).timestamp())
-    except: return None
-
-def _ls_user(seg):
-    m = re.search(r"\[id(\d+)\|", seg)
-    if m: return int(m.group(1)), re.sub(r"\[id\d+\|[^\]]*\]", " ", seg)
-    m = re.search(r"@id(\d+)", seg, re.I)
-    if m: return int(m.group(1)), re.sub(r"@id\d+", " ", seg, flags=re.I)
-    m = re.search(r"@(\d{6,})", seg)
-    if m: return int(m.group(1)), re.sub(r"@\d{6,}", " ", seg)
-    return None, seg
-
-def _ls_peer(seg):
-    m = re.search(r"\b(2\d{9})\b", seg)
-    return int(m.group(1)) if m else None
-
-def _ls_apply_firstlogin(body):
-    out = []
-    for seg in _ls_segments(body):
-        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
-        md = re.search(r"\b(\d{1,2}\.\d{1,2}\.\d{4})\b", seg)
-        ts = _ls_date_ts(md.group(1)) if md else None
-        if not uid or not peer_id or ts is None:
-            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        with DB_LOCK:
-            CONN.execute("INSERT OR IGNORE INTO join_stats(user_id, peer_id, first_join, in_top) VALUES(?,?,?,1)", (uid, peer_id, ts))
-            CONN.execute("UPDATE join_stats SET first_join=?, in_top=1 WHERE user_id=? AND peer_id=?", (ts, uid, peer_id))
-            CONN.commit()
-        out.append("✅ id{} → первый вход {} (чат {})".format(uid, md.group(1), peer_id))
-    return "\n".join(out) or "✅ Готово"
-
-def _ls_apply_lastlogin(body):
-    out = []
-    for seg in _ls_segments(body):
-        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
-        md = re.search(r"\b(\d{1,2}\.\d{1,2}\.\d{4})\b", seg)
-        ts = _ls_date_ts(md.group(1)) if md else None
-        if not uid or not peer_id or ts is None:
-            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        with DB_LOCK:
-            CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (uid, peer_id))
-            CONN.execute("UPDATE members SET join_time=? WHERE user_id=? AND peer_id=?", (ts, uid, peer_id))
-            CONN.commit()
-        out.append("✅ id{} → последний вход {} (чат {})".format(uid, md.group(1), peer_id))
-    return "\n".join(out) or "✅ Готово"
-
-def _ls_apply_topmsg(body):
-    out = []
-    for seg in _ls_segments(body):
-        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
-        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
-        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
-        if uid is None:
-            if len(nums) >= 3: uid, chars, msgs = nums[0], nums[1], nums[2]
-            else:
-                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        else:
-            if len(nums) >= 2: chars, msgs = nums[0], nums[1]
-            else:
-                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        if peer_id is None:
-            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        with DB_LOCK:
-            CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (uid, peer_id))
-            CONN.execute("UPDATE message_stats SET char_count=?, msg_count=? WHERE user_id=? AND peer_id=?", (chars, msgs, uid, peer_id))
-            CONN.commit()
-        out.append("✅ id{} → символы={}, сообщения={} (чат {})".format(uid, chars, msgs, peer_id))
-    return "\n".join(out) or "✅ Готово"
-
-def _ls_apply_top(body, field):
-    out = []
-    for seg in _ls_segments(body):
-        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
-        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
-        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
-        if uid is None:
-            if len(nums) >= 2: uid, val = nums[0], nums[1]
-            else:
-                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        else:
-            val = nums[0] if nums else None
-        if peer_id is None or val is None:
-            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        with DB_LOCK:
-            CONN.execute("INSERT OR IGNORE INTO message_stats(user_id, peer_id, msg_count, sticker_count, dice_wins, kmb_wins, char_count) VALUES(?,?,0,0,0,0,0)", (uid, peer_id))
-            CONN.execute("UPDATE message_stats SET {}=? WHERE user_id=? AND peer_id=?".format(field), (val, uid, peer_id))
-            CONN.commit()
-        out.append("✅ id{} → {} = {} (чат {})".format(uid, field, val, peer_id))
-    return "\n".join(out) or "✅ Готово"
-
-def _ls_apply_rbrak(body):
-    out = []
-    now_ts = int(time.time())
-    for seg in _ls_segments(body):
-        uid, rest = _ls_user(seg); peer_id = _ls_peer(seg)
-        tmp = re.sub(r"\b2\d{9}\b", " ", rest)
-        nums = [int(x) for x in re.findall(r"\b(\d+)\b", tmp)]
-        if uid is None:
-            if len(nums) >= 2: uid, days = nums[0], nums[1]
-            else:
-                out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        else:
-            days = nums[0] if nums else None
-        if peer_id is None or days is None:
-            out.append("❌ Не понял сегмент: {}".format(seg[:50])); continue
-        with DB_LOCK:
-            row = CONN.execute("SELECT id FROM marriages WHERE peer_id=? AND (user1=? OR user2=?)", (peer_id, uid, uid)).fetchone()
-            if not row:
-                out.append("❌ id{} не состоит в браке в чате {}".format(uid, peer_id)); continue
-            CONN.execute("UPDATE marriages SET created_at=? WHERE id=?", (now_ts - days*86400, row["id"]))
-            CONN.commit()
-        out.append("✅ id{} → брак {} дн. (чат {})".format(uid, days, peer_id))
-    return "\n".join(out) or "✅ Готово"
-
-def handle_creator_ls(peer, text):
-    t = text.strip(); low = t.lower()
-    if low.startswith("/firstlogin"): send_msg(peer, _ls_apply_firstlogin(t[len("/firstlogin"):].strip()))
-    elif low.startswith("/lastlogin"): send_msg(peer, _ls_apply_lastlogin(t[len("/lastlogin"):].strip()))
-    elif low.startswith("/topmsg"): send_msg(peer, _ls_apply_topmsg(t[len("/topmsg"):].strip()))
-    elif low.startswith("/topemj"): send_msg(peer, _ls_apply_top(t[len("/topemj"):].strip(), "sticker_count"))
-    elif low.startswith("/rbrak"): send_msg(peer, _ls_apply_rbrak(t[len("/rbrak"):].strip()))
-    else: send_msg(peer, "ℹ️ Неизвестная служебная команда.")
 
 def sync_members(peer):
     now = time.time()
@@ -1373,7 +1362,8 @@ HELP_BR_TEXT = (
     "🗃️Личная карточка:\n"
     "1. Мд карта — выводит фото карты.\n"
     "2. Мд карта редактировать — редактирование.\n"
-    "3. Мд карта очистить [поле] — очистить карту.\n\n"
+    "3. Мд карта очистить [поле] — очистить карту.\n"
+    "4. Мд карта дизайн — дизайн карты (цвет/фото).\n\n"
     "Желательно использовать в лс бота, чтобы не засорять чат😉"
 )
 HELP_MODERATOR_TEXT = (
@@ -1419,10 +1409,16 @@ HELP_MD_TEXT = (
 )
 
 MAIN_CARD_TEXT = "Какую информацию вы хотите отредактировать в личной карточке?"
+DESIGN_MAIN_TEXT = "Что вы хотите поменять?"
+DESIGN_PHOTO_TEXT = ("Если хотите установить свою фотографию — отправьте её в чат.\n"
+                     "Если вернуть дефолтную — нажмите кнопку «Дефолт».")
 
 def bus_menu_text(page=1):
     return ("Какой бизнес вы хотите добавить? (стр. {}/{})\n"
-            "(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Такопарк занимает 2 слота!)").format(page, BUS_PAGES)
+            "(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Один бизнес макс. 2 шт., Такопарк занимает 2 слота!)").format(page, BUS_PAGES)
+
+def design_colors_text(page=1):
+    return "Выберите цвет карточки (стр. {}/{}):".format(page, DESIGN_PAGES)
 
 def card_edit_main_kb():
     P = lambda f: json.dumps({"cmd": "card_edit", "f": f, "field": f})
@@ -1463,6 +1459,32 @@ def card_input_kb(back_cmd, back_page=None):
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps(back_payload)}, "color": "primary"}]]}
 
+def design_main_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Цвет карточки", "payload": json.dumps({"cmd": "card_design_colors", "p": 1})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Фото карточки", "payload": json.dumps({"cmd": "card_design_photo"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
+
+def design_colors_kb(page=1):
+    page = max(1, min(page, DESIGN_PAGES))
+    chunk = COLORS_ORDER[(page - 1) * DESIGN_PER_PAGE: page * DESIGN_PER_PAGE]
+    rows = []
+    for i in range(0, len(chunk), 2):
+        rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "card_design_color", "key": key, "p": page})}, "color": "secondary"} for key, lab in chunk[i:i+2]])
+    nav = []
+    if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_design_colors", "p": page - 1})}, "color": "primary"})
+    if page < DESIGN_PAGES: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_design_colors", "p": page + 1})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_design_main"})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
+    rows.append(nav)
+    return {"inline": True, "buttons": rows}
+
+def design_photo_kb():
+    return {"inline": True, "buttons": [[
+        {"action": {"type": "callback", "label": "Дефолт", "payload": json.dumps({"cmd": "card_design_default"})}, "color": "primary"},
+        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_design_main"})}, "color": "primary"},
+        {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
+
 def handle_event(event):
     try:
         obj = event.object if hasattr(event, 'object') else event.obj
@@ -1499,16 +1521,21 @@ def handle_event(event):
             if not ok: snackbar("❌ VK: {}".format(LAST_ERR["msg"][:70]))
             return ok
 
-        # ===== КАРТОЧКА: КОЛБЭКИ (только для владельца меню + таймаут 60 сек) =====
+        def set_state(step, extra=None):
+            c = dict(extra or {})
+            c["msg_cmid"] = cmid
+            set_card_state(user_id, peer_id, step, c)
+
+        # ===== КАРТОЧКА: КОЛБЭКИ (только владелец меню) =====
         if cmd.startswith("card_"):
             state = get_card_state(user_id, peer_id)
-            if cmd == "card_cancel":
-                if state: clear_card_state(user_id, peer_id)
-                show("❌ Редактирование карточки отменено.", None)
-                snackbar("❌ Отменено")
-                return
             if not state:
                 snackbar("⛔ Это не ваше меню или время вышло!")
+                return
+            if cmd == "card_cancel":
+                clear_card_state(user_id, peer_id)
+                show("❌ Редактирование карточки отменено.", None)
+                snackbar("❌ Отменено")
                 return
             ctx = state.get("context", {})
             if time.time() - ctx.get("ts", 0) > 60:
@@ -1516,31 +1543,36 @@ def handle_event(event):
                 show("Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(user_id)), None)
                 snackbar("⏳ Время вышло")
                 return
-            set_card_state(user_id, peer_id, state["step"], ctx)
             try:
                 if cmd in ("card_main", "card_edit_menu", "card_back_main"):
+                    set_state("edit_menu")
                     show(MAIN_CARD_TEXT, card_edit_main_kb()); snackbar("✅ Меню")
                 elif cmd in ("card_edit", "card_field"):
                     f = payload.get("f") or payload.get("field") or ""
-                    if f == "biz": show(bus_menu_text(1), card_bus_kb(1))
-                    elif f == "realty": show("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
+                    if f == "biz":
+                        set_state("bus_menu", {"p": 1})
+                        show(bus_menu_text(1), card_bus_kb(1))
+                    elif f == "realty":
+                        set_state("realty_menu")
+                        show("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
                     elif f == "prop":
-                        set_card_state(user_id, peer_id, "property_input")
+                        set_state("property_input")
                         show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
                     elif f == "garage":
-                        set_card_state(user_id, peer_id, "garage_input")
+                        set_state("garage_input")
                         show("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu"))
                     elif f == "phone":
-                        set_card_state(user_id, peer_id, "phone_input")
+                        set_state("phone_input")
                         show("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu"))
                     elif f == "name":
-                        set_card_state(user_id, peer_id, "name_input")
+                        set_state("name_input")
                         show("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu"))
                     else:
                         snackbar("⚠️ debug payload: {}".format(str(payload)[:80])); return
                     snackbar("✅ Выполнено")
                 elif cmd in ("card_bus_menu", "card_back_bus"):
                     p = int(payload.get("p", 1) or 1)
+                    set_state("bus_menu", {"p": p})
                     show(bus_menu_text(p), card_bus_kb(p)); snackbar("✅ Бизнесы")
                 elif cmd in ("card_bus", "card_biz_select"):
                     t = payload.get("t") or payload.get("type") or ""
@@ -1550,17 +1582,20 @@ def handle_event(event):
                     ok, mode = can_add_business(blist, t)
                     if not ok:
                         if mode == "exists": snackbar("ℹ️ «{}» уже есть в карточке".format(t))
+                        elif mode == "max2": snackbar("⛔ Максимум 2 одинаковых бизнеса!")
                         else: snackbar("⛔ Нет слотов! Макс 4 бизнеса, Такопарк занимает 2 слота")
                         return
                     if t in BUS_NO_NUM:
                         add_business(user_id, t, None)
+                        set_state("bus_menu", {"p": p})
                         show("✅ Бизнес «{}» добавлен!\n".format(t) + bus_menu_text(p), card_bus_kb(p))
                         snackbar("✅ Добавлено")
                     else:
-                        set_card_state(user_id, peer_id, "biz_input", {"t": t, "p": p})
+                        set_state("biz_input", {"t": t, "p": p})
                         show("Введите номер для «{}» (макс. 3 цифры, без нуля в начале, напр. 33):".format(t), card_input_kb("card_bus_menu", p))
                         snackbar("✅ Введите номер")
                 elif cmd in ("card_realty_menu", "card_back_realty"):
+                    set_state("realty_menu")
                     show("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb()); snackbar("✅ Недвижимость")
                 elif cmd in ("card_realty", "card_realty_select"):
                     t = payload.get("t") or payload.get("type") or ""
@@ -1568,25 +1603,50 @@ def handle_event(event):
                     rlist = json.loads(card["realty"] or "[]")
                     if len(rlist) >= 2:
                         snackbar("⛔ Максимум 2 недвижимости!"); return
-                    set_card_state(user_id, peer_id, "realty_input", {"t": t})
+                    set_state("realty_input", {"t": t})
                     show("Введите номер для «{}» (макс. 4 цифры, без нуля в начале):".format(t), card_input_kb("card_realty_menu"))
                     snackbar("✅ Введите номер")
                 elif cmd == "card_garage":
-                    set_card_state(user_id, peer_id, "garage_input")
+                    set_state("garage_input")
                     show("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu"))
                     snackbar("✅ Введите номер")
                 elif cmd == "card_phone":
-                    set_card_state(user_id, peer_id, "phone_input")
+                    set_state("phone_input")
                     show("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu"))
                     snackbar("✅ Введите номер")
                 elif cmd == "card_name":
-                    set_card_state(user_id, peer_id, "name_input")
+                    set_state("name_input")
                     show("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu"))
                     snackbar("✅ Введите имя")
                 elif cmd in ("card_prop", "card_property"):
-                    set_card_state(user_id, peer_id, "property_input")
+                    set_state("property_input")
                     show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
                     snackbar("✅ Введите сумму")
+                # ===== ДИЗАЙН =====
+                elif cmd == "card_design_main":
+                    set_state("design_main")
+                    show(DESIGN_MAIN_TEXT, design_main_kb()); snackbar("✅ Дизайн")
+                elif cmd == "card_design_colors":
+                    p = int(payload.get("p", 1) or 1)
+                    set_state("design_color", {"p": p})
+                    show(design_colors_text(p), design_colors_kb(p)); snackbar("✅ Цвета")
+                elif cmd == "card_design_color":
+                    key = payload.get("key", "")
+                    if key not in ALL_COLOR_KEYS:
+                        snackbar("❌ Неизвестный цвет"); return
+                    p = int(payload.get("p", 1) or 1)
+                    set_design(user_id, color=key)
+                    set_state("design_color", {"p": p})
+                    show("✅ Цвет применён!\n" + design_colors_text(p), design_colors_kb(p))
+                    snackbar("✅ Цвет применён")
+                elif cmd == "card_design_photo":
+                    set_state("design_photo_wait")
+                    show(DESIGN_PHOTO_TEXT, design_photo_kb()); snackbar("✅ Жду фото")
+                elif cmd == "card_design_default":
+                    set_design(user_id, photo="")
+                    set_state("design_main")
+                    show("✅ Возвращена дефолтная фотография.\n" + DESIGN_MAIN_TEXT, design_main_kb())
+                    snackbar("✅ Дефолт")
                 else:
                     snackbar("❌ Неизвестная кнопка карточки")
             except Exception as e:
@@ -2056,7 +2116,7 @@ def build_status_page(peer, page):
 LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
-                 "феникс": "Феникс🐦‍🔥", "мафиози": "Мафиози🕴️"}
+                 "феникс": "Феникс🐦🔥", "мафиози": "Мафиози🕴️"}
 
 def handle_ls_card(peer, sender, cmd, args):
     if cmd == "карта":
@@ -2064,8 +2124,11 @@ def handle_ls_card(peer, sender, cmd, args):
         target_id = targets[0] if (targets and sender in (CREATOR_ID, LEADER_ID)) else sender
         send_card_to(peer, target_id)
     elif cmd == "карта_редактировать":
-        set_card_state(sender, peer, "main_menu")
+        set_card_state(sender, peer, "edit_menu", {"msg_cmid": None})
         send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
+    elif cmd == "карта_дизайн":
+        set_card_state(sender, peer, "design_main", {"msg_cmid": None})
+        send_msg(peer, DESIGN_MAIN_TEXT, keyboard=design_main_kb())
     elif cmd == "карта_очистить":
         fld = None
         for a in args:
@@ -2174,14 +2237,16 @@ def handle_message(peer, sender, text, msg_obj):
                     handle_ls_card(peer, sender, "карта_редактировать", pn[2:]); return
                 if c2 == "карта_очистить":
                     handle_ls_card(peer, sender, "карта_очистить", pn[2:]); return
+                if c2 == "карта_дизайн":
+                    handle_ls_card(peer, sender, "карта_дизайн", pn[2:]); return
                 if pn[0] == "карта":
                     handle_ls_card(peer, sender, "карта", pn[1:]); return
-        if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id")):
+        if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id"), attachments=msg_obj.get("attachments")):
             return
         return
 
     if not first.startswith("мд "):
-        if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id")):
+        if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id"), attachments=msg_obj.get("attachments")):
             return
 
     if sender > 0:
@@ -2366,7 +2431,8 @@ def handle_message(peer, sender, text, msg_obj):
         who_name = row["who_name"] if row and row["who_name"] else ""
         who_ts = row["who_ts"] if row else 0
         if who_name:
-            who_line = "👤 Кто это: {}".format(who_name) if int(time.time()) - who_ts <= 86400 else "🫆 Раньше был: {} ({})".format(who_name, fmt_join_date(who_ts))
+            disp = "**{}**".format(who_name) if who_name in LEGENDARY_WHO else who_name
+            who_line = "👤 Кто это: {}".format(disp) if int(time.time()) - who_ts <= 86400 else "🫆 Раньше был: {} ({})".format(disp, fmt_join_date(who_ts))
         else:
             who_line = "👤 Кто это: не определено"
         msg = ("👥 Участник {}:\n🎮 Ник: {}\n⚠️ Предупреждений: {}/{} ({} дн.)\n{}\n{}\n🙆‍️ Роль: {}\n{}\n{}\n🔥 Серия посещения: {} дн. {}\n{}").format(
@@ -3316,8 +3382,12 @@ def handle_message(peer, sender, text, msg_obj):
         send_card_to(peer, target_id)
 
     elif cmd == "карта_редактировать":
-        set_card_state(sender, peer, "main_menu")
+        set_card_state(sender, peer, "edit_menu", {"msg_cmid": None})
         send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
+
+    elif cmd == "карта_дизайн":
+        set_card_state(sender, peer, "design_main", {"msg_cmid": None})
+        send_msg(peer, DESIGN_MAIN_TEXT, keyboard=design_main_kb())
 
     elif cmd == "карта_очистить":
         fld = None
@@ -3346,6 +3416,24 @@ def timer_loop():
             now_msk = get_msk_now()
             today_str = now_msk.strftime("%Y-%m-%d")
             now = int(time.time())
+            # Авто-таймаут редакторов карты/дизайна (1 минута бездействия)
+            with DB_LOCK:
+                stale = CONN.execute("SELECT user_id, peer_id, step, context FROM card_edit_state").fetchall()
+            for row in stale:
+                try: ctx = json.loads(row["context"] or "{}")
+                except Exception: ctx = {}
+                if now - ctx.get("ts", 0) > 60:
+                    uid, pid = row["user_id"], row["peer_id"]
+                    cm = ctx.get("msg_cmid")
+                    with DB_LOCK:
+                        CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
+                    txt = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid))
+                    if cm:
+                        try:
+                            VK.messages.edit(peer_id=pid, conversation_message_id=cm, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}))
+                            continue
+                        except Exception: pass
+                    send_msg(pid, txt)
             with DB_LOCK:
                 expired = CONN.execute("SELECT * FROM dice_games WHERE state='pending' AND created_at<=?", (now-60,)).fetchall()
                 if expired:
