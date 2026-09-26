@@ -87,7 +87,7 @@ VALID_COMMANDS = [
     "топ", "браки", "брак", "развод", "онлайн", "др", "кто", "кто_я", "инфа", "монетка",
     "+правила", "-правила", "правила", "+приветствие", "-приветствие", "приветствие",
     "значок", "удалить_значок", "значки", "кнб", "чистка", "айди", "запретить_игры", "разрешить_игры",
-    "очистить_топ", "карта", "карта_редактировать", "карта_очистить", "карта_дизайн"
+    "очистить_топ", "карта", "карта_редактировать", "карта_очистить"
 ]
 
 ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
@@ -107,11 +107,11 @@ BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон"
               "Шинка", "Стайлинг", "Тех. Центр"}
 BUS_SLOT2 = ("ТК", "СК", "Такопарк")
 BUS_TAKO = "Такопарк"
-BUS_SINGLE = ("АЗС", "ТК", "СК", "Такопарк")
 BUS_PAGES = 4
 BUS_PER_PAGE = 6
 CARD_FIELD_MAP = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property_val",
                   "гараж": "garage", "телефон": "phone", "имя": "name"}
+CARD_DATA_KEYS = set(CARD_FIELD_MAP.values())
 
 COLORS_ORDER = [
     ("red", "Красный"), ("red_full", "Полностью красный"),
@@ -131,73 +131,41 @@ FRAME_BOX = (0.070, 0.190, 0.280, 0.605)
 FRAME_BOXES_FILE = os.path.join(DATA_DIR, "frame_boxes.json")
 _FRAME_BOXES_CACHE = {"data": None, "ts": 0.0}
 
-def get_frame_box(color_key):
-    now = time.time()
-    if _FRAME_BOXES_CACHE["data"] is None or now - _FRAME_BOXES_CACHE["ts"] > 60:
-        try:
-            with open(FRAME_BOXES_FILE) as f:
-                _FRAME_BOXES_CACHE["data"] = json.load(f)
-        except Exception:
-            _FRAME_BOXES_CACHE["data"] = {}
-        _FRAME_BOXES_CACHE["ts"] = now
-    data = _FRAME_BOXES_CACHE["data"] or {}
-    for k in (color_key, "default"):
-        v = data.get(k)
-        if v and len(v) == 4:
-            try: return tuple(float(x) for x in v)
-            except Exception: pass
-    return FRAME_BOX
+WHO_ADJ = ("тайный безумный сонный хитрый гордый дерзкий мудрый лютый ленивый грустный честный добрый грозный "
+    "дикий верный робкий нежный бойкий строгий упрямый мирный жуткий милый чудной скромный хмурый бодрый "
+    "хладнокровный растерянный уставший вдохновленный хвастливый мнительный отчаянный наивный суровый ласковый "
+    "скрытный ревнивый азартный космический призрачный огненный ледяной грозовой звездный теневой лунный солнечный "
+    "ветреный болотный подземный небесный морской туманный радиоактивный токсичный квантовый магический мистический "
+    "цифровой виртуальный неоновый пиксельный кибернетический древний вечный проклятый святой потусторонний железный "
+    "золотой алмазный плюшевый деревянный каменный стеклянный бархатный шелковый ватный бумажный картонный пластиковый "
+    "резиновый ржавый глянцевый матовый колючий пушистый гладкий липкий скользкий твердый мягкий хрупкий жидкий "
+    "газообразный порошковый шершавый летучий гигантский крошечный круглый квадратный плоский кривой прямой бесконечный "
+    "микроскопический массивный тонкий толстый узкий широкий вытянутый раздутый сжатый угловатый симметричный безразмерный "
+    "кислый сладкий горький соленый острый пряный мятный шоколадный ванильный чесночный сырный карамельный лимонный "
+    "имбирный медовый жареный вареный сырой копченый тушеный четкий хайповый кринжовый рофляный легендарный эпический "
+    "дефолтный душный имбовый читерский забивной суетной пафосный блатной козырной фартовый люксовый бюджетный "
+    "запрещенный заряженный базированный гигачадский мемный флексящий вайбовый чилловый попкорновый пельменный чебуречный "
+    "красный синий зеленый желтый фиолетовый оранжевый розовый черный белый серый бордовый бирюзовый золотистый "
+    "серебряный изумрудный яркий тусклый светящийся бледный разноцветный богатый бедный успешный потерянный сломанный "
+    "починенный забытый популярный секретный опасный безопасный редкий обычный элитный финальный начальный главный "
+    "запасной невидимый неуязвимый серверный региональный деловой бригадный гаражный трассовый премиальный дрифтовый").split()
 
-WHO_ADJ = [
-    "тайный", "безумный", "сонный", "хитрый", "гордый", "дерзкий", "мудрый", "лютый", "ленивый", "грустный",
-    "честный", "добрый", "грозный", "дикий", "верный", "робкий", "нежный", "бойкий", "строгий", "упрямый",
-    "мирный", "жуткий", "милый", "чудной", "скромный", "хмурый", "бодрый", "хладнокровный", "растерянный", "уставший",
-    "вдохновленный", "хвастливый", "мнительный", "отчаянный", "наивный", "суровый", "ласковый", "скрытный", "ревнивый", "азартный",
-    "космический", "призрачный", "огненный", "ледяной", "грозовой", "звездный", "теневой", "лунный", "солнечный", "ветреный",
-    "болотный", "подземный", "небесный", "морской", "туманный", "радиоактивный", "токсичный", "квантовый", "магический", "мистический",
-    "цифровой", "виртуальный", "неоновый", "пиксельный", "кибернетический", "древний", "вечный", "проклятый", "святой", "потусторонний",
-    "железный", "золотой", "алмазный", "плюшевый", "деревянный", "каменный", "стеклянный", "бархатный", "шелковый", "ватный",
-    "бумажный", "картонный", "пластиковый", "резиновый", "ржавый", "глянцевый", "матовый", "колючий", "пушистый", "гладкий",
-    "липкий", "скользкий", "твердый", "мягкий", "хрупкий", "жидкий", "газообразный", "порошковый", "шершавый", "летучий",
-    "гигантский", "крошечный", "круглый", "квадратный", "плоский", "кривой", "прямой", "бесконечный", "микроскопический", "массивный",
-    "тонкий", "толстый", "узкий", "широкий", "вытянутый", "раздутый", "сжатый", "угловатый", "симметричный", "безразмерный",
-    "кислый", "сладкий", "горький", "соленый", "острый", "пряный", "мятный", "шоколадный", "ванильный", "чесночный",
-    "сырный", "карамельный", "лимонный", "имбирный", "медовый", "жареный", "вареный", "сырой", "копченый", "тушеный",
-    "четкий", "хайповый", "кринжовый", "рофляный", "легендарный", "эпический", "дефолтный", "душный", "имбовый", "читерский",
-    "забивной", "суетной", "пафосный", "блатной", "козырной", "фартовый", "люксовый", "бюджетный", "запрещенный", "заряженный",
-    "базированный", "гигачадский", "мемный", "флексящий", "вайбовый", "чилловый", "попкорновый", "пельменный", "чебуречный",
-    "красный", "синий", "зеленый", "желтый", "фиолетовый", "оранжевый", "розовый", "черный", "белый", "серый",
-    "бордовый", "бирюзовый", "золотистый", "серебряный", "изумрудный", "яркий", "тусклый", "светящийся", "бледный", "разноцветный",
-    "богатый", "бедный", "успешный", "потерянный", "сломанный", "починенный", "забытый", "популярный", "секретный", "опасный",
-    "безопасный", "редкий", "обычный", "элитный", "финальный", "начальный", "главный", "запасной", "невидимый", "неуязвимый",
-    "серверный", "региональный", "деловой", "бригадный", "гаражный", "трассовый", "премиальный", "дрифтовый"
-]
-WHO_NOUN = [
-    "енот", "кот", "пес", "лис", "волк", "медведь", "лев", "тигр", "панда", "хомяк",
-    "суслик", "выдра", "бобр", "заяц", "еж", "крот", "олень", "лось", "кабан", "слон",
-    "жираф", "бегемот", "носорог", "обезьяна", "ленивец", "коала", "кенгуру", "утконос", "пингвин", "фламинго",
-    "сова", "орел", "ворон", "попугай", "голубь", "лебедь", "акула", "дельфин", "кит", "краб",
-    "кальмар", "осьминог", "креветка", "рак", "медуза", "ящерица", "змея", "хамелеон", "лягушка", "жаба",
-    "дракон", "феникс", "единорог", "грифон", "пегас", "кентавр", "минотавр", "сфинкс", "гарпия", "сирена",
-    "эльф", "гном", "орк", "гоблин", "тролль", "огр", "маг", "чародей", "шаман", "некромант",
-    "ведьма", "колдун", "алхимик", "рыцарь", "паладин", "самурай", "ниндзя", "викинг", "пират", "призрак",
-    "вампир", "оборотень", "зомби", "мумия", "демон", "ангел", "титан", "голем", "джинн", "леший",
-    "шпион", "детектив", "хакер", "программист", "геймер", "стример", "блогер", "админ", "модератор", "босс",
-    "директор", "шеф", "повар", "официант", "доктор", "хирург", "ученый", "профессор", "космонавт", "пилот",
-    "капитан", "штурман", "водитель", "гонщик", "каскадер", "строитель", "инженер", "архитектор", "художник", "музыкант",
-    "актер", "режиссер", "писатель", "поэт", "фотограф", "дизайнер", "модель", "стилист", "учитель", "тренер",
-    "синяк", "крекер", "торетто", "стрипуха",
-    "робот", "киборг", "андроид", "дрон", "процессор", "чип", "сервер", "ноут", "комп", "телефон",
-    "плеер", "калькулятор", "лазер", "бластер", "ракета", "спутник", "телескоп", "микроскоп", "радар", "компас",
-    "фонарик", "проектор", "экран", "монитор", "джойстик", "геймпад", "кабель", "провод", "переходник", "флешка",
-    "пельмень", "чебурек", "хинкали", "блин", "вареник", "пирожок", "пончик", "круассан", "кекс", "торт",
-    "пицца", "бургер", "хотдог", "суши", "ролл", "картофан", "огурец", "помидор", "баклажан", "кабачок",
-    "арбуз", "дыня", "ананас", "банан", "яблоко", "груша", "лимон", "апельсин", "орех", "гриб",
-    "суп", "борщ", "майонез", "кетчуп", "соус", "горчица", "сухарик", "чипс", "попкорн", "зефир",
-    "кактус", "фикус", "баобаб", "дуб", "цветок", "роза", "лотос", "кристалл", "алмаз", "изумруд",
-    "рубин", "янтарь", "метеорит", "астероид", "комета", "планета", "звезда", "галактика", "космос", "атом",
-    "ларгус", "приора", "бустер", "мент", "бандит", "бизнесмен", "шахтер", "дрифтер", "регион", "бизнес"
-]
+WHO_NOUN = ("енот кот пес лис волк медведь лев тигр панда хомяк суслик выдра бобр заяц еж крот олень лось кабан слон "
+    "жираф бегемот носорог обезьяна ленивец коала кенгуру утконос пингвин фламинго сова орел ворон попугай голубь "
+    "лебедь акула дельфин кит краб кальмар осьминог креветка рак медуза ящерица змея хамелеон лягушка жаба дракон "
+    "феникс единорог грифон пегас кентавр минотавр сфинкс гарпия сирена эльф гном орк гоблин тролль огр маг чародей "
+    "шаман некромант ведьма колдун алхимик рыцарь паладин самурай ниндзя викинг пират призрак вампир оборотень зомби "
+    "мумия демон ангел титан голем джинн леший шпион детектив хакер программист геймер стример блогер админ модератор "
+    "босс директор шеф повар официант доктор хирург ученый профессор космонавт пилот капитан штурман водитель гонщик "
+    "каскадер строитель инженер архитектор художник музыкант актер режиссер писатель поэт фотограф дизайнер модель "
+    "стилист учитель тренер синяк крекер торетто стрипуха робот киборг андроид дрон процессор чип сервер ноут комп "
+    "телефон плеер калькулятор лазер бластер ракета спутник телескоп микроскоп радар компас фонарик проектор экран "
+    "монитор джойстик геймпад кабель провод переходник флешка пельмень чебурек хинкали блин вареник пирожок пончик "
+    "круассан кекс торт пицца бургер хотдог суши ролл картофан огурец помидор баклажан кабачок арбуз дыня ананас банан "
+    "яблоко груша лимон апельсин орех гриб суп борщ майонез кетчуп соус горчица сухарик чипс попкорн зефир кактус "
+    "фикус баобаб дуб цветок роза лотос кристалл алмаз изумруд рубин янтарь метеорит астероид комета планета звезда "
+    "галактика космос атом ларгус приора бустер мент бандит бизнесмен шахтер дрифтер регион бизнес").split()
+
 WHO_GENDER_EXCEPTIONS = {"торетто": "m", "кофе": "m"}
 _WHO_FEM_SOFT = {"модель", "ночь", "мышь", "тень", "дверь", "кровать", "площадь", "пыль", "соль",
                  "ткань", "кровь", "любовь", "морковь", "грязь", "шерсть", "смерть"}
@@ -457,22 +425,25 @@ def increment_kmb_win(peer, user_id):
         CONN.execute("UPDATE message_stats SET kmb_wins=kmb_wins+1 WHERE user_id=? AND peer_id=?", (user_id, peer))
         CONN.commit()
 
-# ===== КАРТОЧКА: ДАННЫЕ =====
+# ===== КАРТОЧКА =====
 def get_card(user_id):
     with DB_LOCK:
         row = CONN.execute("SELECT * FROM player_cards WHERE user_id=?", (user_id,)).fetchone()
     if row:
         d = dict(row)
         d.setdefault("design", "{}")
+        d.setdefault("verified", 0)
         return d
     return {"user_id": user_id, "name": "", "businesses": "[]", "realty": "[]", "property_val": "",
-            "garage": "", "phone": "", "updated_at": 0, "design": "{}"}
+            "garage": "", "phone": "", "updated_at": 0, "design": "{}", "verified": 0}
 
 def set_card_field(user_id, **kw):
     with DB_LOCK:
         CONN.execute("INSERT OR IGNORE INTO player_cards(user_id) VALUES(?)", (user_id,))
         for k, v in kw.items():
             CONN.execute("UPDATE player_cards SET {}=? WHERE user_id=?".format(k), (v, user_id))
+        if set(kw.keys()) & CARD_DATA_KEYS:
+            CONN.execute("UPDATE player_cards SET verified=0 WHERE user_id=?", (user_id,))
         CONN.execute("UPDATE player_cards SET updated_at=? WHERE user_id=?", (int(time.time()), user_id))
         CONN.commit()
 
@@ -572,6 +543,18 @@ def clear_card_state(user_id, peer_id):
         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (user_id, peer_id))
         CONN.commit()
 
+def close_card_message(peer, cmid, txt):
+    if cmid:
+        try:
+            VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}))
+            return True
+        except Exception:
+            try:
+                VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
+                return True
+            except Exception: pass
+    return False
+
 def extract_photo_url(msg_obj):
     for att in (msg_obj.get("attachments") or []):
         if att.get("type") == "photo":
@@ -605,12 +588,8 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
     if time.time() - ctx.get("ts", 0) > 60:
         clear_card_state(sender, peer)
         msg = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(sender))
-        if prompt_cmid:
-            try:
-                VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message=msg, keyboard=json.dumps({"inline": True, "buttons": []}))
-                return True
-            except: pass
-        send_msg(peer, msg)
+        if not close_card_message(peer, prompt_cmid, msg):
+            send_msg(peer, msg)
         return True
 
     def reply(msg):
@@ -629,7 +608,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
     if step == "design_photo_wait":
         if text.strip().lower() in ["дефолт", "default"]:
             set_design(sender, photo="")
-            set_card_state(sender, peer, "design_main", {"msg_cmid": prompt_cmid})
+            set_card_state(sender, peer, "edit_menu", {"msg_cmid": prompt_cmid})
             reply("✅ Возвращена дефолтная фотография карточки.")
             return True
         url = extract_photo_url({"attachments": attachments}) if attachments else None
@@ -638,7 +617,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             return True
         if save_design_photo(sender, url):
             set_design(sender, photo="custom")
-            set_card_state(sender, peer, "design_main", {"msg_cmid": prompt_cmid})
+            set_card_state(sender, peer, "edit_menu", {"msg_cmid": prompt_cmid})
             reply("✅ Твоя фотография установлена на карточку!")
         else:
             reply("❌ Не удалось скачать фото, попробуй другое.")
@@ -762,7 +741,7 @@ def get_font(size):
     try: return ImageFont.load_default(size)
     except Exception: return ImageFont.load_default()
 
-# ===== ЗАГРУЗКА ФОТО В ВК + КЭШ =====
+# ===== ЗАГРУЗКА В ВК + КЭШ =====
 def upload_photo(peer, img_buf):
     try: img_buf.seek(0)
     except Exception: pass
@@ -796,7 +775,7 @@ def upload_photo(peer, img_buf):
 
 def send_card_image(peer, user_id):
     card = get_card(user_id)
-    key = "card_att_v3_{}".format(user_id)
+    key = "card_att_v4_{}".format(user_id)
     try: cached = json.loads(get_setting(0, key, "") or "{}")
     except Exception: cached = {}
     if cached.get("ts") == card["updated_at"] and cached.get("att"):
@@ -821,9 +800,13 @@ def send_card_to(peer, target_id):
         else:
             send_msg(peer, "❌ Не найден шаблон карточки (card_male.jpg/png) или не установлен Pillow.")
         return
-    send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
+    card = get_card(target_id)
+    txt = "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer))
+    if card.get("verified"):
+        txt += " | Информация карточки подтверждена✅"
+    send_msg(peer, txt, attachments=att)
 
-# ===== ОТРИСОВКА КАРТОЧКИ =====
+# ===== ОТРИСОВКА =====
 CARD_BOXES = {
     "name":   (0.035, 0.800, 0.340, 0.080),
     "biz":    (0.468, 0.215, 0.525, 0.085),
@@ -832,6 +815,23 @@ CARD_BOXES = {
     "garage": (0.468, 0.680, 0.525, 0.085),
     "phone":  (0.468, 0.825, 0.525, 0.085),
 }
+
+def get_frame_box(color_key):
+    now = time.time()
+    if _FRAME_BOXES_CACHE["data"] is None or now - _FRAME_BOXES_CACHE["ts"] > 60:
+        try:
+            with open(FRAME_BOXES_FILE) as f:
+                _FRAME_BOXES_CACHE["data"] = json.load(f)
+        except Exception:
+            _FRAME_BOXES_CACHE["data"] = {}
+        _FRAME_BOXES_CACHE["ts"] = now
+    data = _FRAME_BOXES_CACHE["data"] or {}
+    for k in (color_key, "default"):
+        v = data.get(k)
+        if v and len(v) == 4:
+            try: return tuple(float(x) for x in v)
+            except Exception: pass
+    return FRAME_BOX
 
 def card_template_path(color_key):
     base = "card_male" if (not color_key or color_key == "red") else "card_male_{}".format(color_key)
@@ -873,7 +873,7 @@ def paste_custom_photo(img, user_id, box):
     except Exception as e:
         print("paste_custom_photo error:", e)
     return img
-    
+
 def render_card(user_id):
     if not PIL_OK: return None
     card = get_card(user_id)
@@ -889,88 +889,6 @@ def render_card(user_id):
     if design.get("photo"):
         img = paste_custom_photo(img, user_id, get_frame_box(design.get("color", "red")))
     draw = ImageDraw.Draw(img)
-
-    def text_w(t, f):
-        try: return draw.textlength(t, font=f)
-        except Exception:
-            try: return f.getsize(t)[0]
-            except Exception: return len(t) * 10
-
-    def draw_box(key, text, color, center_x=False, pad=3):
-        rx, ry, rw, rh = CARD_BOXES[key]
-        x, y, w, h = rx * W, ry * H, rw * W, rh * H
-        size = max(14, int(h * 0.48))
-        f = get_font(size)
-        while text_w(text, f) > w - pad * 2 and size > 10:
-            size -= 1
-            f = get_font(size)
-        try:
-            bb = draw.textbbox((0, 0), text, font=f)
-            th = bb[3] - bb[1]; yoff = bb[1]
-        except Exception:
-            th, yoff = size, 0
-        ty = y + (h - th) / 2 - yoff
-        tw = text_w(text, f)
-        tx = x + (w - tw) / 2 if center_x else x + pad
-        draw.text((tx, ty), text, font=f, fill=color)
-
-    biz = format_businesses(json.loads(card["businesses"] or "[]")) or "Неизвестно"
-    realty = format_realty(json.loads(card["realty"] or "[]")) or "Неизвестно"
-    prop = format_property(card["property_val"])
-    garage = ("#" + card["garage"]) if card["garage"] else "Неизвестно"
-    phone = format_phone(card["phone"]) if card["phone"] else "Неизвестно"
-    name = card["name"] or "Неизвестно"
-    draw_box("name", name, (255, 255, 255), center_x=True)
-    draw_box("biz", biz, (30, 30, 30), pad=3)
-    draw_box("realty", realty, (30, 30, 30), pad=3)
-    draw_box("prop", prop, (30, 30, 30), pad=3)
-    draw_box("garage", garage, (30, 30, 30), pad=3)
-    draw_box("phone", phone, (30, 30, 30), pad=3)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=88, optimize=True)
-    buf.seek(0)
-    return buf
-    
-    def text_w(t, f):
-        try: return draw.textlength(t, font=f)
-        except Exception:
-            try: return f.getsize(t)[0]
-            except Exception: return len(t) * 10
-
-    def draw_box(key, text, color, center_x=False, pad=3, rect=None):
-        rx, ry, rw, rh = rect if rect else CARD_BOXES[key]
-        x, y, w, h = rx * W, ry * H, rw * W, rh * H
-        size = max(14, int(h * 0.48))
-        f = get_font(size)
-        while text_w(text, f) > w - pad * 2 and size > 10:
-            size -= 1
-            f = get_font(size)
-        try:
-            bb = draw.textbbox((0, 0), text, font=f)
-            th = bb[3] - bb[1]; yoff = bb[1]
-        except Exception:
-            th, yoff = size, 0
-        ty = y + (h - th) / 2 - yoff
-        tw = text_w(text, f)
-        tx = x + (w - tw) / 2 if center_x else x + pad
-        draw.text((tx, ty), text, font=f, fill=color)
-
-    biz = format_businesses(json.loads(card["businesses"] or "[]")) or "Неизвестно"
-    realty = format_realty(json.loads(card["realty"] or "[]")) or "Неизвестно"
-    prop = format_property(card["property_val"])
-    garage = ("#" + card["garage"]) if card["garage"] else "Неизвестно"
-    phone = format_phone(card["phone"]) if card["phone"] else "Неизвестно"
-    name = card["name"] or "Неизвестно"
-    draw_box("name", name, (255, 255, 255), center_x=True, rect=name_box)
-    draw_box("biz", biz, (30, 30, 30), pad=3)
-    draw_box("realty", realty, (30, 30, 30), pad=3)
-    draw_box("prop", prop, (30, 30, 30), pad=3)
-    draw_box("garage", garage, (30, 30, 30), pad=3)
-    draw_box("phone", phone, (30, 30, 30), pad=3)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=88, optimize=True)
-    buf.seek(0)
-    return buf
 
     def text_w(t, f):
         try: return draw.textlength(t, font=f)
@@ -1071,7 +989,7 @@ def init_db():
         CONN.execute("""CREATE TABLE IF NOT EXISTS player_cards (
             user_id INTEGER PRIMARY KEY, name TEXT DEFAULT '', businesses TEXT DEFAULT '[]',
             realty TEXT DEFAULT '[]', property_val TEXT DEFAULT '', garage TEXT DEFAULT '',
-            phone TEXT DEFAULT '', design TEXT DEFAULT '{}', updated_at INTEGER DEFAULT 0)""")
+            phone TEXT DEFAULT '', design TEXT DEFAULT '{}', verified INTEGER DEFAULT 0, updated_at INTEGER DEFAULT 0)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS card_edit_state (
             user_id INTEGER, peer_id INTEGER, step TEXT, context TEXT, PRIMARY KEY(user_id, peer_id))""")
         migrations = [
@@ -1085,6 +1003,7 @@ def init_db():
             "ALTER TABLE members ADD COLUMN who_name TEXT DEFAULT ''",
             "ALTER TABLE members ADD COLUMN who_ts INTEGER DEFAULT 0",
             "ALTER TABLE player_cards ADD COLUMN design TEXT DEFAULT '{}'",
+            "ALTER TABLE player_cards ADD COLUMN verified INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try: CONN.execute(sql)
@@ -1466,9 +1385,8 @@ HELP_BR_TEXT = (
     "1. Мд бр — список серверов и онлайн.\n\n"
     "🗃️Личная карточка:\n"
     "1. Мд карта — выводит фото карты.\n"
-    "2. Мд карта редактировать — редактирование.\n"
-    "3. Мд карта очистить [поле] — очистить карту.\n"
-    "4. Мд карта дизайн — дизайн карты (цвет/фото).\n\n"
+    "2. Мд карта редактировать — редактирование, цвет и фото.\n"
+    "3. Мд карта очистить [поле] — очистить карту.\n\n"
     "Желательно использовать в лс бота, чтобы не засорять чат😉"
 )
 HELP_MODERATOR_TEXT = (
@@ -1514,7 +1432,6 @@ HELP_MD_TEXT = (
 )
 
 MAIN_CARD_TEXT = "Какую информацию вы хотите отредактировать в личной карточке?"
-DESIGN_MAIN_TEXT = "Что вы хотите поменять?"
 DESIGN_PHOTO_TEXT = ("Если хотите установить свою фотографию — отправьте её в чат.\n"
                      "Если вернуть дефолтную — нажмите кнопку «Дефолт».")
 
@@ -1534,6 +1451,8 @@ def card_edit_main_kb():
          {"action": {"type": "callback", "label": "Гараж", "payload": P("garage")}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Телефон", "payload": P("phone")}, "color": "primary"},
          {"action": {"type": "callback", "label": "Имя", "payload": P("name")}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Цвет карточки", "payload": json.dumps({"cmd": "card_design_colors", "p": 1})}, "color": "secondary"},
+         {"action": {"type": "callback", "label": "Фото карточки", "payload": json.dumps({"cmd": "card_design_photo"})}, "color": "secondary"}],
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
 def card_bus_kb(page=1):
@@ -1564,12 +1483,6 @@ def card_input_kb(back_cmd, back_page=None):
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps(back_payload)}, "color": "primary"}]]}
 
-def design_main_kb():
-    return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "Цвет карточки", "payload": json.dumps({"cmd": "card_design_colors", "p": 1})}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Фото карточки", "payload": json.dumps({"cmd": "card_design_photo"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
-
 def design_colors_kb(page=1):
     page = max(1, min(page, DESIGN_PAGES))
     chunk = COLORS_ORDER[(page - 1) * DESIGN_PER_PAGE: page * DESIGN_PER_PAGE]
@@ -1579,7 +1492,7 @@ def design_colors_kb(page=1):
     nav = []
     if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_design_colors", "p": page - 1})}, "color": "primary"})
     if page < DESIGN_PAGES: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_design_colors", "p": page + 1})}, "color": "primary"})
-    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_design_main"})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
     nav.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
     rows.append(nav)
     return {"inline": True, "buttons": rows}
@@ -1587,7 +1500,7 @@ def design_colors_kb(page=1):
 def design_photo_kb():
     return {"inline": True, "buttons": [[
         {"action": {"type": "callback", "label": "Дефолт", "payload": json.dumps({"cmd": "card_design_default"})}, "color": "primary"},
-        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_design_main"})}, "color": "primary"},
+        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"},
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
 def expire_stale_games(peer):
@@ -1652,11 +1565,13 @@ def handle_event(event):
             ctx = state.get("context", {})
             if time.time() - ctx.get("ts", 0) > 60:
                 clear_card_state(user_id, peer_id)
-                show("Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(user_id)), None)
+                txt = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(user_id))
+                if not close_card_message(peer_id, ctx.get("msg_cmid") or cmid, txt):
+                    send_msg(peer_id, txt)
                 snackbar("⏳ Время вышло")
                 return
             try:
-                if cmd in ("card_main", "card_edit_menu", "card_back_main"):
+                if cmd in ("card_main", "card_edit_menu", "card_back_main", "card_design_main"):
                     set_state("edit_menu")
                     show(MAIN_CARD_TEXT, card_edit_main_kb()); snackbar("✅ Меню")
                 elif cmd in ("card_edit", "card_field"):
@@ -1734,9 +1649,6 @@ def handle_event(event):
                     set_state("property_input")
                     show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
                     snackbar("✅ Введите сумму")
-                elif cmd == "card_design_main":
-                    set_state("design_main")
-                    show(DESIGN_MAIN_TEXT, design_main_kb()); snackbar("✅ Дизайн")
                 elif cmd == "card_design_colors":
                     p = int(payload.get("p", 1) or 1)
                     set_state("design_color", {"p": p})
@@ -1755,8 +1667,8 @@ def handle_event(event):
                     show(DESIGN_PHOTO_TEXT, design_photo_kb()); snackbar("✅ Жду фото")
                 elif cmd == "card_design_default":
                     set_design(user_id, photo="")
-                    set_state("design_main")
-                    show("✅ Возвращена дефолтная фотография.\n" + DESIGN_MAIN_TEXT, design_main_kb())
+                    set_state("edit_menu")
+                    show("✅ Возвращена дефолтная фотография.\n" + MAIN_CARD_TEXT, card_edit_main_kb())
                     snackbar("✅ Дефолт")
                 else:
                     snackbar("❌ Неизвестная кнопка карточки")
@@ -2225,9 +2137,17 @@ def build_status_page(peer, page):
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
 LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦🔥", "Мафиози🕴️"]
-LEGEND_SETKTO = {"пират": "Пират🏴‍️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
+LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦🔥", "мафиози": "Мафиози🕴️"}
+
+def open_edit_menu(peer, sender):
+    try:
+        msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, keyboard=json.dumps(card_edit_main_kb()), random_id=random.getrandbits(31))
+        cmid = resolve_cmid(peer, msg_id)
+    except Exception:
+        cmid = None
+    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid})
 
 def handle_ls_card(peer, sender, cmd, args):
     if cmd == "карта":
@@ -2235,11 +2155,7 @@ def handle_ls_card(peer, sender, cmd, args):
         target_id = targets[0] if (targets and sender in (CREATOR_ID, LEADER_ID)) else sender
         send_card_to(peer, target_id)
     elif cmd == "карта_редактировать":
-        set_card_state(sender, peer, "edit_menu", {"msg_cmid": None})
-        send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
-    elif cmd == "карта_дизайн":
-        set_card_state(sender, peer, "design_main", {"msg_cmid": None})
-        send_msg(peer, DESIGN_MAIN_TEXT, keyboard=design_main_kb())
+        open_edit_menu(peer, sender)
     elif cmd == "карта_очистить":
         fld = None
         for a in args:
@@ -2294,7 +2210,22 @@ def handle_setkto(peer, sender, raw):
         CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (target_id, target_peer))
         CONN.execute("UPDATE members SET who_name=?, who_ts=? WHERE user_id=? AND peer_id=?", (final_status, int(time.time()), target_id, target_peer))
         CONN.commit()
-    send_msg(peer, "✅ Статус для id{} в чате {} установлен: **{}**".format(target_id, target_peer, final_status))
+    send_msg(peer, "✅ Статус для id{} в чате {} установлен: <b>{}</b>".format(target_id, target_peer, final_status))
+
+def handle_verify(peer, sender, raw, want):
+    targets = extract_targets(raw, 0)
+    if not targets:
+        send_msg(peer, "❌ Формат: /{} @юзер".format("verify" if want else "deny"))
+        return
+    t = targets[0]
+    with DB_LOCK:
+        CONN.execute("INSERT OR IGNORE INTO player_cards(user_id) VALUES(?)", (t,))
+        CONN.execute("UPDATE player_cards SET verified=? WHERE user_id=?", (1 if want else 0, t))
+        CONN.commit()
+    if want:
+        send_msg(peer, "✅ Карточка {} подтверждена.".format(silent_mention_badge(t, peer)))
+    else:
+        send_msg(peer, "✅ Подтверждение карточки {} снято.".format(silent_mention_badge(t, peer)))
 
 def handle_message(peer, sender, text, msg_obj):
     first_line = text.split("\n")[0].strip()
@@ -2337,8 +2268,14 @@ def handle_message(peer, sender, text, msg_obj):
             elif low.startswith("/setkto"):
                 handle_setkto(peer, sender, text[len("/setkto"):].strip())
                 return
+            elif low.startswith("/verify"):
+                handle_verify(peer, sender, text[len("/verify"):].strip(), True)
+                return
+            elif low.startswith("/deny"):
+                handle_verify(peer, sender, text[len("/deny"):].strip(), False)
+                return
             elif text.strip().startswith("/"):
-                handle_creator_ls(peer, text)
+                send_msg(peer, "ℹ️ Неизвестная служебная команда.")
                 return
         if first.startswith("мд "):
             pn = first[3:].strip().split()
@@ -2348,8 +2285,6 @@ def handle_message(peer, sender, text, msg_obj):
                     handle_ls_card(peer, sender, "карта_редактировать", pn[2:]); return
                 if c2 == "карта_очистить":
                     handle_ls_card(peer, sender, "карта_очистить", pn[2:]); return
-                if c2 == "карта_дизайн":
-                    handle_ls_card(peer, sender, "карта_дизайн", pn[2:]); return
                 if pn[0] == "карта":
                     handle_ls_card(peer, sender, "карта", pn[1:]); return
         if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id"), attachments=msg_obj.get("attachments")):
@@ -2542,7 +2477,7 @@ def handle_message(peer, sender, text, msg_obj):
         who_name = row["who_name"] if row and row["who_name"] else ""
         who_ts = row["who_ts"] if row else 0
         if who_name:
-            disp = "**{}**".format(who_name) if who_name in LEGENDARY_WHO else who_name
+            disp = "<b>{}</b>".format(who_name) if who_name in LEGENDARY_WHO else who_name
             who_line = "👤 Кто это: {}".format(disp) if int(time.time()) - who_ts <= 86400 else "🫆 Раньше был: {} ({})".format(disp, fmt_join_date(who_ts))
         else:
             who_line = "👤 Кто это: не определено"
@@ -3405,7 +3340,7 @@ def handle_message(peer, sender, text, msg_obj):
             with DB_LOCK:
                 CONN.execute("UPDATE members SET who_name=?, who_ts=? WHERE user_id=? AND peer_id=?", (legend, now_ts, sender, peer)); CONN.commit()
             set_setting(peer, "who_i_cd_{}".format(sender), str(now_ts))
-            send_msg(peer, "🍀 {}, поздравляю вы получили легендарный статус - **{}**! (Шанс 1%)".format(silent_mention_badge(sender, peer), legend))
+            send_msg(peer, "🍀 {}, поздравляю вы получили легендарный статус - <b>{}</b>! (Шанс 1%)".format(silent_mention_badge(sender, peer), legend))
             return
         adj = random.choice(WHO_ADJ)
         noun = random.choice(WHO_NOUN)
@@ -3495,12 +3430,7 @@ def handle_message(peer, sender, text, msg_obj):
         send_card_to(peer, target_id)
 
     elif cmd == "карта_редактировать":
-        set_card_state(sender, peer, "edit_menu", {"msg_cmid": None})
-        send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
-
-    elif cmd == "карта_дизайн":
-        set_card_state(sender, peer, "design_main", {"msg_cmid": None})
-        send_msg(peer, DESIGN_MAIN_TEXT, keyboard=design_main_kb())
+        open_edit_menu(peer, sender)
 
     elif cmd == "карта_очистить":
         fld = None
@@ -3529,7 +3459,6 @@ def timer_loop():
             now_msk = get_msk_now()
             today_str = now_msk.strftime("%Y-%m-%d")
             now = int(time.time())
-            # Авто-таймаут редакторов карты/дизайна
             with DB_LOCK:
                 stale = CONN.execute("SELECT user_id, peer_id, step, context FROM card_edit_state").fetchall()
             for row in stale:
@@ -3541,12 +3470,8 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     txt = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid))
-                    if cm:
-                        try:
-                            VK.messages.edit(peer_id=pid, conversation_message_id=cm, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}))
-                            continue
-                        except Exception: pass
-                    send_msg(pid, txt)
+                    if not close_card_message(pid, cm, txt):
+                        send_msg(pid, txt)
             with DB_LOCK:
                 expired = CONN.execute("SELECT * FROM dice_games WHERE state='pending' AND created_at<=?", (now-60,)).fetchall()
                 if expired:
