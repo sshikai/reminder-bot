@@ -127,7 +127,7 @@ COLORS_ORDER = [
 ALL_COLOR_KEYS = set(k for k, _ in COLORS_ORDER)
 DESIGN_PAGES = 3
 DESIGN_PER_PAGE = 6
-FRAME_BOX = (0.062, 0.165, 0.286, 0.610)
+FRAME_BOX = (0.060, 0.190, 0.300, 0.645)
 
 WHO_ADJ = [
     "тайный", "безумный", "сонный", "хитрый", "гордый", "дерзкий", "мудрый", "лютый", "ленивый", "грустный",
