@@ -682,29 +682,81 @@ def get_font(size):
         return ImageFont.load_default()
 
 def upload_photo(peer, img_buf):
-    try: img_buf.seek(0)
-    except: pass
+    try:
+        img_buf.seek(0)
+    except Exception:
+        pass
     raw = img_buf.getvalue()
-    if not raw: raise RuntimeError("EMPTY_IMAGE")
-    if len(raw) > 4500000: raise RuntimeError("TOO_BIG")
-    
+    if not raw:
+        raise RuntimeError("EMPTY_IMAGE: картинка пустая")
+    if len(raw) > 4500000:
+        raise RuntimeError("TOO_BIG: файл {} байт (лимит ~5 МБ)".format(len(raw)))
     data = None
-    for attempt in range(3):
+    last_resp = None
+    for attempt in range(4):
         try:
-            server = VK.photos.getMessagesUploadServer(peer_id=peer)
-            resp = requests.post(server["upload_url"], files={"photo": ("card.jpg", raw, "image/jpeg")}, timeout=30)
+            if attempt < 3:
+                server = VK.photos.getMessagesUploadServer(peer_id=peer)
+            else:
+                server = VK.photos.getMessagesUploadServer()
+            resp = requests.post(
+                server["upload_url"],
+                files={"photo": ("card.jpg", raw, "image/jpeg")},
+                timeout=30,
+            )
             data = resp.json()
-            if data.get("photo"): break
+            last_resp = data
+            print("card upload attempt {}: size={} server={} ok={}".format(attempt + 1, len(raw), server.get("server"), bool(data.get("photo"))))
+            if data.get("photo"):
+                break
+            data = None
         except Exception as e:
-            print("upload attempt {} error: {}".format(attempt, e))
-        time.sleep(1.5)
-        
+            print("card upload attempt {} exception: {}".format(attempt + 1, e))
+            last_resp = {"exception": str(e)}
+            data = None
+        time.sleep(0.8 + attempt * 0.7)
     if not data or not data.get("photo") or not data.get("hash") or not data.get("server"):
-        raise RuntimeError("UPLOAD_BAD_RESPONSE: {} (размер файла: {} байт)".format(str(data)[:200], len(raw)))
-        
+        raise RuntimeError("UPLOAD_BAD_RESPONSE: {} (размер файла: {} байт)".format(str(last_resp)[:200], len(raw)))
     saved = VK.photos.saveMessagesPhoto(photo=data["photo"], hash=data["hash"], server=data["server"])
-    if not saved: raise RuntimeError("SAVE_EMPTY")
+    if not saved:
+        raise RuntimeError("SAVE_EMPTY: ВК не вернул фото после сохранения")
     return "photo{}_{}".format(saved[0]["owner_id"], saved[0]["id"])
+
+def send_card_image(peer, user_id):
+    # Кэш: если карточку не редактировали — отправляем уже загруженное фото без аплоада
+    card = get_card(user_id)
+    key = "card_att_{}".format(user_id)
+    try:
+        cached = json.loads(get_setting(0, key, "") or "{}")
+    except Exception:
+        cached = {}
+    if cached.get("ts") == card["updated_at"] and cached.get("att"):
+        return cached["att"]
+    img_buf = render_card(user_id)
+    if not img_buf:
+        return None
+    att = upload_photo(peer, img_buf)
+    set_setting(0, key, json.dumps({"ts": card["updated_at"], "att": att}))
+    return att
+
+def send_card_to(peer, target_id):
+    err = ""
+    att = None
+    try:
+        att = send_card_image(peer, target_id)
+    except Exception as e:
+        err = str(e)
+        print("card send error:", err)
+    if not att:
+        if err:
+            if "[15]" in err or "scope" in err.lower():
+                send_msg(peer, "❌ У токена нет права «Фотографии»: Управление → Использование API → галочка «Фото» → пересоздать токен.")
+            else:
+                send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
+        else:
+            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
+        return
+    send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
 
 # ===== ОТРИСОВКА КАРТОЧКИ =====
 CARD_BOXES = {
@@ -1976,19 +2028,7 @@ def handle_ls_card(peer, sender, cmd, args):
     if cmd == "карта":
         targets = extract_targets(" ".join(args), 0)
         target_id = targets[0] if (targets and sender in (CREATOR_ID, LEADER_ID)) else sender
-        img_buf = render_card(target_id)
-        if not img_buf:
-            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
-            return
-        try:
-            att = upload_photo(peer, img_buf)
-            send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
-        except Exception as e:
-            err = str(e)
-            if "[15]" in err or "scope" in err.lower():
-                send_msg(peer, "❌ У токена нет права «Фотографии»: Управление → Использование API → галочка «Фото» → пересоздать токен.")
-            else:
-                send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
+        send_card_to(peer, target_id)
     elif cmd == "карта_редактировать":
         set_card_state(sender, peer, "main_menu")
         send_msg(peer, MAIN_CARD_TEXT, keyboard=card_edit_main_kb())
@@ -3431,20 +3471,7 @@ def handle_message(peer, sender, text, msg_obj):
         if target_id != sender and not admin:
             send_msg(peer, "⛔ Только админы могут смотреть чужие карты.")
             return
-        img_buf = render_card(target_id)
-        if not img_buf:
-            send_msg(peer, "❌ Не найдены шаблоны карточек (card_male.jpg/png, card_female.jpg/png) или не установлен Pillow.")
-            return
-        try:
-            att = upload_photo(peer, img_buf)
-            send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
-        except Exception as e:
-            err = str(e)
-            print("card send error:", err)
-            if "[15]" in err or "scope" in err.lower():
-                send_msg(peer, "❌ У токена нет права «Фотографии»: Управление → Использование API → галочка «Фото» → пересоздать токен.")
-            else:
-                send_msg(peer, "❌ Ошибка отправки карточки: {}".format(err))
+        send_card_to(peer, target_id)
 
     elif cmd == "карта_редактировать":
         set_card_state(sender, peer, "main_menu")
