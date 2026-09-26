@@ -127,7 +127,26 @@ COLORS_ORDER = [
 ALL_COLOR_KEYS = set(k for k, _ in COLORS_ORDER)
 DESIGN_PAGES = 3
 DESIGN_PER_PAGE = 6
-FRAME_BOX = (0.060, 0.190, 0.300, 0.645)
+FRAME_BOX = (0.070, 0.190, 0.280, 0.605)
+FRAME_BOXES_FILE = os.path.join(DATA_DIR, "frame_boxes.json")
+_FRAME_BOXES_CACHE = {"data": None, "ts": 0.0}
+
+def get_frame_box(color_key):
+    now = time.time()
+    if _FRAME_BOXES_CACHE["data"] is None or now - _FRAME_BOXES_CACHE["ts"] > 60:
+        try:
+            with open(FRAME_BOXES_FILE) as f:
+                _FRAME_BOXES_CACHE["data"] = json.load(f)
+        except Exception:
+            _FRAME_BOXES_CACHE["data"] = {}
+        _FRAME_BOXES_CACHE["ts"] = now
+    data = _FRAME_BOXES_CACHE["data"] or {}
+    for k in (color_key, "default"):
+        v = data.get(k)
+        if v and len(v) == 4:
+            try: return tuple(float(x) for x in v)
+            except Exception: pass
+    return FRAME_BOX
 
 WHO_ADJ = [
     "тайный", "безумный", "сонный", "хитрый", "гордый", "дерзкий", "мудрый", "лютый", "ленивый", "грустный",
@@ -823,61 +842,6 @@ def card_template_path(color_key):
             if os.path.isfile(b + ext): return b + ext
     return None
 
-FRAME_CACHE = {}
-
-def _detect_template_boxes(img):
-    W, H = img.size
-    px = img.load()
-    x0s, x1s = int(0.02 * W), int(0.46 * W)
-    y0s, y1s = int(0.10 * H), int(0.99 * H)
-    panel = x1s - x0s
-
-    def dsat(x, y):
-        r, g, b = px[x, y][:3]
-        mx = max(r, g, b); mn = min(r, g, b)
-        return mx < 210 and (mx - mn) > 60 and mn < 100
-
-    lefts = []; rights = []; rows = []; plate_rows = []
-    y = y0s
-    while y < y1s:
-        runs = []; in_run = False; start = 0
-        x = x0s
-        while x < x1s:
-            m = dsat(x, y)
-            if m and not in_run: in_run = True; start = x
-            elif not m and in_run: in_run = False; runs.append((start, x))
-            x += 2
-        if in_run: runs.append((start, x1s))
-        wide = [r for r in runs if (r[1] - r[0]) > 0.5 * panel]
-        narrow = [r for r in runs if (r[1] - r[0]) <= 0.12 * panel]
-        if wide: plate_rows.append(y)
-        if len(narrow) >= 2:
-            lefts.append(narrow[0][1]); rights.append(narrow[-1][0]); rows.append(y)
-        y += 2
-    if not rows:
-        return None
-    lefts.sort(); rights.sort(); rows.sort()
-    ix0 = lefts[len(lefts) // 2]; ix1 = rights[len(rights) // 2]
-    iy0 = rows[0]; iy1 = rows[-1]
-    plate_top = plate_bot = None
-    if plate_rows:
-        blocks = []; s = plate_rows[0]; p = plate_rows[0]
-        for yy in plate_rows[1:]:
-            if yy - p > 6:
-                blocks.append((s, p)); s = yy
-            p = yy
-        blocks.append((s, p))
-        blocks = [b for b in blocks if b[0] > iy0 and (b[1] - b[0]) > 8]
-        if blocks:
-            plate_top, plate_bot = max(blocks, key=lambda b: b[1] - b[0])
-    photo_y1 = plate_top if plate_top else iy1
-    res = {
-        "photo": (ix0 / float(W), (iy0 + 2) / float(H), (ix1 - ix0) / float(W), (photo_y1 - iy0 - 4) / float(H)),
-        "name": (ix0 / float(W), plate_top / float(H), (ix1 - ix0) / float(W), (plate_bot - plate_top) / float(H)) if plate_top else None,
-    }
-    print("template boxes detected:", res)
-    return res
-
 def paste_custom_photo(img, user_id, box):
     path = os.path.join(PHOTO_DIR, "{}.jpg".format(user_id))
     if not os.path.isfile(path): return img
@@ -922,18 +886,51 @@ def render_card(user_id):
         ratio = 1600.0 / W
         img = img.resize((1600, int(H * ratio)), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
         W, H = img.size
-    boxes = FRAME_CACHE.get(template)
-    if boxes is None:
-        try: boxes = _detect_template_boxes(img)
-        except Exception as e:
-            print("frame detect error:", e); boxes = None
-        FRAME_CACHE[template] = boxes
-    photo_box = boxes["photo"] if boxes and boxes.get("photo") else FRAME_BOX
-    name_box = boxes.get("name") if boxes else None
     if design.get("photo"):
-        img = paste_custom_photo(img, user_id, photo_box)
+        img = paste_custom_photo(img, user_id, get_frame_box(design.get("color", "red")))
     draw = ImageDraw.Draw(img)
 
+    def text_w(t, f):
+        try: return draw.textlength(t, font=f)
+        except Exception:
+            try: return f.getsize(t)[0]
+            except Exception: return len(t) * 10
+
+    def draw_box(key, text, color, center_x=False, pad=3):
+        rx, ry, rw, rh = CARD_BOXES[key]
+        x, y, w, h = rx * W, ry * H, rw * W, rh * H
+        size = max(14, int(h * 0.48))
+        f = get_font(size)
+        while text_w(text, f) > w - pad * 2 and size > 10:
+            size -= 1
+            f = get_font(size)
+        try:
+            bb = draw.textbbox((0, 0), text, font=f)
+            th = bb[3] - bb[1]; yoff = bb[1]
+        except Exception:
+            th, yoff = size, 0
+        ty = y + (h - th) / 2 - yoff
+        tw = text_w(text, f)
+        tx = x + (w - tw) / 2 if center_x else x + pad
+        draw.text((tx, ty), text, font=f, fill=color)
+
+    biz = format_businesses(json.loads(card["businesses"] or "[]")) or "Неизвестно"
+    realty = format_realty(json.loads(card["realty"] or "[]")) or "Неизвестно"
+    prop = format_property(card["property_val"])
+    garage = ("#" + card["garage"]) if card["garage"] else "Неизвестно"
+    phone = format_phone(card["phone"]) if card["phone"] else "Неизвестно"
+    name = card["name"] or "Неизвестно"
+    draw_box("name", name, (255, 255, 255), center_x=True)
+    draw_box("biz", biz, (30, 30, 30), pad=3)
+    draw_box("realty", realty, (30, 30, 30), pad=3)
+    draw_box("prop", prop, (30, 30, 30), pad=3)
+    draw_box("garage", garage, (30, 30, 30), pad=3)
+    draw_box("phone", phone, (30, 30, 30), pad=3)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=88, optimize=True)
+    buf.seek(0)
+    return buf
+    
     def text_w(t, f):
         try: return draw.textlength(t, font=f)
         except Exception:
