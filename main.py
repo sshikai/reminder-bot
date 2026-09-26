@@ -113,7 +113,6 @@ BUS_PER_PAGE = 6
 CARD_FIELD_MAP = {"бизнесы": "businesses", "недвижимость": "realty", "имущество": "property_val",
                   "гараж": "garage", "телефон": "phone", "имя": "name"}
 
-# ===== ЦВЕТА КАРТОЧКИ (файлы шаблонов) =====
 COLORS_ORDER = [
     ("red", "Красный"), ("red_full", "Полностью красный"),
     ("green", "Зеленый"), ("green_full", "Полностью зеленый"),
@@ -128,7 +127,7 @@ COLORS_ORDER = [
 ALL_COLOR_KEYS = set(k for k, _ in COLORS_ORDER)
 DESIGN_PAGES = 3
 DESIGN_PER_PAGE = 6
-FRAME_BOX = (0.052, 0.152, 0.306, 0.640)
+FRAME_BOX = (0.062, 0.165, 0.286, 0.610)
 
 WHO_ADJ = [
     "тайный", "безумный", "сонный", "хитрый", "гордый", "дерзкий", "мудрый", "лютый", "ленивый", "грустный",
@@ -481,10 +480,6 @@ def format_phone(phone):
     if not phone: return "Неизвестно"
     return "-".join([phone[i:i+2] for i in range(0, len(phone), 2)])
 
-# ===== СЛОТЫ БИЗНЕСОВ =====
-# АЗС/ТК/СК/Такопарк — только 1 экземпляр (ТК/СК/Такопарк взаимно исключают друг друга).
-# Остальные бизнесы — до 2 экземпляров одного вида, но всего слотов "остальных" = 2
-# (Такопарк занимает слот ТК/СК + один слот остальных).
 def bus_slots_info(blist):
     types = [b["t"] for b in blist]
     has_azs = "АЗС" in types
@@ -809,7 +804,7 @@ def send_card_to(peer, target_id):
         return
     send_msg(peer, "🗃️ Личная карточка: {}".format(silent_mention_badge(target_id, peer)), attachments=att)
 
-# ===== ОТРИСОВКА =====
+# ===== ОТРИСОВКА КАРТОЧКИ =====
 CARD_BOXES = {
     "name":   (0.035, 0.800, 0.340, 0.080),
     "biz":    (0.468, 0.215, 0.525, 0.085),
@@ -848,7 +843,14 @@ def paste_custom_photo(img, user_id):
             top = (phh - new_h) // 2
             ph = ph.crop((0, top, pw, top + new_h))
         ph = ph.resize((fw, fh), Image.LANCZOS if hasattr(Image, "LANCZOS") else Image.ANTIALIAS)
-        img.paste(ph, (fx, fy))
+        mask = Image.new("L", (fw, fh), 0)
+        md = ImageDraw.Draw(mask)
+        r = max(6, int(min(fw, fh) * 0.05))
+        try:
+            md.rounded_rectangle((0, 0, fw - 1, fh - 1), radius=r, fill=255)
+            img.paste(ph, (fx, fy), mask)
+        except Exception:
+            img.paste(ph, (fx, fy))
     except Exception as e:
         print("paste_custom_photo error:", e)
     return img
@@ -1069,6 +1071,8 @@ def resolve_cmid(peer, sent_id):
     return sent_id
 
 def edit_game_message(peer, game_id, text, keyboard_json=None, table="dice_games"):
+    if keyboard_json is not None and not isinstance(keyboard_json, str):
+        keyboard_json = json.dumps(keyboard_json)
     with DB_LOCK:
         row = CONN.execute("SELECT message_id FROM {} WHERE id=?".format(table), (game_id,)).fetchone()
     stored = row["message_id"] if row else 0
@@ -1485,6 +1489,14 @@ def design_photo_kb():
         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_design_main"})}, "color": "primary"},
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
+def expire_stale_games(peer):
+    now = int(time.time())
+    with DB_LOCK:
+        CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='pending' AND created_at<=?", (peer, now - 60))
+        CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='playing' AND created_at<=?", (peer, now - 600))
+        CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
+        CONN.commit()
+
 def handle_event(event):
     try:
         obj = event.object if hasattr(event, 'object') else event.obj
@@ -1526,7 +1538,6 @@ def handle_event(event):
             c["msg_cmid"] = cmid
             set_card_state(user_id, peer_id, step, c)
 
-        # ===== КАРТОЧКА: КОЛБЭКИ (только владелец меню) =====
         if cmd.startswith("card_"):
             state = get_card_state(user_id, peer_id)
             if not state:
@@ -1622,7 +1633,6 @@ def handle_event(event):
                     set_state("property_input")
                     show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
                     snackbar("✅ Введите сумму")
-                # ===== ДИЗАЙН =====
                 elif cmd == "card_design_main":
                     set_state("design_main")
                     show(DESIGN_MAIN_TEXT, design_main_kb()); snackbar("✅ Дизайн")
@@ -2113,8 +2123,8 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
-LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
+LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦🔥", "Мафиози🕴️"]
+LEGEND_SETKTO = {"пират": "Пират🏴‍️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦🔥", "мафиози": "Мафиози🕴️"}
 
@@ -2773,6 +2783,7 @@ def handle_message(peer, sender, text, msg_obj):
         if opponent == CREATOR_ID or opponent == LEADER_ID or opponent == get_chat_owner(peer): send_msg(peer, "❌ Нельзя вызвать владельца."); return
         if dice_blocked(peer, sender): send_msg(peer, "❌ Ты не можешь играть: оба наказания активны!"); return
         if dice_blocked(peer, opponent): send_msg(peer, "❌ {} не может играть!".format(silent_mention_badge(opponent, peer))); return
+        expire_stale_games(peer)
         with DB_LOCK:
             active = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending','playing')", (peer,)).fetchone()
             active_kmb = CONN.execute("SELECT id FROM kmb_games WHERE peer_id=? AND state IN ('pending','choosing')", (peer,)).fetchone()
@@ -2798,6 +2809,7 @@ def handle_message(peer, sender, text, msg_obj):
         if not targets: send_msg(peer, "❌ Укажите пользователя: `Мд кнб @игрок`"); return
         opponent = targets[0]
         if opponent == sender: send_msg(peer, "❌ Нельзя играть с самим собой!"); return
+        expire_stale_games(peer)
         with DB_LOCK:
             active = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending','playing')", (peer,)).fetchone()
             active_kmb = CONN.execute("SELECT id FROM kmb_games WHERE peer_id=? AND state IN ('pending','choosing')", (peer,)).fetchone()
@@ -3416,7 +3428,7 @@ def timer_loop():
             now_msk = get_msk_now()
             today_str = now_msk.strftime("%Y-%m-%d")
             now = int(time.time())
-            # Авто-таймаут редакторов карты/дизайна (1 минута бездействия)
+            # Авто-таймаут редакторов карты/дизайна
             with DB_LOCK:
                 stale = CONN.execute("SELECT user_id, peer_id, step, context FROM card_edit_state").fetchall()
             for row in stale:
@@ -3441,6 +3453,11 @@ def timer_loop():
                 for g in expired:
                     edit_game_message(g["peer_id"], g["id"], "⏰ Время вышло! {} не успел принять вызов от {} 🕐".format(
                         silent_mention_badge(g["opponent"], g["peer_id"]), silent_mention_badge(g["initiator"], g["peer_id"])))
+                stuck_dice = CONN.execute("SELECT * FROM dice_games WHERE state='playing' AND created_at<=?", (now-600,)).fetchall()
+                if stuck_dice:
+                    CONN.execute("UPDATE dice_games SET state='expired' WHERE state='playing' AND created_at<=?", (now-600,)); CONN.commit()
+                for g in stuck_dice:
+                    edit_game_message(g["peer_id"], g["id"], "⏰ Игра в кости закрыта из-за бездействия (10 минут).")
                 exp_m = CONN.execute("SELECT * FROM dice_games WHERE state='marriage' AND created_at<=?", (now-60,)).fetchall()
                 if exp_m:
                     CONN.execute("UPDATE dice_games SET state='marriage_expired' WHERE state='marriage' AND created_at<=?", (now-60,)); CONN.commit()
@@ -3454,6 +3471,11 @@ def timer_loop():
                         edit_game_message(g["peer_id"], g["id"], "⏰ КНБ: время вышло!", table="kmb_games")
                     else:
                         send_msg(g["peer_id"], "⏰ КНБ: время вышло! Игра закончена из-за AFK.")
+                stuck_kmb = CONN.execute("SELECT * FROM kmb_games WHERE state='choosing' AND created_at<=?", (now-300,)).fetchall()
+                if stuck_kmb:
+                    CONN.execute("UPDATE kmb_games SET state='expired' WHERE state='choosing' AND created_at<=?", (now-300,)); CONN.commit()
+                for g in stuck_kmb:
+                    edit_game_message(g["peer_id"], g["id"], "⏰ КНБ закрыта из-за бездействия (5 минут).", table="kmb_games")
                 pend_rows = CONN.execute("SELECT peer_id, value FROM settings WHERE key='top_clean_pending'").fetchall()
             for pr in pend_rows:
                 try: pend = json.loads(pr["value"])
