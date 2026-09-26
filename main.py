@@ -87,7 +87,8 @@ VALID_COMMANDS = [
     "топ", "браки", "брак", "развод", "онлайн", "др", "кто", "кто_я", "инфа", "монетка",
     "+правила", "-правила", "правила", "+приветствие", "-приветствие", "приветствие",
     "значок", "удалить_значок", "значки", "кнб", "чистка", "айди", "запретить_игры", "разрешить_игры",
-    "очистить_топ", "карта", "карта_редактировать", "карта_очистить"
+    "очистить_топ", "карта", "карта_редактировать", "карта_очистить",
+    "запретить_редактор", "разрешить_редактор"
 ]
 
 ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
@@ -543,17 +544,18 @@ def clear_card_state(user_id, peer_id):
         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (user_id, peer_id))
         CONN.commit()
 
-def close_card_message(peer, cmid, txt):
-    if cmid:
-        try:
-            VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}))
-            return True
-        except Exception:
-            try:
-                VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
-                return True
-            except Exception: pass
-    return False
+def delete_card_message(peer, cmid):
+    if not cmid: return False
+    try:
+        VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
+        return True
+    except Exception:
+        pass
+    try:
+        VK.messages.delete(peer_id=peer, message_ids=[cmid], delete_for_all=1)
+        return True
+    except Exception:
+        return False
 
 def extract_photo_url(msg_obj):
     for att in (msg_obj.get("attachments") or []):
@@ -587,9 +589,8 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
     prompt_cmid = ctx.get("msg_cmid") or cmid
     if time.time() - ctx.get("ts", 0) > 60:
         clear_card_state(sender, peer)
-        msg = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(sender))
-        if not close_card_message(peer, prompt_cmid, msg):
-            send_msg(peer, msg)
+        delete_card_message(peer, prompt_cmid)
+        send_msg(peer, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(sender)))
         return True
 
     def reply(msg):
@@ -1071,6 +1072,8 @@ def send_msg(peer, text, attachments=None, keyboard=None):
     if VK is None or not peer: return False
     try:
         params = {'peer_id': peer, 'message': text, 'random_id': random.getrandbits(31)}
+        if "**" in text:
+            params['dont_parse_links'] = 1
         if attachments: params['attachment'] = attachments
         if keyboard: params['keyboard'] = keyboard if isinstance(keyboard, str) else json.dumps(keyboard)
         VK.messages.send(**params)
@@ -1411,6 +1414,7 @@ HELP_MAIN_ADMIN_TEXT = (
     "4. Мд +приветствие / -приветствие (ответом)\n"
     "5. Мд запретить игры / разрешить игры\n"
     "6. Мд очистить топ [@игроки] [тип]\n"
+    "7. Мд запретить редактор / разрешить редактор\n"
     "Имеет возможности прошлых ролей."
 )
 HELP_GAMES_TEXT = (
@@ -1565,9 +1569,8 @@ def handle_event(event):
             ctx = state.get("context", {})
             if time.time() - ctx.get("ts", 0) > 60:
                 clear_card_state(user_id, peer_id)
-                txt = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(user_id))
-                if not close_card_message(peer_id, ctx.get("msg_cmid") or cmid, txt):
-                    send_msg(peer_id, txt)
+                delete_card_message(peer_id, ctx.get("msg_cmid") or cmid)
+                send_msg(peer_id, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(user_id)))
                 snackbar("⏳ Время вышло")
                 return
             try:
@@ -2136,10 +2139,10 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦🔥", "Мафиози🕴️"]
+LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦", "Мафиози️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
-                 "феникс": "Феникс🐦🔥", "мафиози": "Мафиози🕴️"}
+                 "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
 
 def open_edit_menu(peer, sender):
     try:
@@ -2210,7 +2213,7 @@ def handle_setkto(peer, sender, raw):
         CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (target_id, target_peer))
         CONN.execute("UPDATE members SET who_name=?, who_ts=? WHERE user_id=? AND peer_id=?", (final_status, int(time.time()), target_id, target_peer))
         CONN.commit()
-    send_msg(peer, "✅ Статус для id{} в чате {} установлен: <b>{}</b>".format(target_id, target_peer, final_status))
+    send_msg(peer, "✅ Статус для id{} в чате {} установлен: **{}**".format(target_id, target_peer, final_status))
 
 def handle_verify(peer, sender, raw, want):
     targets = extract_targets(raw, 0)
@@ -2477,7 +2480,7 @@ def handle_message(peer, sender, text, msg_obj):
         who_name = row["who_name"] if row and row["who_name"] else ""
         who_ts = row["who_ts"] if row else 0
         if who_name:
-            disp = "<b>{}</b>".format(who_name) if who_name in LEGENDARY_WHO else who_name
+            disp = "**{}**".format(who_name) if who_name in LEGENDARY_WHO else who_name
             who_line = "👤 Кто это: {}".format(disp) if int(time.time()) - who_ts <= 86400 else "🫆 Раньше был: {} ({})".format(disp, fmt_join_date(who_ts))
         else:
             who_line = "👤 Кто это: не определено"
@@ -2880,6 +2883,14 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "разрешить_игры":
         if not main_admin: send_msg(peer, "⛔ Только главный админ и выше."); return
         set_setting(peer, "games_disabled", "0"); send_msg(peer, "✅ Игры в этом чате разрешены.")
+
+    elif cmd == "запретить_редактор":
+        if not main_admin: send_msg(peer, "⛔ Только главный админ и выше."); return
+        set_setting(peer, "card_edit_disabled", "1"); send_msg(peer, "🚫 Редактирование карт в этом чате запрещено.")
+
+    elif cmd == "разрешить_редактор":
+        if not main_admin: send_msg(peer, "⛔ Только главный админ и выше."); return
+        set_setting(peer, "card_edit_disabled", "0"); send_msg(peer, "✅ Редактирование карт в этом чате разрешено.")
 
     elif cmd == "очистить_топ":
         if not main_admin: send_msg(peer, "⛔ Только главный админ и выше."); return
@@ -3340,7 +3351,7 @@ def handle_message(peer, sender, text, msg_obj):
             with DB_LOCK:
                 CONN.execute("UPDATE members SET who_name=?, who_ts=? WHERE user_id=? AND peer_id=?", (legend, now_ts, sender, peer)); CONN.commit()
             set_setting(peer, "who_i_cd_{}".format(sender), str(now_ts))
-            send_msg(peer, "🍀 {}, поздравляю вы получили легендарный статус - <b>{}</b>! (Шанс 1%)".format(silent_mention_badge(sender, peer), legend))
+            send_msg(peer, "🍀 {}, поздравляю вы получили легендарный статус - **{}**! (Шанс 1%)".format(silent_mention_badge(sender, peer), legend))
             return
         adj = random.choice(WHO_ADJ)
         noun = random.choice(WHO_NOUN)
@@ -3430,6 +3441,9 @@ def handle_message(peer, sender, text, msg_obj):
         send_card_to(peer, target_id)
 
     elif cmd == "карта_редактировать":
+        if get_setting(peer, "card_edit_disabled", "0") == "1":
+            send_msg(peer, "Редактирование карт в данном чате запрещено, используйте в ЛС с ботом.")
+            return
         open_edit_menu(peer, sender)
 
     elif cmd == "карта_очистить":
@@ -3469,9 +3483,8 @@ def timer_loop():
                     cm = ctx.get("msg_cmid")
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
-                    txt = "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid))
-                    if not close_card_message(pid, cm, txt):
-                        send_msg(pid, txt)
+                    delete_card_message(pid, cm)
+                    send_msg(pid, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
             with DB_LOCK:
                 expired = CONN.execute("SELECT * FROM dice_games WHERE state='pending' AND created_at<=?", (now-60,)).fetchall()
                 if expired:
