@@ -104,12 +104,12 @@ _EM_BASE = ("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0
 _EM_ONE = _EM_BASE + "[\U0001F3FB-\U0001F3FF]?\uFE0F?"
 EM_CLUSTER = re.compile("^" + _EM_ONE + "(?:\u200D" + _EM_ONE + ")*$")
 
-BUS_TYPES_ORDER = ["АЗС", "Амуниция", "Одежда", "Аксессуары", "24/7", "ТК", "СК", "ПВЗ",
+BUS_TYPES_ORDER = ["АЗС", "Амуниция", "Одежда", "Аксессуары", "24/7", "ТК БУС", "ТК БАТ", "СК", "ПВЗ",
                    "Ларек", "Закуска", "Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк",
                    "Шинка", "Стайлинг", "Тех. Центр"]
 BUS_NO_NUM = {"Мотосалон", "Выс. салон", "Сред. салон", "Низ. салон", "Лод. салон", "Такопарк",
               "Шинка", "Стайлинг", "Тех. Центр"}
-BUS_SLOT2 = ("ТК", "СК", "Такопарк")
+BUS_SLOT2 = ("ТК БУС", "ТК БАТ", "СК", "Такопарк")
 BUS_TAKO = "Такопарк"
 BUS_PAGES = 4
 BUS_PER_PAGE = 6
@@ -131,10 +131,37 @@ COLORS_ORDER = [
     ("pink", "Розовый"), ("pink_full", "Полностью розовый"),
     ("violet", "Фиолетовый"), ("violet_full", "Полностью фиолетовый"),
     ("gray", "Серый"),
+    ("blackblue", "Черно синий"), ("blackviolet", "Черно фиолетовый"),
+    ("blackpink", "Черно розовый"), ("blackred", "Черно красный"),
+    ("blackorange", "Черно оранжевый"), ("blackyellow", "Черно желтый"),
+    ("blackgreen", "Черно зеленый"), ("blacklblue", "Черно голубой"),
+    ("blackgray", "Черно серый"),
 ]
 ALL_COLOR_KEYS = set(k for k, _ in COLORS_ORDER)
-DESIGN_PAGES = 3
 DESIGN_PER_PAGE = 6
+
+def design_pages_count():
+    return max(1, -(-len(COLORS_ORDER) // DESIGN_PER_PAGE))
+
+TEXT_COLOR_ORDER = [
+    ("blue", "Синий"), ("lblue", "Голубой"), ("pink", "Розовый"), ("violet", "Фиолетовый"),
+    ("red", "Красный"), ("orange", "Оранжевый"), ("yellow", "Желтый"), ("green", "Зеленый"),
+    ("gray", "Серый"), ("white", "Белый"), ("black", "Черный"),
+]
+TEXT_COLORS = {
+    "blue": (0, 0, 255),
+    "lblue": (0, 191, 255),
+    "pink": (255, 20, 147),
+    "violet": (138, 43, 226),
+    "red": (255, 0, 0),
+    "orange": (255, 140, 0),
+    "yellow": (255, 215, 0),
+    "green": (0, 150, 0),
+    "gray": (128, 128, 128),
+    "white": (255, 255, 255),
+    "black": (0, 0, 0),
+}
+
 FRAME_BOX = (0.070, 0.190, 0.280, 0.605)
 FRAME_BOXES_FILE = os.path.join(DATA_DIR, "frame_boxes.json")
 _FRAME_BOXES_CACHE = {"data": None, "ts": 0.0}
@@ -1001,7 +1028,7 @@ LOT_PRICE_HINT = "цена: 300 = 300.000.000р, 99.5 = 99.500.000р, или п�
 AUCTION_STEPS = set(["create_peer", "create_name", "create_dt", "create_count", "create_lot", "create_photo",
                      "delete_peer", "edit_peer", "edit_dt", "edit_name", "edit_lot_num", "edit_lot_data",
                      "edit_lot_photo", "add_lot_data", "add_lot_photo", "announce_peer", "active_peer",
-                     "control_peer", "cancel_last_peer"])
+                     "control_peer", "cancel_last_peer", "next_lot_peer"])
 
 def auction_prompt(step, ctx):
     lots = ctx.get("lots") or []
@@ -1044,11 +1071,13 @@ def auction_prompt(step, ctx):
         return "Введите номер чата для настройки контроля:", auction_step_kb("menu")
     if step == "cancel_last_peer":
         return "Введите номер чата, где отменить последнюю ставку:", auction_step_kb("menu")
+    if step == "next_lot_peer":
+        return "Введите номер чата, где принудительно завершить текущий лот:", auction_step_kb("menu")
     return "Выберите действие:", auction_main_kb()
 
 def send_lot_message(peer, auction, lot):
     seller = lot.get("seller") or silent_mention_badge(auction["created_by"], peer)
-    txt = ("@all \n🏆 ЛОТ НА АУКЦИОН 🏆\n🟦 Black Russia • BLUE 🟦\n\n"
+    txt = ("@all \n🏆 ЛОТ НА АУКЦИОН 🏆\n Black Russia • BLUE 🟦\n\n"
            "━━━━━━━━━━━━━━━━━━━━\n\n"
            "📦 Наименование лота:\n{}\n\n"
            "💰 Стартовая цена:\n➡️ 20.000.000 рублей\n\n"
@@ -1171,6 +1200,38 @@ def do_cancel_last_bid(peer, pid):
     send_msg(peer, "✅ Верхняя ставка {} ({}) на лот «{}» отменена. {}".format(fmt_rub(amt), silent_mention_badge(uid, peer), lot["name"], info))
     send_msg(pid, "⚠️ Последняя ставка на лот «{}» отменена аукционером. {}".format(lot["name"], info))
 
+def handle_next_lot(peer, sender, raw):
+    m = re.search(r"\b(2\d{9})\b", raw)
+    if not m:
+        set_auction_state(sender, peer, "next_lot_peer", {})
+        txt, kb = auction_prompt("next_lot_peer", {})
+        send_msg(peer, txt, keyboard=kb)
+        return
+    do_next_lot(peer, int(m.group(1)))
+
+def do_next_lot(peer, pid):
+    ra = get_running_auction(pid)
+    if not ra or not ra["current_lot_id"]:
+        send_msg(peer, "❌ В чате {} сейчас нет идущего аукциона с активным лотом.".format(pid))
+        return
+    lot = get_lot(ra["current_lot_id"])
+    if not lot:
+        send_msg(peer, "❌ Активный лот не найден.")
+        return
+    bid_id, uid, amt = get_best_bid(lot["id"])
+    if uid is None:
+        with DB_LOCK:
+            CONN.execute("UPDATE auction_lots SET sold=0, winner_id=0, final_price=0 WHERE id=?", (lot["id"],))
+            CONN.commit()
+        send_msg(pid, "⏭️ Лот «{}» завершён аукционером: ставок не было.".format(lot["name"]))
+    else:
+        with DB_LOCK:
+            CONN.execute("UPDATE auction_lots SET sold=1, winner_id=?, final_price=? WHERE id=?", (uid, amt, lot["id"]))
+            CONN.commit()
+        send_msg(pid, "⏭️ Лот «{}» продан за {} {} (завершено аукционером).".format(lot["name"], fmt_rub(amt), silent_mention_badge(uid, pid)))
+    send_msg(peer, "✅ Лот «{}» принудительно завершён.".format(lot["name"]))
+    start_lot(ra, (ra["current_lot_index"] or 0) + 1)
+
 def handle_auctioneer_cmd(peer, sender, raw):
     targets = extract_targets(raw, 0)
     if not targets:
@@ -1214,7 +1275,8 @@ AUCTIONEER_WELCOME = ("Вас назначили аукционером📈\n"
                       "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
                       "/аукцион - редактор аукционов.\n"
                       "/стопаукцион (номер чата) - принудительно отключает идущий аукцион в чате.\n"
-                      "/отменить ласт ставку (номер чата) - отменить верхнюю ставку активного лота.")
+                      "/отменить ласт ставку (номер чата) - отменить верхнюю ставку активного лота.\n"
+                      "/некст лот (номер чата) - принудительно завершить текущий лот и перейти к следующему.")
 
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
                      "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
@@ -1526,6 +1588,13 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         do_cancel_last_bid(peer, pid)
         return True
 
+    if step == "next_lot_peer":
+        pid = need_chat("next_lot_peer")
+        if pid is None: return True
+        clear_auction_state(sender, peer)
+        do_next_lot(peer, pid)
+        return True
+
     return False
 
 # ===== ШРИФТ =====
@@ -1726,6 +1795,8 @@ def render_card(user_id):
     if design.get("photo"):
         img = paste_custom_photo(img, user_id, get_frame_box(design.get("color", "red")))
     draw = ImageDraw.Draw(img)
+    name_rgb = TEXT_COLORS.get(design.get("name_color"), (255, 255, 255))
+    fields_rgb = TEXT_COLORS.get(design.get("fields_color"), (30, 30, 30))
 
     def text_w(t, f):
         try: return draw.textlength(t, font=f)
@@ -1757,12 +1828,12 @@ def render_card(user_id):
     garage = ("#" + card["garage"]) if card["garage"] else "Неизвестно"
     phone = format_phone(card["phone"]) if card["phone"] else "Неизвестно"
     name = card["name"] or "Неизвестно"
-    draw_box("name", name, (255, 255, 255), center_x=True)
-    draw_box("biz", biz, (30, 30, 30), pad=3)
-    draw_box("realty", realty, (30, 30, 30), pad=3)
-    draw_box("prop", prop, (30, 30, 30), pad=3)
-    draw_box("garage", garage, (30, 30, 30), pad=3)
-    draw_box("phone", phone, (30, 30, 30), pad=3)
+    draw_box("name", name, name_rgb, center_x=True)
+    draw_box("biz", biz, fields_rgb, pad=3)
+    draw_box("realty", realty, fields_rgb, pad=3)
+    draw_box("prop", prop, fields_rgb, pad=3)
+    draw_box("garage", garage, fields_rgb, pad=3)
+    draw_box("phone", phone, fields_rgb, pad=3)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=88, optimize=True)
     buf.seek(0)
@@ -2226,6 +2297,7 @@ def ls_help_text(user_id):
             "/аукцион - редактор аукционов.",
             "/стопаукцион (номер чата) - отключить идущий аукцион.",
             "/отменить ласт ставку (номер чата) - отменить верхнюю ставку активного лота.",
+            "/некст лот (номер чата) - завершить текущий лот и перейти к следующему.",
         ]
     if user_id in (CREATOR_ID, LEADER_ID):
         lines += [
@@ -2475,10 +2547,22 @@ CLEAR_CONFIRM_TEXT = "Вы уверены? Будет очищено все кр
 
 def bus_menu_text(page=1):
     return ("Какой бизнес вы хотите добавить? (стр. {}/{})\n"
-            "(Слоты: АЗС 1 | ТК/СК/Такопарк 1 | остальные 2. Один бизнес макс. 2 шт., Такопарк занимает 2 слота!)").format(page, BUS_PAGES)
+            "(Слоты: АЗС 1 | ТК БУС/ТК БАТ/СК/Такопарк 1 | остальные 2. Один бизнес макс. 2 шт., Такопарк занимает 2 слота!)").format(page, BUS_PAGES)
 
 def design_colors_text(page=1):
-    return "Выберите цвет карточки (стр. {}/{}):".format(page, DESIGN_PAGES)
+    return "Выберите цвет карточки (стр. {}/{}):".format(page, design_pages_count())
+
+def text_colors_kb(cmd_select):
+    rows = []
+    line = []
+    for key, lab in TEXT_COLOR_ORDER:
+        line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": cmd_select, "key": key})}, "color": "secondary"})
+        if len(line) == 4:
+            rows.append(line); line = []
+    if line: rows.append(line)
+    rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"},
+                 {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}])
+    return {"inline": True, "buttons": rows}
 
 def card_edit_main_kb():
     P = lambda f: json.dumps({"cmd": "card_edit", "f": f, "field": f})
@@ -2491,7 +2575,9 @@ def card_edit_main_kb():
          {"action": {"type": "callback", "label": "Имя", "payload": P("name")}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Цвет карточки", "payload": json.dumps({"cmd": "card_design_colors", "p": 1})}, "color": "secondary"},
          {"action": {"type": "callback", "label": "Фото карточки", "payload": json.dumps({"cmd": "card_design_photo"})}, "color": "secondary"}],
-        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
+        [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_name_colors"})}, "color": "secondary"},
+         {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_field_colors"})}, "color": "secondary"},
+         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
 def card_bus_kb(page=1):
     page = max(1, min(page, BUS_PAGES))
@@ -2522,14 +2608,15 @@ def card_input_kb(back_cmd, back_page=None):
         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps(back_payload)}, "color": "primary"}]]}
 
 def design_colors_kb(page=1):
-    page = max(1, min(page, DESIGN_PAGES))
+    pages = design_pages_count()
+    page = max(1, min(page, pages))
     chunk = COLORS_ORDER[(page - 1) * DESIGN_PER_PAGE: page * DESIGN_PER_PAGE]
     rows = []
     for i in range(0, len(chunk), 2):
         rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "card_design_color", "key": key, "p": page})}, "color": "secondary"} for key, lab in chunk[i:i+2]])
     nav = []
     if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_design_colors", "p": page - 1})}, "color": "primary"})
-    if page < DESIGN_PAGES: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_design_colors", "p": page + 1})}, "color": "primary"})
+    if page < pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_design_colors", "p": page + 1})}, "color": "primary"})
     nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
     nav.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
     rows.append(nav)
@@ -2914,6 +3001,28 @@ def handle_event(event):
                     set_design(user_id, color=key)
                     set_state("design_color", {"p": p})
                     show("✅ Цвет применён!\n" + design_colors_text(p), design_colors_kb(p))
+                    snackbar("✅ Цвет применён")
+                elif cmd == "card_name_colors":
+                    set_state("edit_menu")
+                    show("Выберите цвет имени:", text_colors_kb("card_name_color")); snackbar("✅ Цвет имени")
+                elif cmd == "card_name_color":
+                    key = payload.get("key", "")
+                    if key not in TEXT_COLORS:
+                        snackbar("❌ Неизвестный цвет"); return
+                    set_design(user_id, name_color=key)
+                    set_state("edit_menu")
+                    show("✅ Цвет имени применён!\nВыберите цвет имени:", text_colors_kb("card_name_color))".replace("))", ")")) if False else text_colors_kb("card_name_color"))
+                    snackbar("✅ Цвет применён")
+                elif cmd == "card_field_colors":
+                    set_state("edit_menu")
+                    show("Выберите цвет полей (текст в бизнесы и т.д.):", text_colors_kb("card_field_color")); snackbar("✅ Цвет полей")
+                elif cmd == "card_field_color":
+                    key = payload.get("key", "")
+                    if key not in TEXT_COLORS:
+                        snackbar("❌ Неизвестный цвет"); return
+                    set_design(user_id, fields_color=key)
+                    set_state("edit_menu")
+                    show("✅ Цвет полей применён!\nВыберите цвет полей:", text_colors_kb("card_field_color"))
                     snackbar("✅ Цвет применён")
                 elif cmd == "card_design_photo":
                     set_state("design_photo_wait")
@@ -3388,7 +3497,7 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
+LEGENDARY_WHO = ["Пират🏴‍️", "Босс ", "Абсолют ", "Легенда ", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
@@ -3658,6 +3767,10 @@ def handle_message(peer, sender, text, msg_obj):
                 pref = "/отменить ласт ставку" if low.startswith("/отменить ласт ставку") else "/отменить последнюю ставку"
                 handle_cancel_last_bid(peer, sender, text[len(pref):].strip())
                 return
+            elif low.startswith("/некст лот") or low.startswith("/next lot"):
+                pref = "/некст лот" if low.startswith("/некст лот") else "/next lot"
+                handle_next_lot(peer, sender, text[len(pref):].strip())
+                return
             elif low == "/аукцион":
                 open_auction_menu(peer, sender)
                 return
@@ -3678,6 +3791,9 @@ def handle_message(peer, sender, text, msg_obj):
             elif is_auct and (low.startswith("/отменить ласт ставку") or low.startswith("/отменить последнюю ставку")):
                 pref = "/отменить ласт ставку" if low.startswith("/отменить ласт ставку") else "/отменить последнюю ставку"
                 handle_cancel_last_bid(peer, sender, text[len(pref):].strip()); return
+            elif is_auct and (low.startswith("/некст лот") or low.startswith("/next lot")):
+                pref = "/некст лот" if low.startswith("/некст лот") else "/next lot"
+                handle_next_lot(peer, sender, text[len(pref):].strip()); return
             elif is_auct and low == "/аукцион":
                 open_auction_menu(peer, sender); return
             elif low.startswith("/"):
