@@ -95,7 +95,7 @@ VALID_COMMANDS = [
 
 ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
 RU_MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
-NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", ""]
 
 _EM_BASE = ("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F"
             "\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F"
@@ -618,10 +618,7 @@ def delete_user_msg(peer, cmid):
     try:
         VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
     except Exception:
-        try:
-            VK.messages.delete(peer_id=peer, message_ids=[cmid], delete_for_all=1)
-        except Exception:
-            pass
+        pass
 
 def extract_photo_url(msg_obj):
     for att in (msg_obj.get("attachments") or []):
@@ -762,7 +759,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
 
     return False
 
-# ===== АУКЦИОНЫ =====
+# ===== АУКЦИОНЫ: ДАННЫЕ =====
 def get_auction_state(user_id, peer_id):
     with DB_LOCK:
         row = CONN.execute("SELECT step, context FROM auction_state WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
@@ -802,40 +799,32 @@ def min_step_m(m):
     if m < 1000: return 15
     return 30
 
-def parse_bid(text):
+def parse_money(text):
+    # 1..999 -> миллионы; 99.5 / 155.7 / 21,5 -> миллионы с дробью;
+    # полная сумма с точками или без (300.000.000 / 300000000) -> как есть; >=1 млрд только полной суммой.
     s = (text or "").strip().replace(" ", "").replace("\u00a0", "")
     if not s: return None
-    millions = None
     if "," in s:
         if re.match(r"^\d+,\d{1,2}$", s):
-            millions = float(s.replace(",", "."))
-        else:
-            return None
-    elif "." in s:
-        if re.match(r"^\d{1,3}(\.\d{3})+$", s):
-            n = int(s.replace(".", ""))
-            if n >= 1000000:
-                return float(n)
-            millions = float(n)
-        elif re.match(r"^\d+\.\d{1,2}$", s):
-            v = float(s)
-            if v < 20:
-                whole, frac = s.split(".")
-                millions = float(whole + frac.ljust(3, "0"))
-            else:
-                millions = v
-        else:
-            return None
-    else:
-        if re.match(r"^\d+$", s):
-            n = int(s)
-            if n >= 1000000:
-                return float(n)
-            millions = float(n)
-        else:
-            return None
-    if millions is None or millions <= 0: return None
-    return millions * 1000000.0
+            v = float(s.replace(",", "."))
+            if 1 <= v < 1000: return v * 1000000.0
+        return None
+    if re.match(r"^\d{1,3}(\.\d{3})+$", s):
+        return float(int(s.replace(".", "")))
+    if re.match(r"^\d+$", s):
+        n = int(s)
+        if n >= 1000000: return float(n)
+        if 1 <= n <= 999: return n * 1000000.0
+        return float(n)
+    if re.match(r"^\d+\.\d{1,2}$", s):
+        v = float(s)
+        if 1 <= v < 1000: return v * 1000000.0
+        if v >= 1000000: return v
+        return None
+    return None
+
+def parse_bid(text):
+    return parse_money(text)
 
 def create_auction(peer_id, name, datetime_str, created_by):
     with DB_LOCK:
@@ -1064,13 +1053,12 @@ def parse_lot_line(text):
         seller = ""
     else:
         return None
-    try:
-        min_price = float(price_s.replace(",", ".")) * 1e6
-    except Exception:
-        return None
-    if not name or min_price <= 0:
+    min_price = parse_money(price_s)
+    if not name or not min_price or min_price <= 0:
         return None
     return name, min_price, seller
+
+LOT_PRICE_HINT = "цена: 300 = 300.000.000р, 99.5 = 99.500.000р, или полная сумма (300.000.000 / 300000000); свыше 1 млрд — только полной суммой"
 
 def handle_stop_auction(peer, sender, raw):
     m = re.search(r"\b(2\d{9})\b", raw)
@@ -1198,7 +1186,7 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
             ctx["lots"][-1]["photo_att"] = photo_att or ""
             if len(ctx["lots"]) < ctx["count"]:
                 set_auction_state(sender, peer, "create_lot", ctx)
-                reply("Введите лот {}, его минимальную цену, ссылку на продавца через запятую:".format(len(ctx["lots"]) + 1))
+                reply("Введите лот {}, его минимальную цену, ссылку на продавца через запятую ({}):".format(len(ctx["lots"]) + 1, LOT_PRICE_HINT))
             else:
                 aid = create_auction(ctx["peer_id"], ctx["name"], ctx["dt"], sender)
                 for i, l in enumerate(ctx["lots"], 1):
@@ -1212,11 +1200,6 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
             set_auction_state(sender, peer, "edit_menu", {"auction_id": a["id"], "msg_cmid": prompt_cmid})
             reply("✅ Лот добавлен.\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
         elif mode == "editlot":
-            with DB_LOCK:
-                CONN.execute("UPDATE auction_lots SET name=?, min_price=?, seller=?{} WHERE id=?".format(
-                    ", photo_path=?, photo_att=?" if photo_path else ""),
-                    (ctx["edit_name"], ctx["edit_price"], ctx.get("edit_seller", ""),
-                     *((photo_path, photo_att) if photo_path else ()), ctx["lot_id"])) if False else None
             if photo_path:
                 with DB_LOCK:
                     CONN.execute("UPDATE auction_lots SET name=?, min_price=?, seller=?, photo_path=?, photo_att=? WHERE id=?",
@@ -1229,8 +1212,10 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
                     CONN.commit()
             a = get_auction(ctx["auction_id"])
             set_auction_state(sender, peer, "edit_menu", {"auction_id": ctx["auction_id"], "msg_cmid": prompt_cmid})
-            reply("✅ Лот отредактирован.\n\n" + (edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:" if a else "Выберите действие:"),
-                  edit_menu_kb(a["id"]) if a else auction_main_kb())
+            if a:
+                reply("✅ Лот отредактирован.\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
+            else:
+                reply("✅ Лот отредактирован.\n\nВыберите действие:", auction_main_kb())
 
     if text.lower() in ["отмена", "отменить"]:
         clear_auction_state(sender, peer)
@@ -1269,13 +1254,13 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         ctx["count"] = int(text.strip())
         ctx["lots"] = []
         set_auction_state(sender, peer, "create_lot", ctx)
-        reply("Введите лот 1, его минимальную цену, ссылку на продавца через запятую (пример: н/з х444хх44, 20, https://vk.com/id1):")
+        reply("Введите лот 1, его минимальную цену, ссылку на продавца через запятую ({}):".format(LOT_PRICE_HINT))
         return True
 
     if step == "create_lot":
         parsed = parse_lot_line(text)
         if not parsed:
-            reply("❌ Формат: название, цена в млн, ссылка на продавца (через запятую).")
+            reply("❌ Формат: название, цена, ссылка на продавца (через запятую). {}".format(LOT_PRICE_HINT))
             return True
         name, min_price, seller = parsed
         ctx["lots"].append({"name": name, "min_price": min_price, "seller": seller})
@@ -1367,7 +1352,7 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
     if step == "edit_lot_data":
         parsed = parse_lot_line(text)
         if not parsed:
-            reply("❌ Формат: название, цена в млн, ссылка на продавца (через запятую).")
+            reply("❌ Формат: название, цена, ссылка на продавца (через запятую). {}".format(LOT_PRICE_HINT))
             return True
         name, min_price, seller = parsed
         ctx["edit_name"] = name; ctx["edit_price"] = min_price; ctx["edit_seller"] = seller
@@ -1389,7 +1374,7 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
     if step == "add_lot_data":
         parsed = parse_lot_line(text)
         if not parsed:
-            reply("❌ Формат: название, цена в млн, ссылка на продавца (через запятую).")
+            reply("❌ Формат: название, цена, ссылка на продавца (через запятую). {}".format(LOT_PRICE_HINT))
             return True
         name, min_price, seller = parsed
         ctx["add_name"] = name; ctx["add_price"] = min_price; ctx["add_seller"] = seller
@@ -2355,7 +2340,10 @@ HELP_AUCTIONS_TEXT = (
     "3. /отменить ласт ставку <номер чата> — отменить верхнюю ставку активного лота.\n"
     "4. Аукционера назначает создатель/лидер: /аукционер @юз.\n"
     "5. В назначенное время бот сам выставляет лоты в чат по очереди.\n"
-    "6. Ставка = просто число в чате: 25 / 21,5 / 1.1 (=1100кк) / 10.000 (=10000кк) / 30.000.000 (=30кк).\n"
+    "6. Суммы (ставки и мин. цена лота): 1–999 = миллионы (300 → 300.000.000р); "
+    "дробные 99.5 / 155.7 / 21,5 = миллионы с дробью; полная сумма с точками или без "
+    "(300.000.000 / 300000000) = как есть; всё что выше миллиарда — только полной суммой "
+    "(1.100.000.000 / 1100000000).\n"
     "7. Бот всегда пишет полную сумму: 20.000.000р.\n"
     "8. Шаг перебива: 20–50кк +1кк, 50–100кк +3кк, 100–200кк +5кк, 200–400кк +7кк, 400кк–1млрд +15кк, от 1млрд +30кк.\n"
     "9. Повторная ставка того же человека не принимается, пока его не перебили.\n"
@@ -2555,14 +2543,13 @@ def handle_event(event):
                 ctx = state.get("context", {})
                 if time.time() - ctx.get("ts", 0) > 300:
                     clear_auction_state(user_id, peer_id); snackbar("⏳ Время вышло"); return
-                prompt_cmid = ctx.get("msg_cmid") or cmid
                 mode = ctx.get("photo_mode", "create")
                 if mode == "create":
                     ctx["lots"][-1]["photo_path"] = ""; ctx["lots"][-1]["photo_att"] = ""
                     if len(ctx["lots"]) < ctx["count"]:
                         ctx["msg_cmid"] = cmid
                         set_auction_state(user_id, peer_id, "create_lot", ctx)
-                        show("Введите лот {}, его минимальную цену, ссылку на продавца через запятую:".format(len(ctx["lots"]) + 1), None)
+                        show("Введите лот {}, его минимальную цену, ссылку на продавца через запятую ({}):".format(len(ctx["lots"]) + 1, LOT_PRICE_HINT), None)
                     else:
                         aid = create_auction(ctx["peer_id"], ctx["name"], ctx["dt"], user_id)
                         for i, l in enumerate(ctx["lots"], 1):
@@ -2583,8 +2570,10 @@ def handle_event(event):
                         CONN.commit()
                     a = get_auction(ctx["auction_id"])
                     set_auction_state(user_id, peer_id, "edit_menu", {"auction_id": ctx["auction_id"], "msg_cmid": cmid})
-                    show("✅ Лот отредактирован (фото осталось старое).\n\n" + (edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:" if a else "Выберите действие:"),
-                         edit_menu_kb(a["id"]) if a else auction_main_kb())
+                    if a:
+                        show("✅ Лот отредактирован (фото осталось старое).\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
+                    else:
+                        show("✅ Лот отредактирован.\n\nВыберите действие:", auction_main_kb())
                 snackbar("✅ Пропущено")
                 return
             if not state:
@@ -2655,14 +2644,7 @@ def handle_event(event):
                         snackbar("❌ Фото лота нет"); return
                     send_msg(peer_id, "📷 Фото лота «{}»:".format(lot["name"]), attachments=att)
                     snackbar("📷 Фото отправлено")
-                elif cmd == "auction_del_sel":
-                    a = get_auction(payload.get("id", 0))
-                    if not a: snackbar("❌ Аукцион не найден"); return
-                    delete_auction(a["id"])
-                    aset("menu")
-                    show("✅ Аукцион «{}» удалён.\n\nВыберите действие:".format(a["name"]), auction_main_kb())
-                    snackbar("✅ Удалён")
-                elif cmd == "auction_del_auction":
+                elif cmd in ("auction_del_sel", "auction_del_auction"):
                     a = get_auction(payload.get("id", 0))
                     if not a: snackbar("❌ Аукцион не найден"); return
                     delete_auction(a["id"])
@@ -2684,9 +2666,6 @@ def handle_event(event):
                 elif cmd == "auction_edit_lot":
                     aset("edit_lot_num", {"auction_id": payload.get("id", 0)})
                     show("Введите номер лота (число):", None); snackbar("✅ Введите номер")
-                elif cmd == "auction_edit_lot_menu_back":
-                    aset("edit_lot_num", {"auction_id": payload.get("id", 0)})
-                    show("Введите номер лота (число):", None); snackbar("✅ Введите номер")
                 elif cmd == "auction_lot_del":
                     lot = get_lot(payload.get("id", 0))
                     if not lot: snackbar("❌ Лот не найден"); return
@@ -2703,11 +2682,11 @@ def handle_event(event):
                     lot = get_lot(payload.get("id", 0))
                     if not lot: snackbar("❌ Лот не найден"); return
                     aset("edit_lot_data", {"auction_id": lot["auction_id"], "lot_id": lot["id"]})
-                    show("Введите новые данные лота (название, мин. цена, ссылка на продавца через запятую):", None)
+                    show("Введите новые данные лота (название, мин. цена, ссылка на продавца через запятую; {}):".format(LOT_PRICE_HINT), None)
                     snackbar("✅ Введите данные")
                 elif cmd == "auction_add_lot":
                     aset("add_lot_data", {"auction_id": payload.get("id", 0), "photo_mode": "add"})
-                    show("Введите новый лот: название, мин. цена, ссылка на продавца через запятую:", None)
+                    show("Введите новый лот: название, мин. цена, ссылка на продавца через запятую ({}):".format(LOT_PRICE_HINT), None)
                     snackbar("✅ Введите лот")
                 elif cmd == "auction_ann_sel":
                     a = get_auction(payload.get("id", 0))
@@ -3593,27 +3572,20 @@ def handle_message(peer, sender, text, msg_obj):
                 return
         elif is_insp or is_auct:
             if is_insp and low.startswith("/clearcard"):
-                handle_clearcard(peer, sender, text[len("/clearcard"):].strip())
-                delete_user_msg(peer, user_cmid); return
+                handle_clearcard(peer, sender, text[len("/clearcard"):].strip()); return
             elif is_insp and low.startswith("/card"):
-                handle_card_ls(peer, sender, text[len("/card"):].strip())
-                delete_user_msg(peer, user_cmid); return
+                handle_card_ls(peer, sender, text[len("/card"):].strip()); return
             elif is_insp and low.startswith("/verify"):
-                handle_verify(peer, sender, text[len("/verify"):].strip(), True)
-                delete_user_msg(peer, user_cmid); return
+                handle_verify(peer, sender, text[len("/verify"):].strip(), True); return
             elif is_insp and low.startswith("/deny"):
-                handle_verify(peer, sender, text[len("/deny"):].strip(), False)
-                delete_user_msg(peer, user_cmid); return
+                handle_verify(peer, sender, text[len("/deny"):].strip(), False); return
             elif is_auct and low.startswith("/стопаукцион"):
-                handle_stop_auction(peer, sender, text[len("/стопаукцион"):].strip())
-                delete_user_msg(peer, user_cmid); return
+                handle_stop_auction(peer, sender, text[len("/стопаукцион"):].strip()); return
             elif is_auct and (low.startswith("/отменить ласт ставку") or low.startswith("/отменить последнюю ставку")):
                 pref = "/отменить ласт ставку" if low.startswith("/отменить ласт ставку") else "/отменить последнюю ставку"
-                handle_cancel_last_bid(peer, sender, text[len(pref):].strip())
-                delete_user_msg(peer, user_cmid); return
+                handle_cancel_last_bid(peer, sender, text[len(pref):].strip()); return
             elif is_auct and low == "/аукцион":
-                open_auction_menu(peer, sender)
-                delete_user_msg(peer, user_cmid); return
+                open_auction_menu(peer, sender); return
             elif low.startswith("/"):
                 send_msg(peer, "❌ Неизвестная команда: {}\n\n".format(text.strip().split("\n")[0]) + ls_help_text(sender))
                 return
@@ -3637,10 +3609,8 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, "❌ Неизвестная команда: {}\n\n".format(text.strip().split("\n")[0]) + ls_help_text(sender))
             return
         if handle_card_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
-            delete_user_msg(peer, user_cmid)
             return
         if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
-            delete_user_msg(peer, user_cmid)
             return
         return
 
@@ -3676,7 +3646,6 @@ def handle_message(peer, sender, text, msg_obj):
         if check_clear_pending(peer, sender, text):
             return
         if handle_card_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
-            delete_user_msg(peer, user_cmid)
             return
 
     if sender > 0:
@@ -4876,7 +4845,7 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
-            # Таймаут редактора аукционов (5 мин, тихое удаление)
+            # Таймаут редактора аукционов (5 мин, тихое удаление меню)
             with DB_LOCK:
                 astale = CONN.execute("SELECT user_id, peer_id, context FROM auction_state").fetchall()
             for row in astale:
