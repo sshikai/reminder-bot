@@ -161,6 +161,10 @@ TEXT_COLORS = {
     "white": (255, 255, 255),
     "black": (0, 0, 0),
 }
+TEXT_PER_PAGE = 6
+
+def text_color_pages():
+    return max(1, -(-len(TEXT_COLOR_ORDER) // TEXT_PER_PAGE))
 
 FRAME_BOX = (0.070, 0.190, 0.280, 0.605)
 FRAME_BOXES_FILE = os.path.join(DATA_DIR, "frame_boxes.json")
@@ -984,7 +988,7 @@ def auction_step_kb(back_to, with_skip=False):
 
 def auction_list_kb(auctions, cmd):
     rows = []
-    for i, a in enumerate(auctions):
+    for i, a in enumerate(auctions[:8]):
         lab = NUM_EMOJI[i] if i < len(NUM_EMOJI) else str(i + 1)
         rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": cmd, "id": a["id"]})}, "color": "secondary"}])
     rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "auction_menu_show"})}, "color": "primary"},
@@ -994,10 +998,10 @@ def auction_list_kb(auctions, cmd):
 def auction_lots_kb(lots, back_cmd, back_id=None):
     rows = []
     line = []
-    for i, l in enumerate(lots):
+    for i, l in enumerate(lots[:8]):
         lab = NUM_EMOJI[i] if i < len(NUM_EMOJI) else str(i + 1)
         line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "auction_lotphoto", "id": l["id"]})}, "color": "secondary"})
-        if len(line) == 5:
+        if len(line) == 4:
             rows.append(line); line = []
     if line: rows.append(line)
     pay = {"cmd": back_cmd}
@@ -1077,7 +1081,7 @@ def auction_prompt(step, ctx):
 
 def send_lot_message(peer, auction, lot):
     seller = lot.get("seller") or silent_mention_badge(auction["created_by"], peer)
-    txt = ("@all \n🏆 ЛОТ НА АУКЦИОН 🏆\n Black Russia • BLUE 🟦\n\n"
+    txt = ("@all \n🏆 ЛОТ НА АУКЦИОН 🏆\n🟦 Black Russia • BLUE 🟦\n\n"
            "━━━━━━━━━━━━━━━━━━━━\n\n"
            "📦 Наименование лота:\n{}\n\n"
            "💰 Стартовая цена:\n➡️ 20.000.000 рублей\n\n"
@@ -1276,10 +1280,10 @@ AUCTIONEER_WELCOME = ("Вас назначили аукционером📈\n"
                       "/аукцион - редактор аукционов.\n"
                       "/стопаукцион (номер чата) - принудительно отключает идущий аукцион в чате.\n"
                       "/отменить ласт ставку (номер чата) - отменить верхнюю ставку активного лота.\n"
-                      "/некст лот (номер чата) - принудительно завершить текущий лот и перейти к следующему.")
+                      "/некст лот (номер чата) - завершить текущий лот и перейти к следующему.")
 
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
-                     "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
+                     "Теперь вы можете использовать скрытые команды (только в личке со мной❗ и в чатах❗).\n"
                      "/verify @ - подтвердить карту.\n"
                      "/deny @ - отменить подтверждение.\n"
                      "/card @ - посмотреть карту любого.\n"
@@ -1436,6 +1440,8 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         lines = ["Выберите аукцион для удаления:"]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {} ({})".format(i, a["name"], a["datetime_str"]))
+        if len(auctions) > 8:
+            lines.append("(кнопками показаны первые 8, всего: {})".format(len(auctions)))
         reply("\n".join(lines), auction_list_kb(auctions, "auction_del_sel"))
         return True
 
@@ -1450,6 +1456,8 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         lines = ["Выберите аукцион для редактирования:"]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {} ({})".format(i, a["name"], a["datetime_str"]))
+        if len(auctions) > 8:
+            lines.append("(кнопками показаны первые 8, всего: {})".format(len(auctions)))
         reply("\n".join(lines), auction_list_kb(auctions, "auction_edit_show"))
         return True
 
@@ -1551,6 +1559,8 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         lines = ["Выберите аукцион для анонса:"]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {} ({})".format(i, a["name"], a["datetime_str"]))
+        if len(auctions) > 8:
+            lines.append("(кнопками показаны первые 8, всего: {})".format(len(auctions)))
         reply("\n".join(lines), auction_list_kb(auctions, "auction_ann_sel"))
         return True
 
@@ -1565,6 +1575,8 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         lines = ["Аукционы чата {}:".format(pid)]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {}".format(i, a["name"]))
+        if len(auctions) > 8:
+            lines.append("(кнопками показаны первые 8, всего: {})".format(len(auctions)))
         reply("\n".join(lines), auction_list_kb(auctions, "auction_view"))
         return True
 
@@ -2284,7 +2296,7 @@ def ls_help_text(user_id):
     if is_inspector(user_id) or user_id in (CREATOR_ID, LEADER_ID):
         lines += [
             "",
-            "🕵 Скрытые команды проверяющего:",
+            "🕵 Скрытые команды проверяющего (работают и в чатах):",
             "/verify @ - подтвердить карту.",
             "/deny @ - отменить подтверждение.",
             "/card @ - посмотреть карту любого.",
@@ -2451,7 +2463,7 @@ HELP_ADMIN_TEXT = (
     "5. Мд назначить @игрок <ранг> — ранг 1.\n"
     "6. Мд снять @игрок — снять роль.\n"
     "7. Мд чистка @игрок <число> — удалить сообщения (макс 50, КД 30 сек).\n"
-    "8. Мд карта @игрок — посмотреть чужую карту.\n"
+    "8. Мд карта — своя карта (чужие смотрят только проверяющие через /card).\n"
     "Имеет возможности прошлых ролей."
 )
 HELP_REMIND_TEXT = (
@@ -2552,16 +2564,22 @@ def bus_menu_text(page=1):
 def design_colors_text(page=1):
     return "Выберите цвет карточки (стр. {}/{}):".format(page, design_pages_count())
 
-def text_colors_kb(cmd_select):
+def text_colors_kb(sel_cmd, menu_cmd, page=1):
+    pages = text_color_pages()
+    page = max(1, min(page, pages))
+    chunk = TEXT_COLOR_ORDER[(page - 1) * TEXT_PER_PAGE: page * TEXT_PER_PAGE]
     rows = []
     line = []
-    for key, lab in TEXT_COLOR_ORDER:
-        line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": cmd_select, "key": key})}, "color": "secondary"})
-        if len(line) == 4:
+    for key, lab in chunk:
+        line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": sel_cmd, "key": key, "p": page})}, "color": "secondary"})
+        if len(line) == 3:
             rows.append(line); line = []
     if line: rows.append(line)
-    rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"},
-                 {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}])
+    nav = []
+    if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": menu_cmd, "p": page - 1})}, "color": "primary"})
+    if page < pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": menu_cmd, "p": page + 1})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
+    rows.append(nav)
     return {"inline": True, "buttons": rows}
 
 def card_edit_main_kb():
@@ -2575,9 +2593,12 @@ def card_edit_main_kb():
          {"action": {"type": "callback", "label": "Имя", "payload": P("name")}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Цвет карточки", "payload": json.dumps({"cmd": "card_design_colors", "p": 1})}, "color": "secondary"},
          {"action": {"type": "callback", "label": "Фото карточки", "payload": json.dumps({"cmd": "card_design_photo"})}, "color": "secondary"}],
-        [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_name_colors"})}, "color": "secondary"},
-         {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_field_colors"})}, "color": "secondary"},
-         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
+        [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_name_colors", "p": 1})}, "color": "secondary"},
+         {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_field_colors", "p": 1})}, "color": "secondary"}]]}
+
+def card_edit_fallback_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
 def card_bus_kb(page=1):
     page = max(1, min(page, BUS_PAGES))
@@ -2635,6 +2656,23 @@ def expire_stale_games(peer):
         CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='playing' AND created_at<=?", (peer, now - 600))
         CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
         CONN.commit()
+
+def open_edit_menu(peer, sender):
+    msg_id = None
+    try:
+        msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, keyboard=json.dumps(card_edit_main_kb()), random_id=random.getrandbits(31))
+    except Exception as e:
+        print("open_edit_menu kb send fail:", e)
+    if msg_id is None:
+        try:
+            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, keyboard=json.dumps(card_edit_fallback_kb()), random_id=random.getrandbits(31))
+        except Exception as e:
+            print("open_edit_menu fallback send fail:", e)
+    if msg_id is None:
+        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
+        return
+    cmid = resolve_cmid_retry(peer, msg_id)
+    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id})
 
 def handle_event(event):
     try:
@@ -2802,6 +2840,8 @@ def handle_event(event):
                     lines = ["{} | {}".format(a["datetime_str"].replace(" ", " | "), a["name"]), "Лоты:"]
                     for i, l in enumerate(lots, 1):
                         lines.append("{}. {} (мин. {}, продавец: {})".format(i, l["name"], fmt_rub(l["min_price"]), l.get("seller") or "не указан"))
+                    if len(lots) > 8:
+                        lines.append("(фото кнопками — первые 8 лотов)")
                     show("\n".join(lines), auction_lots_kb(lots, "auction_menu_show"))
                     snackbar("✅ Аукцион")
                 elif cmd == "auction_lotphoto":
@@ -3003,27 +3043,31 @@ def handle_event(event):
                     show("✅ Цвет применён!\n" + design_colors_text(p), design_colors_kb(p))
                     snackbar("✅ Цвет применён")
                 elif cmd == "card_name_colors":
+                    p = int(payload.get("p", 1) or 1)
                     set_state("edit_menu")
-                    show("Выберите цвет имени:", text_colors_kb("card_name_color")); snackbar("✅ Цвет имени")
+                    show("Выберите цвет имени (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", p))
+                    snackbar("✅ Цвет имени")
                 elif cmd == "card_name_color":
-                    key = payload.get("key", "")
+                    key = payload.get("key", ""); p = int(payload.get("p", 1) or 1)
                     if key not in TEXT_COLORS:
                         snackbar("❌ Неизвестный цвет"); return
                     set_design(user_id, name_color=key)
                     set_state("edit_menu")
-                    show("✅ Цвет имени применён!\nВыберите цвет имени:", text_colors_kb("card_name_color))".replace("))", ")")) if False else text_colors_kb("card_name_color"))
-                    snackbar("✅ Цвет применён")
+                    show("✅ Цвет имени применён!\nВыберите цвет имени (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", p))
+                    snackbar("✅ Применено")
                 elif cmd == "card_field_colors":
+                    p = int(payload.get("p", 1) or 1)
                     set_state("edit_menu")
-                    show("Выберите цвет полей (текст в бизнесы и т.д.):", text_colors_kb("card_field_color")); snackbar("✅ Цвет полей")
+                    show("Выберите цвет полей (текст в бизнесы и т.д.) (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", p))
+                    snackbar("✅ Цвет полей")
                 elif cmd == "card_field_color":
-                    key = payload.get("key", "")
+                    key = payload.get("key", ""); p = int(payload.get("p", 1) or 1)
                     if key not in TEXT_COLORS:
                         snackbar("❌ Неизвестный цвет"); return
                     set_design(user_id, fields_color=key)
                     set_state("edit_menu")
-                    show("✅ Цвет полей применён!\nВыберите цвет полей:", text_colors_kb("card_field_color"))
-                    snackbar("✅ Цвет применён")
+                    show("✅ Цвет полей применён!\nВыберите цвет полей (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", p))
+                    snackbar("✅ Применено")
                 elif cmd == "card_design_photo":
                     set_state("design_photo_wait")
                     show(DESIGN_PHOTO_TEXT, design_photo_kb()); snackbar("✅ Жду фото")
@@ -3497,24 +3541,14 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍️", "Босс ", "Абсолют ", "Легенда ", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
-LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
+LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
+LEGEND_SETKTO = {"пират": "Пират🏴‍️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
 
-def open_edit_menu(peer, sender):
-    try:
-        msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, keyboard=json.dumps(card_edit_main_kb()), random_id=random.getrandbits(31))
-        cmid = resolve_cmid_retry(peer, msg_id)
-    except Exception:
-        msg_id = None; cmid = None
-    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id})
-
 def handle_ls_card(peer, sender, cmd, args):
     if cmd == "карта":
-        targets = extract_targets(" ".join(args), 0)
-        target_id = targets[0] if (targets and sender in (CREATOR_ID, LEADER_ID)) else sender
-        send_card_to(peer, target_id)
+        send_card_to(peer, sender)
     elif cmd == "карта_редактировать":
         open_edit_menu(peer, sender)
 
@@ -3823,6 +3857,13 @@ def handle_message(peer, sender, text, msg_obj):
         if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
             return
         return
+
+    # ===== ЧАТ: /card для проверяющих =====
+    if sender > 0 and peer >= 2000000000:
+        low0 = text.strip().lower()
+        if low0.startswith("/card") and (is_inspector(sender) or sender in (CREATOR_ID, LEADER_ID)):
+            handle_card_ls(peer, sender, text.strip()[len("/card"):].strip())
+            return
 
     # ===== ЧАТ: аукцион, ставки, контроль =====
     if sender > 0 and peer >= 2000000000:
@@ -5017,12 +5058,7 @@ def handle_message(peer, sender, text, msg_obj):
         send_msg(peer, "\n".join(lines))
 
     elif cmd == "карта":
-        targets = extract_targets(" ".join(args), reply_from)
-        target_id = targets[0] if targets else sender
-        if target_id != sender and not admin:
-            send_msg(peer, "⛔ Только админы могут смотреть чужие карты.")
-            return
-        send_card_to(peer, target_id)
+        send_card_to(peer, sender)
 
     elif cmd == "карта_редактировать":
         if args:
