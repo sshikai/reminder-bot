@@ -613,12 +613,19 @@ def close_card_session(peer, ctx, txt):
     send_msg(peer, txt)
     return False
 
-def delete_user_msg(peer, cmid):
-    if not cmid: return
-    try:
-        VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
-    except Exception:
-        pass
+def delete_user_msg(peer, cmid, mid=None):
+    if cmid:
+        try:
+            VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
+            return
+        except Exception as e:
+            print("delete_user_msg conv fail peer={} cmid={} err={}".format(peer, cmid, e))
+    if mid:
+        try:
+            VK.messages.delete(peer_id=peer, message_ids=[mid], delete_for_all=1)
+            return
+        except Exception as e:
+            print("delete_user_msg mid fail peer={} mid={} err={}".format(peer, mid, e))
 
 def extract_photo_url(msg_obj):
     for att in (msg_obj.get("attachments") or []):
@@ -800,8 +807,6 @@ def min_step_m(m):
     return 30
 
 def parse_money(text):
-    # 1..999 -> миллионы; 99.5 / 155.7 / 21,5 -> миллионы с дробью;
-    # полная сумма с точками или без (300.000.000 / 300000000) -> как есть; >=1 млрд только полной суммой.
     s = (text or "").strip().replace(" ", "").replace("\u00a0", "")
     if not s: return None
     if "," in s:
@@ -998,11 +1003,12 @@ def start_lot(auction, idx):
         finish_auction_summary(auction["peer_id"], auction)
         return
     lot = lots[idx]
+    now_ts = int(time.time())
     with DB_LOCK:
         CONN.execute("UPDATE auctions SET current_lot_index=?, current_lot_id=?, lot_deadline=? WHERE id=?",
-                     (idx, lot["id"], int(time.time()) + 300, auction["id"]))
+                     (idx, lot["id"], now_ts + 300, auction["id"]))
         CONN.commit()
-    set_setting(0, "auc_rem_{}".format(lot["id"]), "0")
+    set_setting(0, "auc_rem_{}".format(lot["id"]), str(now_ts))
     send_lot_message(auction["peer_id"], auction, lot)
 
 def finish_lot(auction, lot):
@@ -1027,10 +1033,14 @@ def finish_auction_summary(peer, auction):
     sold = [l for l in lots if l.get("sold")]
     lines = ["😉Спасибо всем за участие в аукционе!"]
     if sold:
-        lines.append("\nПроданные лоты сегодня:")
+        lines.append("")
+        lines.append("Проданные лоты сегодня:")
         for i, l in enumerate(sold, 1):
-            lines.append("{}) {} - {}".format(i, l["name"], silent_mention_badge(l["winner_id"], peer)))
-    lines.append("\nℹ️Если желаете поставить свой лот на следующий аукцион напишите в личные сообщения аукционеру.")
+            seller = l.get("seller") or silent_mention_badge(auction["created_by"], peer)
+            lines.append("{}) | Лот: {} | Продавец: {} | Покупатель: {} | {} |".format(
+                i, l["name"], seller, silent_mention_badge(l["winner_id"], peer), fmt_rub(l["final_price"] or 0)))
+    lines.append("")
+    lines.append("ℹ️Если желаете поставить свой лот на следующий аукцион напишите в личные сообщения аукционеру.")
     send_msg(peer, "\n".join(lines))
     with DB_LOCK:
         CONN.execute("UPDATE auctions SET state='finished', current_lot_id=0, lot_deadline=0 WHERE id=?", (auction["id"],))
@@ -2241,8 +2251,7 @@ def get_help_systems_buttons():
     return {"inline": True, "buttons": [
         [{"action": {"type": "callback", "label": "Напоминалка", "payload": json.dumps({"cmd": "help_remind"})}, "color": "primary"},
          {"action": {"type": "callback", "label": "Опросы", "payload": json.dumps({"cmd": "help_polls"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Аукционы", "payload": json.dumps({"cmd": "help_auctions"})}, "color": "positive"},
-         {"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back"})}, "color": "secondary"}]]}
+        [{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back"})}, "color": "secondary"}]]}
 
 def get_help_manage_buttons():
     return {"inline": True, "buttons": [
@@ -2332,23 +2341,6 @@ HELP_POLLS_TEXT = (
     "1. Мд старт/стоп контроль\n"
     "2. Мд время опросов <ЧЧ:ММ> <ЧЧ:ММ>\n"
     "3. Мд проверка опроса <ЧЧ:ММ>"
-)
-HELP_AUCTIONS_TEXT = (
-    "📈 Аукционы:\n"
-    "1. /аукцион — редактор аукционов (ЛС, роль аукционера).\n"
-    "2. /стопаукцион <номер чата> — принудительно остановить аукцион.\n"
-    "3. /отменить ласт ставку <номер чата> — отменить верхнюю ставку активного лота.\n"
-    "4. Аукционера назначает создатель/лидер: /аукционер @юз.\n"
-    "5. В назначенное время бот сам выставляет лоты в чат по очереди.\n"
-    "6. Суммы (ставки и мин. цена лота): 1–999 = миллионы (300 → 300.000.000р); "
-    "дробные 99.5 / 155.7 / 21,5 = миллионы с дробью; полная сумма с точками или без "
-    "(300.000.000 / 300000000) = как есть; всё что выше миллиарда — только полной суммой "
-    "(1.100.000.000 / 1100000000).\n"
-    "7. Бот всегда пишет полную сумму: 20.000.000р.\n"
-    "8. Шаг перебива: 20–50кк +1кк, 50–100кк +3кк, 100–200кк +5кк, 200–400кк +7кк, 400кк–1млрд +15кк, от 1млрд +30кк.\n"
-    "9. Повторная ставка того же человека не принимается, пока его не перебили.\n"
-    "10. Каждую минуту бот напоминает сколько осталось до конца торгов и последнюю ставку.\n"
-    "11. Кнопка «Контроль» в /аукцион — удалять все сообщения кроме ставок во время торгов."
 )
 HELP_BR_TEXT = (
     "🎮 BLACK RUSSIA:\n\n"
@@ -3239,15 +3231,14 @@ def handle_event(event):
             edit_msg("\n".join(lines), {"inline": True, "buttons": [cats1, cats2, cats3, nav]})
             snackbar("📄 Стр. {}".format(page)); return
 
-        if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls", "help_auctions",
+        if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls",
                    "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_games", "help_md", "help_back", "help_back_main"]:
             checks = {"help_systems": is_admin, "help_manage": is_moderator, "help_moderator": is_moderator,
                       "help_admin": is_admin, "help_main_admin": is_main_admin, "help_owner": is_owner,
-                      "help_remind": is_admin, "help_polls": is_admin, "help_md": is_md_member,
-                      "help_auctions": (lambda u: is_auctioneer(u) or u in (CREATOR_ID, LEADER_ID))}
+                      "help_remind": is_admin, "help_polls": is_admin, "help_md": is_md_member}
             if cmd in checks:
                 fn = checks[cmd]
-                ok = fn(user_id) if cmd in ("help_md", "help_auctions") else fn(user_id, peer_id)
+                ok = fn(user_id) if cmd == "help_md" else fn(user_id, peer_id)
                 if not ok: snackbar("У вас нет прав⛔️"); return
             if cmd in ["help_back", "help_back_main"]:
                 message_text = "📖 Команды MD BOT"; kb_dict = get_help_main_buttons()
@@ -3256,7 +3247,6 @@ def handle_event(event):
             elif cmd == "help_manage": message_text = "🎛 Управление:\nВыберите роль:"; kb_dict = get_help_manage_buttons()
             elif cmd == "help_remind": message_text = HELP_REMIND_TEXT; kb_dict = get_help_back_to_systems()
             elif cmd == "help_polls": message_text = HELP_POLLS_TEXT; kb_dict = get_help_back_to_systems()
-            elif cmd == "help_auctions": message_text = HELP_AUCTIONS_TEXT; kb_dict = get_help_back_to_systems()
             elif cmd == "help_admin": message_text = HELP_ADMIN_TEXT; kb_dict = get_help_back_to_manage()
             elif cmd == "help_moderator": message_text = HELP_MODERATOR_TEXT; kb_dict = get_help_back_to_manage()
             elif cmd == "help_main_admin": message_text = HELP_MAIN_ADMIN_TEXT; kb_dict = get_help_back_to_manage()
@@ -3478,6 +3468,7 @@ def handle_message(peer, sender, text, msg_obj):
     first_line = text.split("\n")[0].strip()
     first = norm(first_line)
     user_cmid = msg_obj.get("conversation_message_id")
+    user_mid = msg_obj.get("id")
 
     if peer < 2000000000:
         low = text.strip().lower()
@@ -3617,8 +3608,9 @@ def handle_message(peer, sender, text, msg_obj):
     # ===== ЧАТ: аукцион, ставки, контроль =====
     if sender > 0 and peer >= 2000000000:
         ra = get_running_auction(peer)
-        if ra and ra["current_lot_id"] and ra["lot_deadline"] > int(time.time()):
-            amount = parse_bid(text)
+        if ra:
+            active_window = bool(ra["current_lot_id"]) and ra["lot_deadline"] > int(time.time())
+            amount = parse_bid(text) if active_window else None
             if amount is not None:
                 lot = get_lot(ra["current_lot_id"])
                 if lot:
@@ -3632,14 +3624,16 @@ def handle_message(peer, sender, text, msg_obj):
                         send_msg(peer, "{}, ошибка, минимальный перебив {}!".format(silent_mention_badge(sender, peer), fmt_rub(step)))
                         return
                     add_bid(lot["id"], sender, amount)
+                    now_ts = int(time.time())
                     with DB_LOCK:
-                        CONN.execute("UPDATE auctions SET lot_deadline=? WHERE id=?", (int(time.time()) + 300, ra["id"]))
+                        CONN.execute("UPDATE auctions SET lot_deadline=? WHERE id=?", (now_ts + 300, ra["id"]))
                         CONN.commit()
+                    set_setting(0, "auc_rem_{}".format(lot["id"]), str(now_ts))
                     send_msg(peer, "{}, ставка {} установлена! У остальных есть 5 минут чтобы ее перебить.".format(
                         silent_mention_badge(sender, peer), fmt_rub(amount)))
                     return
-            if get_setting(0, "auc_clean_{}".format(peer), "0") == "1" and not is_moderator(sender, peer) and not is_auctioneer(sender):
-                delete_user_msg(peer, user_cmid)
+            if get_setting(0, "auc_clean_{}".format(peer), "0") == "1" and sender not in (CREATOR_ID, LEADER_ID) and not is_auctioneer(sender):
+                delete_user_msg(peer, user_cmid, user_mid)
                 return
 
     if not first.startswith("мд "):
@@ -4893,7 +4887,7 @@ def timer_loop():
                 if remain <= 0:
                     finish_lot(a, lot)
                     continue
-                last_rem = int(get_setting(0, "auc_rem_{}".format(lot["id"]), "0") or "0")
+                last_rem = int(get_setting(0, "auc_rem_{}".format(lot["id"]), "0") or 0)
                 if now - last_rem >= 60:
                     set_setting(0, "auc_rem_{}".format(lot["id"]), str(now))
                     bid_id, buid, bamt = get_best_bid(lot["id"])
