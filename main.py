@@ -95,7 +95,7 @@ VALID_COMMANDS = [
 
 ROLE_NAMES = {0: "Участник", 1: "👮‍️ Модератор", 2: "🛡 Админ", 3: "🥷 Главный Админ", 4: "👑 Владелец"}
 RU_MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
-NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", ""]
+NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
 _EM_BASE = ("[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F"
             "\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F"
@@ -613,6 +613,16 @@ def close_card_session(peer, ctx, txt):
     send_msg(peer, txt)
     return False
 
+def delete_user_msg(peer, cmid):
+    if not cmid: return
+    try:
+        VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
+    except Exception:
+        try:
+            VK.messages.delete(peer_id=peer, message_ids=[cmid], delete_for_all=1)
+        except Exception:
+            pass
+
 def extract_photo_url(msg_obj):
     for att in (msg_obj.get("attachments") or []):
         if att.get("type") == "photo":
@@ -752,7 +762,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
 
     return False
 
-# ===== АУКЦИОНЫ: ДАННЫЕ =====
+# ===== АУКЦИОНЫ =====
 def get_auction_state(user_id, peer_id):
     with DB_LOCK:
         row = CONN.execute("SELECT step, context FROM auction_state WHERE user_id=? AND peer_id=?", (user_id, peer_id)).fetchone()
@@ -780,11 +790,9 @@ def parse_auction_dt(s):
     except Exception:
         return None
 
-def fmt_kk(amount_rub):
-    m = amount_rub / 1000000.0
-    if abs(m - round(m)) < 1e-9:
-        return "{}кк".format(int(round(m)))
-    return "{}кк".format(round(m, 2))
+def fmt_rub(amount):
+    n = int(round(amount))
+    return "{:,}р".format(n).replace(",", ".")
 
 def min_step_m(m):
     if m < 50: return 1
@@ -794,26 +802,40 @@ def min_step_m(m):
     if m < 1000: return 15
     return 30
 
-def _digits_to_rub(n):
-    if n >= 1000000: return float(n)
-    if n >= 1000: return float(n) * 1000.0
-    return float(n) * 1000000.0
-
 def parse_bid(text):
-    s = (text or "").strip().replace(" ", "")
+    s = (text or "").strip().replace(" ", "").replace("\u00a0", "")
     if not s: return None
+    millions = None
     if "," in s:
-        if re.match(r"^\d+,\d+$", s): return float(s.replace(",", ".")) * 1e6
-        return None
-    if "." in s:
+        if re.match(r"^\d+,\d{1,2}$", s):
+            millions = float(s.replace(",", "."))
+        else:
+            return None
+    elif "." in s:
         if re.match(r"^\d{1,3}(\.\d{3})+$", s):
-            return _digits_to_rub(int(s.replace(".", "")))
-        if re.match(r"^\d+\.\d+$", s):
-            return float(s) * 1e6
-        return None
-    if re.match(r"^\d+$", s):
-        return _digits_to_rub(int(s))
-    return None
+            n = int(s.replace(".", ""))
+            if n >= 1000000:
+                return float(n)
+            millions = float(n)
+        elif re.match(r"^\d+\.\d{1,2}$", s):
+            v = float(s)
+            if v < 20:
+                whole, frac = s.split(".")
+                millions = float(whole + frac.ljust(3, "0"))
+            else:
+                millions = v
+        else:
+            return None
+    else:
+        if re.match(r"^\d+$", s):
+            n = int(s)
+            if n >= 1000000:
+                return float(n)
+            millions = float(n)
+        else:
+            return None
+    if millions is None or millions <= 0: return None
+    return millions * 1000000.0
 
 def create_auction(peer_id, name, datetime_str, created_by):
     with DB_LOCK:
@@ -845,10 +867,10 @@ def delete_auction(auction_id):
         CONN.execute("DELETE FROM auctions WHERE id=?", (auction_id,))
         CONN.commit()
 
-def add_lot(auction_id, num, name, min_price, photo_path, photo_att):
+def add_lot(auction_id, num, name, min_price, seller, photo_path, photo_att):
     with DB_LOCK:
-        CONN.execute("INSERT INTO auction_lots(auction_id, lot_number, name, min_price, photo_path, photo_att) VALUES(?,?,?,?,?,?)",
-                     (auction_id, num, name, min_price, photo_path, photo_att))
+        CONN.execute("INSERT INTO auction_lots(auction_id, lot_number, name, min_price, seller, photo_path, photo_att) VALUES(?,?,?,?,?,?,?)",
+                     (auction_id, num, name, min_price, seller, photo_path, photo_att))
         CONN.commit()
 
 def get_lots(auction_id):
@@ -869,13 +891,18 @@ def delete_lot(lot_id):
 
 def get_best_bid(lot_id):
     with DB_LOCK:
-        row = CONN.execute("SELECT user_id, amount FROM auction_bids WHERE lot_id=? ORDER BY amount DESC LIMIT 1", (lot_id,)).fetchone()
-    if row: return row["user_id"], row["amount"]
-    return None, None
+        row = CONN.execute("SELECT id, user_id, amount FROM auction_bids WHERE lot_id=? ORDER BY amount DESC LIMIT 1", (lot_id,)).fetchone()
+    if row: return row["id"], row["user_id"], row["amount"]
+    return None, None, None
 
 def add_bid(lot_id, user_id, amount):
     with DB_LOCK:
         CONN.execute("INSERT INTO auction_bids(lot_id, user_id, amount, bid_time) VALUES(?,?,?,?)", (lot_id, user_id, amount, int(time.time())))
+        CONN.commit()
+
+def delete_bid(bid_id):
+    with DB_LOCK:
+        CONN.execute("DELETE FROM auction_bids WHERE id=?", (bid_id,))
         CONN.commit()
 
 def save_auction_photo_file(url):
@@ -915,7 +942,13 @@ def auction_main_kb():
         [{"action": {"type": "callback", "label": "Удалить", "payload": json.dumps({"cmd": "auction_delete"})}, "color": "negative"},
          {"action": {"type": "callback", "label": "Редактировать", "payload": json.dumps({"cmd": "auction_edit"})}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Анонс", "payload": json.dumps({"cmd": "auction_announce"})}, "color": "positive"},
-         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "auction_cancel"})}, "color": "negative"}]]}
+         {"action": {"type": "callback", "label": "Контроль", "payload": json.dumps({"cmd": "auction_control"})}, "color": "secondary"}],
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "auction_cancel"})}, "color": "negative"}]]}
+
+def auction_skip_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Пропустить", "payload": json.dumps({"cmd": "auction_skip_photo"})}, "color": "secondary"}],
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "auction_cancel"})}, "color": "negative"}]]}
 
 def auction_list_kb(auctions, cmd):
     rows = []
@@ -941,7 +974,25 @@ def auction_lots_kb(lots, back_cmd, back_id=None):
                  {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "auction_cancel"})}, "color": "negative"}])
     return {"inline": True, "buttons": rows}
 
+def edit_menu_kb(aid):
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Дата и время", "payload": json.dumps({"cmd": "auction_edit_dt", "id": aid})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Название аукциона", "payload": json.dumps({"cmd": "auction_edit_name", "id": aid})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Лот", "payload": json.dumps({"cmd": "auction_edit_lot", "id": aid})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Добавить лот", "payload": json.dumps({"cmd": "auction_add_lot", "id": aid})}, "color": "positive"}],
+        [{"action": {"type": "callback", "label": "Удалить аукцион", "payload": json.dumps({"cmd": "auction_del_auction", "id": aid})}, "color": "negative"},
+         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "auction_menu_show"})}, "color": "secondary"}]]}
+
+def edit_menu_text(a):
+    lots = get_lots(a["id"])
+    lines = ["{} | {}".format(a["datetime_str"].replace(" ", " | "), a["name"]), "Лоты:"]
+    for i, l in enumerate(lots, 1):
+        seller = l.get("seller") or "не указан"
+        lines.append("{}. {} (мин. {}, продавец: {})".format(i, l["name"], fmt_rub(l["min_price"]), seller))
+    return "\n".join(lines)
+
 def send_lot_message(peer, auction, lot):
+    seller = lot.get("seller") or silent_mention_badge(auction["created_by"], peer)
     txt = ("@all \n🏆 ЛОТ НА АУКЦИОН 🏆\n🟦 Black Russia • BLUE 🟦\n\n"
            "━━━━━━━━━━━━━━━━━━━━\n\n"
            "📦 Наименование лота:\n{}\n\n"
@@ -949,7 +1000,7 @@ def send_lot_message(peer, auction, lot):
            "👤 Продавец:\n➡️ {}\n\n"
            "━━━━━━━━━━━━━━━━━━━━\n\n"
            "🔥 Лот выставлен! Ждём ставок! 🔥\n\n"
-           "━━━━━━━━━━━━━━━━━━━━").format(lot["name"], silent_mention_badge(auction["created_by"], peer))
+           "━━━━━━━━━━━━━━━━━━━━").format(lot["name"], seller)
     send_msg(peer, txt, attachments=lot.get("photo_att") or None)
 
 def start_lot(auction, idx):
@@ -962,19 +1013,20 @@ def start_lot(auction, idx):
         CONN.execute("UPDATE auctions SET current_lot_index=?, current_lot_id=?, lot_deadline=? WHERE id=?",
                      (idx, lot["id"], int(time.time()) + 300, auction["id"]))
         CONN.commit()
+    set_setting(0, "auc_rem_{}".format(lot["id"]), "0")
     send_lot_message(auction["peer_id"], auction, lot)
 
 def finish_lot(auction, lot):
     peer = auction["peer_id"]
-    uid, amt = get_best_bid(lot["id"])
+    bid_id, uid, amt = get_best_bid(lot["id"])
     if uid is None:
         send_msg(peer, "Лот «{}» не продан! Никто не поставил ставку.".format(lot["name"]))
         sold, w, fp = 0, 0, 0.0
     elif amt < lot["min_price"]:
-        send_msg(peer, "Лот «{}» не продан! Цена не достигла минимальной. Последняя ставка была - {}.".format(lot["name"], fmt_kk(amt)))
+        send_msg(peer, "Лот «{}» не продан! Цена не достигла минимальной. Последняя ставка была - {}.".format(lot["name"], fmt_rub(amt)))
         sold, w, fp = 0, 0, amt
     else:
-        send_msg(peer, "Лот «{}» продан за {} {}. Поздравим победителя!".format(lot["name"], fmt_kk(amt), silent_mention_badge(uid, peer)))
+        send_msg(peer, "Лот «{}» продан за {} {}. Поздравим победителя!".format(lot["name"], fmt_rub(amt), silent_mention_badge(uid, peer)))
         sold, w, fp = 1, uid, amt
     with DB_LOCK:
         CONN.execute("UPDATE auction_lots SET sold=?, winner_id=?, final_price=? WHERE id=?", (sold, w, fp, lot["id"]))
@@ -1003,6 +1055,23 @@ def open_auction_menu(peer, sender):
         msg_id = None; cmid = None
     set_auction_state(sender, peer, "menu", {"msg_cmid": cmid, "msg_id": msg_id})
 
+def parse_lot_line(text):
+    parts = text.rsplit(",", 2)
+    if len(parts) == 3:
+        name, price_s, seller = [p.strip() for p in parts]
+    elif len(parts) == 2:
+        name, price_s = [p.strip() for p in parts]
+        seller = ""
+    else:
+        return None
+    try:
+        min_price = float(price_s.replace(",", ".")) * 1e6
+    except Exception:
+        return None
+    if not name or min_price <= 0:
+        return None
+    return name, min_price, seller
+
 def handle_stop_auction(peer, sender, raw):
     m = re.search(r"\b(2\d{9})\b", raw)
     if not m:
@@ -1020,6 +1089,30 @@ def handle_stop_auction(peer, sender, raw):
     send_msg(peer, "✅ Аукцион(ы) в чате {} остановлены.".format(pid))
     send_msg(pid, "⛔ Аукцион принудительно остановлен аукционером.")
 
+def handle_cancel_last_bid(peer, sender, raw):
+    m = re.search(r"\b(2\d{9})\b", raw)
+    if not m:
+        set_auction_state(sender, peer, "cancel_last_peer", {})
+        send_msg(peer, "Введите номер чата, где отменить последнюю ставку:")
+        return
+    do_cancel_last_bid(peer, int(m.group(1)))
+
+def do_cancel_last_bid(peer, pid):
+    ra = get_running_auction(pid)
+    if not ra or not ra["current_lot_id"]:
+        send_msg(peer, "❌ В чате {} сейчас нет идущего аукциона с активным лотом.".format(pid))
+        return
+    lot = get_lot(ra["current_lot_id"])
+    bid_id, uid, amt = get_best_bid(lot["id"])
+    if bid_id is None:
+        send_msg(peer, "❌ На лот «{}» ещё нет ставок.".format(lot["name"]))
+        return
+    delete_bid(bid_id)
+    nid, nuid, namt = get_best_bid(lot["id"])
+    info = "Теперь лучшая ставка: {} от {}.".format(fmt_rub(namt), silent_mention_badge(nuid, peer)) if nuid else "Теперь ставок нет."
+    send_msg(peer, "✅ Верхняя ставка {} ({}) на лот «{}» отменена. {}".format(fmt_rub(amt), silent_mention_badge(uid, peer), lot["name"], info))
+    send_msg(pid, "⚠️ Последняя ставка на лот «{}» отменена аукционером. {}".format(lot["name"], info))
+
 def handle_auctioneer_cmd(peer, sender, raw):
     targets = extract_targets(raw, 0)
     if not targets:
@@ -1033,7 +1126,7 @@ def handle_auctioneer_cmd(peer, sender, raw):
     if get_setting(0, key, "0") == "1":
         set_setting(0, key, "0")
         send_msg(peer, "✅ С {} снята роль аукционера.".format(silent_mention_badge(t, peer)))
-        send_msg(t, "📈 Вас сняли с роли аукционера. Команды /аукцион и /стопаукцион больше недоступны.")
+        send_msg(t, "📈 Вас сняли с роли аукционера. Скрытые команды аукциона больше недоступны.")
     else:
         set_setting(0, key, "1")
         send_msg(peer, "✅ {} назначен аукционером.".format(silent_mention_badge(t, peer)))
@@ -1062,7 +1155,8 @@ def handle_list_inspectors(peer):
 AUCTIONEER_WELCOME = ("Вас назначили аукционером📈\n"
                       "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
                       "/аукцион - редактор аукционов.\n"
-                      "/стопаукцион (номер чата) - принудительно отключает идущий аукцион в чате.")
+                      "/стопаукцион (номер чата) - принудительно отключает идущий аукцион в чате.\n"
+                      "/отменить ласт ставку (номер чата) - отменить верхнюю ставку активного лота.")
 
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
                      "Теперь вы можете использовать скрытые команды (только в личке со мной❗).\n"
@@ -1096,6 +1190,47 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
     def back_to_menu(msg):
         set_auction_state(sender, peer, "menu", {"msg_cmid": prompt_cmid})
         reply(msg + "\n\nВыберите действие:", auction_main_kb())
+
+    def finish_photo_step(photo_path, photo_att):
+        mode = ctx.get("photo_mode", "create")
+        if mode == "create":
+            ctx["lots"][-1]["photo_path"] = photo_path or ""
+            ctx["lots"][-1]["photo_att"] = photo_att or ""
+            if len(ctx["lots"]) < ctx["count"]:
+                set_auction_state(sender, peer, "create_lot", ctx)
+                reply("Введите лот {}, его минимальную цену, ссылку на продавца через запятую:".format(len(ctx["lots"]) + 1))
+            else:
+                aid = create_auction(ctx["peer_id"], ctx["name"], ctx["dt"], sender)
+                for i, l in enumerate(ctx["lots"], 1):
+                    add_lot(aid, i, l["name"], l["min_price"], l.get("seller", ""), l.get("photo_path", ""), l.get("photo_att", ""))
+                back_to_menu("✅ Аукцион «{}» создан в чате {}! Лотов: {}.".format(ctx["name"], ctx["peer_id"], len(ctx["lots"])))
+        elif mode == "add":
+            lots = get_lots(ctx["auction_id"])
+            num = (max([l["lot_number"] for l in lots]) + 1) if lots else 1
+            add_lot(ctx["auction_id"], num, ctx["add_name"], ctx["add_price"], ctx.get("add_seller", ""), photo_path or "", photo_att or "")
+            a = get_auction(ctx["auction_id"])
+            set_auction_state(sender, peer, "edit_menu", {"auction_id": a["id"], "msg_cmid": prompt_cmid})
+            reply("✅ Лот добавлен.\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
+        elif mode == "editlot":
+            with DB_LOCK:
+                CONN.execute("UPDATE auction_lots SET name=?, min_price=?, seller=?{} WHERE id=?".format(
+                    ", photo_path=?, photo_att=?" if photo_path else ""),
+                    (ctx["edit_name"], ctx["edit_price"], ctx.get("edit_seller", ""),
+                     *((photo_path, photo_att) if photo_path else ()), ctx["lot_id"])) if False else None
+            if photo_path:
+                with DB_LOCK:
+                    CONN.execute("UPDATE auction_lots SET name=?, min_price=?, seller=?, photo_path=?, photo_att=? WHERE id=?",
+                                 (ctx["edit_name"], ctx["edit_price"], ctx.get("edit_seller", ""), photo_path, photo_att or "", ctx["lot_id"]))
+                    CONN.commit()
+            else:
+                with DB_LOCK:
+                    CONN.execute("UPDATE auction_lots SET name=?, min_price=?, seller=? WHERE id=?",
+                                 (ctx["edit_name"], ctx["edit_price"], ctx.get("edit_seller", ""), ctx["lot_id"]))
+                    CONN.commit()
+            a = get_auction(ctx["auction_id"])
+            set_auction_state(sender, peer, "edit_menu", {"auction_id": ctx["auction_id"], "msg_cmid": prompt_cmid})
+            reply("✅ Лот отредактирован.\n\n" + (edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:" if a else "Выберите действие:"),
+                  edit_menu_kb(a["id"]) if a else auction_main_kb())
 
     if text.lower() in ["отмена", "отменить"]:
         clear_auction_state(sender, peer)
@@ -1134,45 +1269,29 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         ctx["count"] = int(text.strip())
         ctx["lots"] = []
         set_auction_state(sender, peer, "create_lot", ctx)
-        reply("Введите лот 1 и его минимальную цену через запятую (пример: н/з х444хх44, 20):")
+        reply("Введите лот 1, его минимальную цену, ссылку на продавца через запятую (пример: н/з х444хх44, 20, https://vk.com/id1):")
         return True
 
     if step == "create_lot":
-        if "," not in text:
-            reply("❌ Формат: название, цена в миллионах (пример: н/з х444хх44, 20)")
+        parsed = parse_lot_line(text)
+        if not parsed:
+            reply("❌ Формат: название, цена в млн, ссылка на продавца (через запятую).")
             return True
-        name_part, price_part = text.rsplit(",", 1)
-        name_part = name_part.strip(); price_part = price_part.strip()
-        try:
-            min_price = float(price_part.replace(",", ".")) * 1e6
-        except Exception:
-            reply("❌ Неверная цена. Пример: 20")
-            return True
-        if not name_part:
-            reply("❌ Пустое название лота.")
-            return True
-        ctx["lots"].append({"name": name_part, "min_price": min_price})
+        name, min_price, seller = parsed
+        ctx["lots"].append({"name": name, "min_price": min_price, "seller": seller})
+        ctx["photo_mode"] = "create"
         set_auction_state(sender, peer, "create_photo", ctx)
-        reply("Прикрепите фото лота {}:".format(len(ctx["lots"])))
+        reply("Прикрепите фото лота {}:".format(len(ctx["lots"])), auction_skip_kb())
         return True
 
     if step == "create_photo":
         url = extract_photo_url({"attachments": attachments}) if attachments else None
         if not url:
-            reply("❌ Прикрепите фото лота (или напишите «пропустить»):")
+            reply("❌ Прикрепите фото лота или нажмите «Пропустить».")
             return True
         path = save_auction_photo_file(url)
         att = upload_photo_file(peer, path) if path else None
-        ctx["lots"][-1]["photo_path"] = path or ""
-        ctx["lots"][-1]["photo_att"] = att or ""
-        if len(ctx["lots"]) < ctx["count"]:
-            set_auction_state(sender, peer, "create_lot", ctx)
-            reply("Введите лот {} и его минимальную цену через запятую:".format(len(ctx["lots"]) + 1))
-        else:
-            aid = create_auction(ctx["peer_id"], ctx["name"], ctx["dt"], sender)
-            for i, l in enumerate(ctx["lots"], 1):
-                add_lot(aid, i, l["name"], l["min_price"], l.get("photo_path", ""), l.get("photo_att", ""))
-            back_to_menu("✅ Аукцион «{}» создан в чате {}! Лотов: {}.".format(ctx["name"], ctx["peer_id"], len(ctx["lots"])))
+        finish_photo_step(path, att)
         return True
 
     if step == "delete_peer":
@@ -1184,22 +1303,11 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         if not auctions:
             back_to_menu("❌ В чате {} нет аукционов.".format(pid))
             return True
-        ctx["peer_id"] = pid
-        set_auction_state(sender, peer, "delete_num", ctx)
-        lines = ["Выберите аукцион для удаления (напишите номер):"]
+        set_auction_state(sender, peer, "menu", ctx)
+        lines = ["Выберите аукцион для удаления:"]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {} ({})".format(i, a["name"], a["datetime_str"]))
-        reply("\n".join(lines))
-        return True
-
-    if step == "delete_num":
-        auctions = get_auctions_for_peer(ctx.get("peer_id", 0))
-        if not text.strip().isdigit() or int(text.strip()) < 1 or int(text.strip()) > len(auctions):
-            reply("❌ Неверный номер аукциона.")
-            return True
-        a = auctions[int(text.strip()) - 1]
-        delete_auction(a["id"])
-        back_to_menu("✅ Аукцион «{}» удалён.".format(a["name"]))
+        reply("\n".join(lines), auction_list_kb(auctions, "auction_del_sel"))
         return True
 
     if step == "edit_peer":
@@ -1211,23 +1319,11 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         if not auctions:
             back_to_menu("❌ В чате {} нет аукционов.".format(pid))
             return True
-        ctx["peer_id"] = pid
-        set_auction_state(sender, peer, "edit_num", ctx)
-        lines = ["Выберите аукцион для редактирования (напишите номер):"]
+        set_auction_state(sender, peer, "menu", ctx)
+        lines = ["Выберите аукцион для редактирования:"]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {} ({})".format(i, a["name"], a["datetime_str"]))
-        reply("\n".join(lines))
-        return True
-
-    if step == "edit_num":
-        auctions = get_auctions_for_peer(ctx.get("peer_id", 0))
-        if not text.strip().isdigit() or int(text.strip()) < 1 or int(text.strip()) > len(auctions):
-            reply("❌ Неверный номер аукциона.")
-            return True
-        a = auctions[int(text.strip()) - 1]
-        ctx["auction_id"] = a["id"]
-        set_auction_state(sender, peer, "edit_menu", ctx)
-        reply(edit_menu_text(a), edit_menu_kb(a["id"]))
+        reply("\n".join(lines), auction_list_kb(auctions, "auction_edit_show"))
         return True
 
     if step == "edit_dt":
@@ -1240,7 +1336,7 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
             CONN.commit()
         a = get_auction(ctx["auction_id"])
         set_auction_state(sender, peer, "edit_menu", ctx)
-        reply("✅ Дата и время обновлены.\n\n" + edit_menu_text(a), edit_menu_kb(a["id"]))
+        reply("✅ Дата и время обновлены.\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
         return True
 
     if step == "edit_name":
@@ -1249,7 +1345,7 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
             CONN.commit()
         a = get_auction(ctx["auction_id"])
         set_auction_state(sender, peer, "edit_menu", ctx)
-        reply("✅ Название обновлено.\n\n" + edit_menu_text(a), edit_menu_kb(a["id"]))
+        reply("✅ Название обновлено.\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
         return True
 
     if step == "edit_lot_num":
@@ -1262,31 +1358,54 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         set_auction_state(sender, peer, "edit_lot_menu", ctx)
         kb = {"inline": True, "buttons": [
             [{"action": {"type": "callback", "label": "Удалить", "payload": json.dumps({"cmd": "auction_lot_del", "id": lot["id"]})}, "color": "negative"},
-             {"action": {"type": "callback", "label": "Сменить название", "payload": json.dumps({"cmd": "auction_lot_rename", "id": lot["id"]})}, "color": "primary"}],
+             {"action": {"type": "callback", "label": "Редактировать", "payload": json.dumps({"cmd": "auction_lot_edit", "id": lot["id"]})}, "color": "primary"}],
             [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "auction_edit_show", "id": ctx["auction_id"]})}, "color": "secondary"}]]}
-        reply("Лот {}: «{}» (мин. {}).\nЧто сделать с лотом?".format(lot["lot_number"], lot["name"], fmt_kk(lot["min_price"])), kb)
+        reply("Лот {}: «{}» (мин. {}, продавец: {}).\nЧто сделать с лотом?".format(
+            lot["lot_number"], lot["name"], fmt_rub(lot["min_price"]), lot.get("seller") or "не указан"), kb)
         return True
 
-    if step == "edit_lot_name":
-        ctx["lot_new_name"] = text.strip()
+    if step == "edit_lot_data":
+        parsed = parse_lot_line(text)
+        if not parsed:
+            reply("❌ Формат: название, цена в млн, ссылка на продавца (через запятую).")
+            return True
+        name, min_price, seller = parsed
+        ctx["edit_name"] = name; ctx["edit_price"] = min_price; ctx["edit_seller"] = seller
+        ctx["photo_mode"] = "editlot"
         set_auction_state(sender, peer, "edit_lot_photo", ctx)
-        reply("Прикрепите новое фото лота:")
+        reply("Прикрепите новое фото лота:", auction_skip_kb())
         return True
 
     if step == "edit_lot_photo":
         url = extract_photo_url({"attachments": attachments}) if attachments else None
         if not url:
-            reply("❌ Прикрепите фото лота (или напишите «пропустить»):")
+            reply("❌ Прикрепите фото или нажмите «Пропустить» (тогда останется старое).")
             return True
         path = save_auction_photo_file(url)
         att = upload_photo_file(peer, path) if path else None
-        with DB_LOCK:
-            CONN.execute("UPDATE auction_lots SET name=?, photo_path=?, photo_att=? WHERE id=?",
-                         (ctx.get("lot_new_name", ""), path or "", att or "", ctx["lot_id"]))
-            CONN.commit()
-        a = get_auction(ctx["auction_id"])
-        set_auction_state(sender, peer, "edit_menu", ctx)
-        reply("✅ Лот обновлён.\n\n" + edit_menu_text(a), edit_menu_kb(a["id"]))
+        finish_photo_step(path, att)
+        return True
+
+    if step == "add_lot_data":
+        parsed = parse_lot_line(text)
+        if not parsed:
+            reply("❌ Формат: название, цена в млн, ссылка на продавца (через запятую).")
+            return True
+        name, min_price, seller = parsed
+        ctx["add_name"] = name; ctx["add_price"] = min_price; ctx["add_seller"] = seller
+        ctx["photo_mode"] = "add"
+        set_auction_state(sender, peer, "add_lot_photo", ctx)
+        reply("Прикрепите фото нового лота:", auction_skip_kb())
+        return True
+
+    if step == "add_lot_photo":
+        url = extract_photo_url({"attachments": attachments}) if attachments else None
+        if not url:
+            reply("❌ Прикрепите фото или нажмите «Пропустить».")
+            return True
+        path = save_auction_photo_file(url)
+        att = upload_photo_file(peer, path) if path else None
+        finish_photo_step(path, att)
         return True
 
     if step == "announce_peer":
@@ -1298,26 +1417,11 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         if not auctions:
             back_to_menu("❌ В чате {} нет аукционов.".format(pid))
             return True
-        ctx["peer_id"] = pid
-        set_auction_state(sender, peer, "announce_num", ctx)
-        lines = ["Выберите аукцион для анонса (напишите номер):"]
+        set_auction_state(sender, peer, "menu", ctx)
+        lines = ["Выберите аукцион для анонса:"]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {} ({})".format(i, a["name"], a["datetime_str"]))
-        reply("\n".join(lines))
-        return True
-
-    if step == "announce_num":
-        auctions = get_auctions_for_peer(ctx.get("peer_id", 0))
-        if not text.strip().isdigit() or int(text.strip()) < 1 or int(text.strip()) > len(auctions):
-            reply("❌ Неверный номер аукциона.")
-            return True
-        a = auctions[int(text.strip()) - 1]
-        lots = get_lots(a["id"])
-        lines = ["@all Лоты на аукцион {}.\n".format(a["datetime_str"])]
-        for i, l in enumerate(lots, 1):
-            lines.append("{}) {}".format(i, l["name"]))
-        send_msg(a["peer_id"], "\n".join(lines))
-        back_to_menu("✅ Анонс отправлен в чат {}.".format(a["peer_id"]))
+        reply("\n".join(lines), auction_list_kb(auctions, "auction_ann_sel"))
         return True
 
     if step == "active_peer":
@@ -1329,27 +1433,36 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         if not auctions:
             back_to_menu("❌ В чате {} нет аукционов.".format(pid))
             return True
+        set_auction_state(sender, peer, "menu", ctx)
         lines = ["Аукционы чата {}:".format(pid)]
         for i, a in enumerate(auctions, 1):
             lines.append("{}. {}".format(i, a["name"]))
         reply("\n".join(lines), auction_list_kb(auctions, "auction_view"))
         return True
 
+    if step == "control_peer":
+        if not re.match(r"^2\d{9}$", text.strip()):
+            reply("❌ Введите номер чата (2xxxxxxxxx).")
+            return True
+        pid = int(text.strip())
+        cur = get_setting(0, "auc_clean_{}".format(pid), "0")
+        set_auction_state(sender, peer, "menu", ctx)
+        kb = {"inline": True, "buttons": [[
+            {"action": {"type": "callback", "label": "Да", "payload": json.dumps({"cmd": "auction_control_set", "peer": pid, "val": 1})}, "color": "positive"},
+            {"action": {"type": "callback", "label": "Нет", "payload": json.dumps({"cmd": "auction_control_set", "peer": pid, "val": 0})}, "color": "negative"}]]}
+        reply("Вы хотите что бы во время аукциона в чате {} удалялись все сообщения кроме ставок?\n(Сейчас: {})".format(
+            pid, "включено" if cur == "1" else "выключено"), kb)
+        return True
+
+    if step == "cancel_last_peer":
+        if not re.match(r"^2\d{9}$", text.strip()):
+            reply("❌ Введите номер чата (2xxxxxxxxx).")
+            return True
+        clear_auction_state(sender, peer)
+        do_cancel_last_bid(peer, int(text.strip()))
+        return True
+
     return False
-
-def edit_menu_text(a):
-    lots = get_lots(a["id"])
-    lines = ["{} | {}".format(a["datetime_str"].replace(" ", " | "), a["name"]), "Лоты:"]
-    for i, l in enumerate(lots, 1):
-        lines.append("{}. {} (мин. {})".format(i, l["name"], fmt_kk(l["min_price"])))
-    return "\n".join(lines)
-
-def edit_menu_kb(aid):
-    return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "Дата и время", "payload": json.dumps({"cmd": "auction_edit_dt", "id": aid})}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Название аукциона", "payload": json.dumps({"cmd": "auction_edit_name", "id": aid})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Лот", "payload": json.dumps({"cmd": "auction_edit_lot", "id": aid})}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "auction_menu_show"})}, "color": "secondary"}]]}
 
 # ===== ШРИФТ =====
 FONT_CACHE = os.path.join(DATA_DIR, "card_font_cyr.ttf")
@@ -1397,7 +1510,6 @@ def get_font(size):
     if not _FONT_RESOLVED["tried"]:
         _FONT_RESOLVED["path"] = ensure_font()
         _FONT_RESOLVED["tried"] = True
-        print("card font resolved:", _FONT_RESOLVED["path"])
     p = _FONT_RESOLVED["path"]
     if p:
         try: return ImageFont.truetype(p, size)
@@ -1661,7 +1773,7 @@ def init_db():
             current_lot_index INTEGER DEFAULT 0, current_lot_id INTEGER DEFAULT 0, lot_deadline INTEGER DEFAULT 0)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS auction_lots (
             id INTEGER PRIMARY KEY AUTOINCREMENT, auction_id INTEGER, lot_number INTEGER, name TEXT,
-            min_price REAL DEFAULT 20000000, photo_path TEXT DEFAULT '', photo_att TEXT DEFAULT '',
+            min_price REAL DEFAULT 20000000, seller TEXT DEFAULT '', photo_path TEXT DEFAULT '', photo_att TEXT DEFAULT '',
             sold INTEGER DEFAULT 0, winner_id INTEGER DEFAULT 0, final_price REAL DEFAULT 0)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS auction_bids (
             id INTEGER PRIMARY KEY AUTOINCREMENT, lot_id INTEGER, user_id INTEGER, amount REAL, bid_time INTEGER)""")
@@ -1679,6 +1791,7 @@ def init_db():
             "ALTER TABLE members ADD COLUMN who_ts INTEGER DEFAULT 0",
             "ALTER TABLE player_cards ADD COLUMN design TEXT DEFAULT '{}'",
             "ALTER TABLE player_cards ADD COLUMN verified INTEGER DEFAULT 0",
+            "ALTER TABLE auction_lots ADD COLUMN seller TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try: CONN.execute(sql)
@@ -2048,6 +2161,7 @@ def ls_help_text(user_id):
             "📈 Скрытые команды аукционера:",
             "/аукцион - редактор аукционов.",
             "/стопаукцион (номер чата) - отключить идущий аукцион.",
+            "/отменить ласт ставку (номер чата) - отменить верхнюю ставку активного лота.",
         ]
     if user_id in (CREATOR_ID, LEADER_ID):
         lines += [
@@ -2059,6 +2173,7 @@ def ls_help_text(user_id):
             "/аукционеры - список аукционеров.",
             "/setkto @ <слова> <номер чата> - поставить статус «кто я».",
             "/чаты - список бесед бота.",
+            "бр форум <ссылка> / бр админы <ссылка> - установить ссылки.",
             "/firstlogin, /lastlogin, /topmsg, /topemj, /rbrak - служебный занос данных.",
         ]
     return "\n".join(lines)
@@ -2178,6 +2293,8 @@ HELP_GENERAL_TEXT = (
     "1. Мд парк — информация об автопарке.\n"
     "2. Мд прем — информация о премиях.\n"
     "3. Мд чат — ссылка на чат для отчетов.\n"
+    "4. Мд бр форум — ссылка на форум BR.\n"
+    "5. Мд бр админы — таблица администрации BR BLUE.\n"
     "\n"
     "Развлекательные🎭:\n"
     "1. Мд браки — список браков.\n"
@@ -2235,16 +2352,22 @@ HELP_AUCTIONS_TEXT = (
     "📈 Аукционы:\n"
     "1. /аукцион — редактор аукционов (ЛС, роль аукционера).\n"
     "2. /стопаукцион <номер чата> — принудительно остановить аукцион.\n"
-    "3. Аукционера назначает создатель/лидер: /аукционер @юз.\n"
-    "4. В назначенное время бот сам выставляет лоты в чат по очереди.\n"
-    "5. Ставка = просто число в чате (25 / 21,5 / 32.500 / 30000000).\n"
-    "6. Шаг перебива: 20–50кк +1кк, 50–100кк +3кк, 100–200кк +5кк, 200–400кк +7кк, 400кк–1млрд +15кк, от 1млрд +30кк.\n"
-    "7. На каждый лот 5 минут: нет ставок — лот не продан, следующий."
+    "3. /отменить ласт ставку <номер чата> — отменить верхнюю ставку активного лота.\n"
+    "4. Аукционера назначает создатель/лидер: /аукционер @юз.\n"
+    "5. В назначенное время бот сам выставляет лоты в чат по очереди.\n"
+    "6. Ставка = просто число в чате: 25 / 21,5 / 1.1 (=1100кк) / 10.000 (=10000кк) / 30.000.000 (=30кк).\n"
+    "7. Бот всегда пишет полную сумму: 20.000.000р.\n"
+    "8. Шаг перебива: 20–50кк +1кк, 50–100кк +3кк, 100–200кк +5кк, 200–400кк +7кк, 400кк–1млрд +15кк, от 1млрд +30кк.\n"
+    "9. Повторная ставка того же человека не принимается, пока его не перебили.\n"
+    "10. Каждую минуту бот напоминает сколько осталось до конца торгов и последнюю ставку.\n"
+    "11. Кнопка «Контроль» в /аукцион — удалять все сообщения кроме ставок во время торгов."
 )
 HELP_BR_TEXT = (
     "🎮 BLACK RUSSIA:\n\n"
     "ℹ️Информационные:\n"
-    "1. Мд бр — список серверов и онлайн.\n\n"
+    "1. Мд бр — список серверов и онлайн.\n"
+    "2. Мд бр форум — ссылка на форум Black Russia🎮.\n"
+    "3. Мд бр админы — актуальная таблица администрации BR BLUE🔹.\n\n"
     "🗃️Личная карточка:\n"
     "1. Мд карта — выводит фото карты.\n"
     "2. Мд карта редактировать — редактирование, цвет и фото.\n"
@@ -2426,6 +2549,44 @@ def handle_event(event):
                 if state: clear_auction_state(user_id, peer_id)
                 show("❌ Редактор аукционов закрыт.", None)
                 snackbar("❌ Закрыто"); return
+            if cmd == "auction_skip_photo":
+                if not state or state["step"] not in ("create_photo", "add_lot_photo", "edit_lot_photo"):
+                    snackbar("⛔ Сейчас не ожидается фото!"); return
+                ctx = state.get("context", {})
+                if time.time() - ctx.get("ts", 0) > 300:
+                    clear_auction_state(user_id, peer_id); snackbar("⏳ Время вышло"); return
+                prompt_cmid = ctx.get("msg_cmid") or cmid
+                mode = ctx.get("photo_mode", "create")
+                if mode == "create":
+                    ctx["lots"][-1]["photo_path"] = ""; ctx["lots"][-1]["photo_att"] = ""
+                    if len(ctx["lots"]) < ctx["count"]:
+                        ctx["msg_cmid"] = cmid
+                        set_auction_state(user_id, peer_id, "create_lot", ctx)
+                        show("Введите лот {}, его минимальную цену, ссылку на продавца через запятую:".format(len(ctx["lots"]) + 1), None)
+                    else:
+                        aid = create_auction(ctx["peer_id"], ctx["name"], ctx["dt"], user_id)
+                        for i, l in enumerate(ctx["lots"], 1):
+                            add_lot(aid, i, l["name"], l["min_price"], l.get("seller", ""), l.get("photo_path", ""), l.get("photo_att", ""))
+                        clear_auction_state(user_id, peer_id)
+                        show("✅ Аукцион «{}» создан в чате {}! Лотов: {}.\n\nВыберите действие:".format(ctx["name"], ctx["peer_id"], len(ctx["lots"])), auction_main_kb())
+                elif mode == "add":
+                    lots = get_lots(ctx["auction_id"])
+                    num = (max([l["lot_number"] for l in lots]) + 1) if lots else 1
+                    add_lot(ctx["auction_id"], num, ctx["add_name"], ctx["add_price"], ctx.get("add_seller", ""), "", "")
+                    a = get_auction(ctx["auction_id"])
+                    set_auction_state(user_id, peer_id, "edit_menu", {"auction_id": a["id"], "msg_cmid": cmid})
+                    show("✅ Лот добавлен.\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
+                else:
+                    with DB_LOCK:
+                        CONN.execute("UPDATE auction_lots SET name=?, min_price=?, seller=? WHERE id=?",
+                                     (ctx["edit_name"], ctx["edit_price"], ctx.get("edit_seller", ""), ctx["lot_id"]))
+                        CONN.commit()
+                    a = get_auction(ctx["auction_id"])
+                    set_auction_state(user_id, peer_id, "edit_menu", {"auction_id": ctx["auction_id"], "msg_cmid": cmid})
+                    show("✅ Лот отредактирован (фото осталось старое).\n\n" + (edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:" if a else "Выберите действие:"),
+                         edit_menu_kb(a["id"]) if a else auction_main_kb())
+                snackbar("✅ Пропущено")
+                return
             if not state:
                 snackbar("⛔ Редактор не открыт или время вышло! Напишите /аукцион"); return
             ctx = state.get("context", {})
@@ -2457,22 +2618,51 @@ def handle_event(event):
                 elif cmd == "auction_announce":
                     aset("announce_peer")
                     show("Введите номер чата, куда сделать анонс:", None); snackbar("✅ Введите чат")
+                elif cmd == "auction_control":
+                    aset("control_peer")
+                    show("Введите номер чата для настройки контроля:", None); snackbar("✅ Введите чат")
+                elif cmd == "auction_control_set":
+                    pid = int(payload.get("peer", 0)); val = int(payload.get("val", 0))
+                    cur = get_setting(0, "auc_clean_{}".format(pid), "0")
+                    want = "1" if val else "0"
+                    if cur == want:
+                        show("ℹ️ В чате {} уже {}.".format(pid, "включено" if want == "1" else "выключено"), auction_main_kb())
+                        snackbar("ℹ️ Уже так"); return
+                    set_setting(0, "auc_clean_{}".format(pid), want)
+                    aset("menu")
+                    show("✅ Контроль в чате {} теперь {}.\n\nВыберите действие:".format(pid, "включен" if want == "1" else "выключен"), auction_main_kb())
+                    snackbar("✅ Готово")
                 elif cmd == "auction_view":
                     a = get_auction(payload.get("id", 0))
                     if not a: snackbar("❌ Аукцион не найден"); return
                     lots = get_lots(a["id"])
                     lines = ["{} | {}".format(a["datetime_str"].replace(" ", " | "), a["name"]), "Лоты:"]
                     for i, l in enumerate(lots, 1):
-                        lines.append("{}. {}".format(i, l["name"]))
+                        lines.append("{}. {} (мин. {}, продавец: {})".format(i, l["name"], fmt_rub(l["min_price"]), l.get("seller") or "не указан"))
                     show("\n".join(lines), auction_lots_kb(lots, "auction_menu_show"))
                     snackbar("✅ Аукцион")
                 elif cmd == "auction_lotphoto":
                     lot = get_lot(payload.get("id", 0))
-                    if not lot or not lot.get("photo_att"):
+                    if not lot: snackbar("❌ Лот не найден"); return
+                    att = lot.get("photo_att") or ""
+                    if not att and lot.get("photo_path") and os.path.isfile(lot["photo_path"]):
+                        att = upload_photo_file(peer_id, lot["photo_path"]) or ""
+                        if att:
+                            with DB_LOCK:
+                                CONN.execute("UPDATE auction_lots SET photo_att=? WHERE id=?", (att, lot["id"]))
+                                CONN.commit()
+                    if not att:
                         snackbar("❌ Фото лота нет"); return
-                    send_msg(peer_id, "📷 Фото лота «{}»:".format(lot["name"]), attachments=lot["photo_att"])
+                    send_msg(peer_id, "📷 Фото лота «{}»:".format(lot["name"]), attachments=att)
                     snackbar("📷 Фото отправлено")
                 elif cmd == "auction_del_sel":
+                    a = get_auction(payload.get("id", 0))
+                    if not a: snackbar("❌ Аукцион не найден"); return
+                    delete_auction(a["id"])
+                    aset("menu")
+                    show("✅ Аукцион «{}» удалён.\n\nВыберите действие:".format(a["name"]), auction_main_kb())
+                    snackbar("✅ Удалён")
+                elif cmd == "auction_del_auction":
                     a = get_auction(payload.get("id", 0))
                     if not a: snackbar("❌ Аукцион не найден"); return
                     delete_auction(a["id"])
@@ -2494,22 +2684,31 @@ def handle_event(event):
                 elif cmd == "auction_edit_lot":
                     aset("edit_lot_num", {"auction_id": payload.get("id", 0)})
                     show("Введите номер лота (число):", None); snackbar("✅ Введите номер")
+                elif cmd == "auction_edit_lot_menu_back":
+                    aset("edit_lot_num", {"auction_id": payload.get("id", 0)})
+                    show("Введите номер лота (число):", None); snackbar("✅ Введите номер")
                 elif cmd == "auction_lot_del":
                     lot = get_lot(payload.get("id", 0))
                     if not lot: snackbar("❌ Лот не найден"); return
                     delete_lot(lot["id"])
                     a = get_auction(lot["auction_id"])
-                    aset("edit_menu", {"auction_id": a["id"] if a else 0})
                     if a:
-                        show("✅ Лот удалён.\n\n" + edit_menu_text(a), edit_menu_kb(a["id"]))
+                        aset("edit_menu", {"auction_id": a["id"]})
+                        show("✅ Лот удалён.\n\n" + edit_menu_text(a) + "\n\nВыберите что хотите отредактировать:", edit_menu_kb(a["id"]))
                     else:
+                        aset("menu")
                         show("✅ Лот удалён.\n\nВыберите действие:", auction_main_kb())
                     snackbar("✅ Лот удалён")
-                elif cmd == "auction_lot_rename":
+                elif cmd == "auction_lot_edit":
                     lot = get_lot(payload.get("id", 0))
                     if not lot: snackbar("❌ Лот не найден"); return
-                    aset("edit_lot_name", {"auction_id": lot["auction_id"], "lot_id": lot["id"]})
-                    show("Введите новое название лота:", None); snackbar("✅ Введите название")
+                    aset("edit_lot_data", {"auction_id": lot["auction_id"], "lot_id": lot["id"]})
+                    show("Введите новые данные лота (название, мин. цена, ссылка на продавца через запятую):", None)
+                    snackbar("✅ Введите данные")
+                elif cmd == "auction_add_lot":
+                    aset("add_lot_data", {"auction_id": payload.get("id", 0), "photo_mode": "add"})
+                    show("Введите новый лот: название, мин. цена, ссылка на продавца через запятую:", None)
+                    snackbar("✅ Введите лот")
                 elif cmd == "auction_ann_sel":
                     a = get_auction(payload.get("id", 0))
                     if not a: snackbar("❌ Аукцион не найден"); return
@@ -3120,7 +3319,7 @@ def build_status_page(peer, page):
 LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍☠️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
-                 "феникс": "Феникс🐦‍", "мафиози": "Мафиози🕴️"}
+                 "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
 
 def open_edit_menu(peer, sender):
     try:
@@ -3299,6 +3498,7 @@ def check_clear_pending(peer, sender, text):
 def handle_message(peer, sender, text, msg_obj):
     first_line = text.split("\n")[0].strip()
     first = norm(first_line)
+    user_cmid = msg_obj.get("conversation_message_id")
 
     if peer < 2000000000:
         low = text.strip().lower()
@@ -3306,6 +3506,20 @@ def handle_message(peer, sender, text, msg_obj):
         is_insp = is_inspector(sender) and peer == sender
         is_auct = is_auctioneer(sender) and peer == sender
         if is_boss:
+            if low.startswith("бр форум") or low.startswith("br форум") or low.startswith("br forum"):
+                rest = text.strip().split(None, 2)
+                link = rest[2].strip() if len(rest) > 2 else ""
+                if not link:
+                    send_msg(peer, "❌ Формат: бр форум <ссылка>"); return
+                set_setting(0, "br_forum_link", link)
+                send_msg(peer, "✅ Ссылка на форум установлена."); return
+            if low.startswith("бр админы") or low.startswith("br админы") or low.startswith("br admins"):
+                rest = text.strip().split(None, 2)
+                link = rest[2].strip() if len(rest) > 2 else ""
+                if not link:
+                    send_msg(peer, "❌ Формат: бр админы <ссылка>"); return
+                set_setting(0, "br_admins_link", link)
+                send_msg(peer, "✅ Ссылка на таблицу админов установлена."); return
             if low == "/чаты":
                 send_msg(peer, "⏳ Загрузка списка бесед...")
                 chats = get_all_bot_chats()
@@ -3367,6 +3581,10 @@ def handle_message(peer, sender, text, msg_obj):
             elif low.startswith("/стопаукцион"):
                 handle_stop_auction(peer, sender, text[len("/стопаукцион"):].strip())
                 return
+            elif low.startswith("/отменить ласт ставку") or low.startswith("/отменить последнюю ставку"):
+                pref = "/отменить ласт ставку" if low.startswith("/отменить ласт ставку") else "/отменить последнюю ставку"
+                handle_cancel_last_bid(peer, sender, text[len(pref):].strip())
+                return
             elif low == "/аукцион":
                 open_auction_menu(peer, sender)
                 return
@@ -3374,24 +3592,28 @@ def handle_message(peer, sender, text, msg_obj):
                 handle_creator_ls(peer, text)
                 return
         elif is_insp or is_auct:
-            if low.startswith("/clearcard") and is_insp:
+            if is_insp and low.startswith("/clearcard"):
                 handle_clearcard(peer, sender, text[len("/clearcard"):].strip())
-                return
-            elif low.startswith("/card") and is_insp:
+                delete_user_msg(peer, user_cmid); return
+            elif is_insp and low.startswith("/card"):
                 handle_card_ls(peer, sender, text[len("/card"):].strip())
-                return
-            elif low.startswith("/verify") and is_insp:
+                delete_user_msg(peer, user_cmid); return
+            elif is_insp and low.startswith("/verify"):
                 handle_verify(peer, sender, text[len("/verify"):].strip(), True)
-                return
-            elif low.startswith("/deny") and is_insp:
+                delete_user_msg(peer, user_cmid); return
+            elif is_insp and low.startswith("/deny"):
                 handle_verify(peer, sender, text[len("/deny"):].strip(), False)
-                return
-            elif low.startswith("/стопаукцион") and is_auct:
+                delete_user_msg(peer, user_cmid); return
+            elif is_auct and low.startswith("/стопаукцион"):
                 handle_stop_auction(peer, sender, text[len("/стопаукцион"):].strip())
-                return
-            elif low == "/аукцион" and is_auct:
+                delete_user_msg(peer, user_cmid); return
+            elif is_auct and (low.startswith("/отменить ласт ставку") or low.startswith("/отменить последнюю ставку")):
+                pref = "/отменить ласт ставку" if low.startswith("/отменить ласт ставку") else "/отменить последнюю ставку"
+                handle_cancel_last_bid(peer, sender, text[len(pref):].strip())
+                delete_user_msg(peer, user_cmid); return
+            elif is_auct and low == "/аукцион":
                 open_auction_menu(peer, sender)
-                return
+                delete_user_msg(peer, user_cmid); return
             elif low.startswith("/"):
                 send_msg(peer, "❌ Неизвестная команда: {}\n\n".format(text.strip().split("\n")[0]) + ls_help_text(sender))
                 return
@@ -3414,38 +3636,47 @@ def handle_message(peer, sender, text, msg_obj):
         if text.strip().startswith("/"):
             send_msg(peer, "❌ Неизвестная команда: {}\n\n".format(text.strip().split("\n")[0]) + ls_help_text(sender))
             return
-        if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id"), attachments=msg_obj.get("attachments")):
+        if handle_card_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
+            delete_user_msg(peer, user_cmid)
             return
-        if handle_auction_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id"), attachments=msg_obj.get("attachments")):
+        if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
+            delete_user_msg(peer, user_cmid)
             return
         return
 
-    # ===== ЧАТ: ставки аукциона =====
-    if sender > 0:
+    # ===== ЧАТ: аукцион, ставки, контроль =====
+    if sender > 0 and peer >= 2000000000:
         ra = get_running_auction(peer)
         if ra and ra["current_lot_id"] and ra["lot_deadline"] > int(time.time()):
             amount = parse_bid(text)
             if amount is not None:
                 lot = get_lot(ra["current_lot_id"])
                 if lot:
-                    uid, best = get_best_bid(lot["id"])
+                    bid_id, best_uid, best = get_best_bid(lot["id"])
                     cur = best if best else 20000000.0
+                    if best_uid == sender:
+                        send_msg(peer, "{}, вы уже лидер по этому лоту! Ставить повторно можно только после того, как вас перебили.".format(silent_mention_badge(sender, peer)))
+                        return
                     step = min_step_m(cur / 1e6) * 1e6
                     if amount < cur + step - 1e-6:
-                        send_msg(peer, "{}, ошибка, минимальный перебив {}!".format(silent_mention_badge(sender, peer), fmt_kk(step)))
-                    else:
-                        add_bid(lot["id"], sender, amount)
-                        with DB_LOCK:
-                            CONN.execute("UPDATE auctions SET lot_deadline=? WHERE id=?", (int(time.time()) + 300, ra["id"]))
-                            CONN.commit()
-                        send_msg(peer, "{}, ставка {} установлена! У остальных есть 5 минут чтобы ее перебить.".format(
-                            silent_mention_badge(sender, peer), fmt_kk(amount)))
+                        send_msg(peer, "{}, ошибка, минимальный перебив {}!".format(silent_mention_badge(sender, peer), fmt_rub(step)))
+                        return
+                    add_bid(lot["id"], sender, amount)
+                    with DB_LOCK:
+                        CONN.execute("UPDATE auctions SET lot_deadline=? WHERE id=?", (int(time.time()) + 300, ra["id"]))
+                        CONN.commit()
+                    send_msg(peer, "{}, ставка {} установлена! У остальных есть 5 минут чтобы ее перебить.".format(
+                        silent_mention_badge(sender, peer), fmt_rub(amount)))
                     return
+            if get_setting(0, "auc_clean_{}".format(peer), "0") == "1" and not is_moderator(sender, peer) and not is_auctioneer(sender):
+                delete_user_msg(peer, user_cmid)
+                return
 
     if not first.startswith("мд "):
         if check_clear_pending(peer, sender, text):
             return
-        if handle_card_input(sender, peer, text, cmid=msg_obj.get("conversation_message_id"), attachments=msg_obj.get("attachments")):
+        if handle_card_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
+            delete_user_msg(peer, user_cmid)
             return
 
     if sender > 0:
@@ -3502,16 +3733,14 @@ def handle_message(peer, sender, text, msg_obj):
     if mute_row and mute_row["mute_until"] and mute_row["mute_until"] > time.time():
         if not is_moderator(sender, peer):
             try:
-                cmid = msg_obj.get("conversation_message_id")
-                if cmid: VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
+                if user_cmid: VK.messages.delete(peer_id=peer, conversation_message_ids=[user_cmid], delete_for_all=1)
             except: pass
             return
 
     if get_setting(peer, "silence_mode", "0") == "1":
         if not is_admin(sender, peer):
             try:
-                cmid = msg_obj.get("conversation_message_id")
-                if cmid: VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
+                if user_cmid: VK.messages.delete(peer_id=peer, conversation_message_ids=[user_cmid], delete_for_all=1)
             except: pass
             return
 
@@ -3539,7 +3768,7 @@ def handle_message(peer, sender, text, msg_obj):
                 send_msg(peer, "✅ Топ очищен."); return
 
     if sender > 0:
-        cmid0 = msg_obj.get("conversation_message_id") or 0
+        cmid0 = user_cmid or 0
         if cmid0:
             with DB_LOCK:
                 CONN.execute("INSERT INTO message_cache(peer_id, cmid, from_id, ts) VALUES(?,?,?,?)", (peer, cmid0, sender, int(time.time())))
@@ -4340,6 +4569,14 @@ def handle_message(peer, sender, text, msg_obj):
             send_msg(peer, "📌 Проверка: {:02d}:{:02d}".format(int(get_setting(peer, "check_hour", "23")), int(get_setting(peer, "check_minute", "0"))))
 
     elif cmd == "бр":
+        if args and args[0].lower() in ("форум", "forum"):
+            link = get_setting(0, "br_forum_link", "")
+            send_msg(peer, "🎮 Форум Black Russia: {}".format(link) if link else "❌ Ссылка на форум не установлена.")
+            return
+        if args and args[0].lower() in ("админы", "admins"):
+            link = get_setting(0, "br_admins_link", "")
+            send_msg(peer, "🔹 Актуальная таблица администрации BR BLUE: {}".format(link) if link else "❌ Ссылка на таблицу не установлена.")
+            return
         try:
             page = int(args[0]) if args and args[0].isdigit() else 1
             text, kb, _ = build_br_page(page)
@@ -4639,7 +4876,7 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
-            # Таймаут редактора аукционов (5 минут, тихое удаление)
+            # Таймаут редактора аукционов (5 мин, тихое удаление)
             with DB_LOCK:
                 astale = CONN.execute("SELECT user_id, peer_id, context FROM auction_state").fetchall()
             for row in astale:
@@ -4672,16 +4909,32 @@ def timer_loop():
                             CONN.execute("UPDATE auctions SET state='finished' WHERE id=?", (a2["id"],)); CONN.commit()
                         continue
                     start_lot(a2, 0)
-            # Завершение лотов по таймеру
+            # Завершение лотов + напоминания каждую минуту
             with DB_LOCK:
-                run = CONN.execute("SELECT * FROM auctions WHERE state='running' AND lot_deadline>0 AND lot_deadline<=?", (now,)).fetchall()
+                run = CONN.execute("SELECT * FROM auctions WHERE state='running'").fetchall()
             for a in run:
                 a = dict(a)
-                lot = get_lot(a["current_lot_id"]) if a["current_lot_id"] else None
+                if not a["current_lot_id"]:
+                    continue
+                lot = get_lot(a["current_lot_id"])
                 if not lot:
                     start_lot(a, a["current_lot_index"] or 0)
                     continue
-                finish_lot(a, lot)
+                remain = a["lot_deadline"] - now
+                if remain <= 0:
+                    finish_lot(a, lot)
+                    continue
+                last_rem = int(get_setting(0, "auc_rem_{}".format(lot["id"]), "0") or "0")
+                if now - last_rem >= 60:
+                    set_setting(0, "auc_rem_{}".format(lot["id"]), str(now))
+                    bid_id, buid, bamt = get_best_bid(lot["id"])
+                    mins_left = max(1, int(-(-remain // 60)))
+                    if buid:
+                        send_msg(a["peer_id"], "⏳ До конца торгов за лот «{}» осталось {} мин. Последняя ставка: {} от {}.".format(
+                            lot["name"], mins_left, fmt_rub(bamt), silent_mention_badge(buid, a["peer_id"])))
+                    else:
+                        send_msg(a["peer_id"], "⏳ До конца торгов за лот «{}» осталось {} мин. Ставок ещё нет — стартовая цена 20.000.000р.".format(
+                            lot["name"], mins_left))
             # Игры
             with DB_LOCK:
                 expired = CONN.execute("SELECT * FROM dice_games WHERE state='pending' AND created_at<=?", (now-60,)).fetchall()
