@@ -89,7 +89,7 @@ VALID_COMMANDS = [
     "топ", "браки", "брак", "развод", "онлайн", "др", "кто", "кто_я", "инфа", "монетка",
     "+правила", "-правила", "правила", "+приветствие", "-приветствие", "приветствие",
     "значок", "удалить_значок", "значки", "кнб", "чистка", "айди", "запретить_игры", "разрешить_игры",
-    "очистить_топ", "карта", "карта_редактировать", "очистить_карту",
+    "очистить_топ", "карта", "карта_редактировать", "редактор_карты", "очистить_карту",
     "запретить_редактор", "разрешить_редактор"
 ]
 
@@ -487,6 +487,36 @@ def increment_kmb_win(peer, user_id):
         CONN.execute("UPDATE message_stats SET kmb_wins=kmb_wins+1 WHERE user_id=? AND peer_id=?", (user_id, peer))
         CONN.commit()
 
+# ===== ЭКСКЛЮЗИВНЫЕ КАРТЫ =====
+def strict_template(name):
+    if not name: return None
+    for ext in (".jpg", ".png", ".jpeg"):
+        p = os.path.join(DATA_DIR, "card_male_{}{}".format(name, ext))
+        if os.path.isfile(p): return p
+    return None
+
+def get_excards(uid):
+    try: return json.loads(get_setting(0, "excards_{}".format(uid), "[]") or "[]")
+    except Exception: return []
+
+def set_excards(uid, lst):
+    set_setting(0, "excards_{}".format(uid), json.dumps(lst, ensure_ascii=False))
+
+def grant_excard(uid, name, apply=True):
+    lst = get_excards(uid)
+    if name not in lst:
+        lst.append(name)
+        set_excards(uid, lst)
+    if apply:
+        set_design(uid, exclusive=name)
+
+def revoke_excard(uid, name):
+    lst = [x for x in get_excards(uid) if x != name]
+    set_excards(uid, lst)
+    d = get_design(uid)
+    if d.get("exclusive") == name:
+        set_design(uid, exclusive="")
+
 # ===== КАРТОЧКА =====
 def get_card(user_id):
     with DB_LOCK:
@@ -730,7 +760,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
     if step == "design_photo_wait":
         if text.strip().lower() in ["дефолт", "default"]:
             set_design(sender, photo="")
-            reply_kb("✅ Возвращена дефолтная фотография карточки.", {"cmd": "card_edit_menu"}, "edit_menu")
+            reply_kb("✅ Возвращена дефолтная фотография карточки.", {"cmd": "card_edit_menu", "p": 2}, "edit_menu", {"p": 2})
             return True
         url = extract_photo_url({"attachments": attachments}) if attachments else None
         if not url:
@@ -738,7 +768,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             return True
         if save_design_photo(sender, url):
             set_design(sender, photo="custom")
-            reply_kb("✅ Твоя фотография установлена на карточку!", {"cmd": "card_edit_menu"}, "edit_menu")
+            reply_kb("✅ Твоя фотография установлена на карточку!", {"cmd": "card_edit_menu", "p": 2}, "edit_menu", {"p": 2})
         else:
             reply("❌ Не удалось скачать фото, попробуй другое.")
         return True
@@ -775,7 +805,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Неверный номер гаража: максимум 4 цифры, без нуля в начале.")
             return True
         set_card_field(sender, garage=text.strip())
-        reply_kb("✅ Гараж #{} успешно добавлен!".format(text.strip()), {"cmd": "card_edit_menu"}, "edit_menu")
+        reply_kb("✅ Гараж #{} успешно добавлен!".format(text.strip()), {"cmd": "card_edit_menu", "p": 1}, "edit_menu", {"p": 1})
         return True
 
     if step == "phone_input":
@@ -783,7 +813,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Неверный телефон: 4–7 цифр, без нуля в начале.")
             return True
         set_card_field(sender, phone=text.strip())
-        reply_kb("✅ Телефон {} успешно добавлен!".format(format_phone(text.strip())), {"cmd": "card_edit_menu"}, "edit_menu")
+        reply_kb("✅ Телефон {} успешно добавлен!".format(format_phone(text.strip())), {"cmd": "card_edit_menu", "p": 1}, "edit_menu", {"p": 1})
         return True
 
     if step == "name_input":
@@ -791,7 +821,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Неверный формат: Имя_Фамилия, только английские буквы, макс. 15+15 символов.")
             return True
         set_card_field(sender, name=text.strip())
-        reply_kb("✅ Имя {} успешно установлено!".format(text.strip()), {"cmd": "card_edit_menu"}, "edit_menu")
+        reply_kb("✅ Имя {} успешно установлено!".format(text.strip()), {"cmd": "card_edit_menu", "p": 1}, "edit_menu", {"p": 1})
         return True
 
     if step == "property_input":
@@ -799,7 +829,7 @@ def handle_card_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Введите сумму цифрами (например 12000000000).")
             return True
         set_card_field(sender, property_val=text.strip())
-        reply_kb("✅ Имущество оценено в {}!".format(format_property(text.strip())), {"cmd": "card_edit_menu"}, "edit_menu")
+        reply_kb("✅ Имущество оценено в {}!".format(format_property(text.strip())), {"cmd": "card_edit_menu", "p": 1}, "edit_menu", {"p": 1})
         return True
 
     return False
@@ -826,11 +856,13 @@ def clear_auction_state(user_id, peer_id):
         CONN.commit()
 
 def parse_auction_dt(s):
-    try:
-        dt = datetime.datetime.strptime(s.strip(), "%d.%m.%y %H:%M")
-        return dt.replace(tzinfo=MSK_TZ)
-    except Exception:
-        return None
+    for fmt in ("%d.%m.%y %H:%M", "%d.%m.%Y %H:%M"):
+        try:
+            dt = datetime.datetime.strptime(s.strip(), fmt)
+            return dt.replace(tzinfo=MSK_TZ)
+        except Exception:
+            continue
+    return None
 
 def fmt_rub(amount):
     n = int(round(amount))
@@ -1032,7 +1064,7 @@ LOT_PRICE_HINT = "цена: 300 = 300.000.000р, 99.5 = 99.500.000р, или п�
 AUCTION_STEPS = set(["create_peer", "create_name", "create_dt", "create_count", "create_lot", "create_photo",
                      "delete_peer", "edit_peer", "edit_dt", "edit_name", "edit_lot_num", "edit_lot_data",
                      "edit_lot_photo", "add_lot_data", "add_lot_photo", "announce_peer", "active_peer",
-                     "control_peer", "cancel_last_peer", "next_lot_peer"])
+                     "control_peer", "cancel_last_peer"])
 
 def auction_prompt(step, ctx):
     lots = ctx.get("lots") or []
@@ -1075,11 +1107,16 @@ def auction_prompt(step, ctx):
         return "Введите номер чата для настройки контроля:", auction_step_kb("menu")
     if step == "cancel_last_peer":
         return "Введите номер чата, где отменить последнюю ставку:", auction_step_kb("menu")
-    if step == "next_lot_peer":
-        return "Введите номер чата, где принудительно завершить текущий лот:", auction_step_kb("menu")
     return "Выберите действие:", auction_main_kb()
 
 def send_lot_message(peer, auction, lot):
+    att = lot.get("photo_att") or ""
+    if not att and lot.get("photo_path") and os.path.isfile(lot["photo_path"]):
+        att = upload_photo_file(peer, lot["photo_path"]) or ""
+        if att:
+            with DB_LOCK:
+                CONN.execute("UPDATE auction_lots SET photo_att=? WHERE id=?", (att, lot["id"]))
+                CONN.commit()
     seller = lot.get("seller") or silent_mention_badge(auction["created_by"], peer)
     txt = ("@all \n🏆 ЛОТ НА АУКЦИОН 🏆\n🟦 Black Russia • BLUE 🟦\n\n"
            "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1089,7 +1126,7 @@ def send_lot_message(peer, auction, lot):
            "━━━━━━━━━━━━━━━━━━━━\n\n"
            "🔥 Лот выставлен! Ждём ставок! 🔥\n\n"
            "━━━━━━━━━━━━━━━━━━━━").format(lot["name"], seller)
-    send_msg(peer, txt, attachments=lot.get("photo_att") or None)
+    send_msg(peer, txt, attachments=att or None)
 
 def start_lot(auction, idx):
     lots = get_lots(auction["id"])
@@ -1163,7 +1200,7 @@ def parse_lot_line(text):
     return name, min_price, seller
 
 def handle_stop_auction(peer, sender, raw):
-    m = re.search(r"\b(2\d{9})\b", raw)
+    m = re.search(r"(2\d{9})", raw)
     if not m:
         send_msg(peer, "❌ Формат: /стопаукцион (номер чата)")
         return
@@ -1180,7 +1217,7 @@ def handle_stop_auction(peer, sender, raw):
     send_msg(pid, "⛔ Аукцион принудительно остановлен аукционером.")
 
 def handle_cancel_last_bid(peer, sender, raw):
-    m = re.search(r"\b(2\d{9})\b", raw)
+    m = re.search(r"(2\d{9})", raw)
     if not m:
         set_auction_state(sender, peer, "cancel_last_peer", {})
         txt, kb = auction_prompt("cancel_last_peer", {})
@@ -1205,11 +1242,9 @@ def do_cancel_last_bid(peer, pid):
     send_msg(pid, "⚠️ Последняя ставка на лот «{}» отменена аукционером. {}".format(lot["name"], info))
 
 def handle_next_lot(peer, sender, raw):
-    m = re.search(r"\b(2\d{9})\b", raw)
+    m = re.search(r"(2\d{9})", raw)
     if not m:
-        set_auction_state(sender, peer, "next_lot_peer", {})
-        txt, kb = auction_prompt("next_lot_peer", {})
-        send_msg(peer, txt, keyboard=kb)
+        send_msg(peer, "❌ Формат: /некст лот (номер чата)")
         return
     do_next_lot(peer, int(m.group(1)))
 
@@ -1228,6 +1263,11 @@ def do_next_lot(peer, pid):
             CONN.execute("UPDATE auction_lots SET sold=0, winner_id=0, final_price=0 WHERE id=?", (lot["id"],))
             CONN.commit()
         send_msg(pid, "⏭️ Лот «{}» завершён аукционером: ставок не было.".format(lot["name"]))
+    elif amt < lot["min_price"]:
+        with DB_LOCK:
+            CONN.execute("UPDATE auction_lots SET sold=0, winner_id=0, final_price=? WHERE id=?", (amt, lot["id"]))
+            CONN.commit()
+        send_msg(pid, "⏭️ Лот «{}» не продан (завершено аукционером): цена не достигла минимальной. Последняя ставка - {}.".format(lot["name"], fmt_rub(amt)))
     else:
         with DB_LOCK:
             CONN.execute("UPDATE auction_lots SET sold=1, winner_id=?, final_price=? WHERE id=?", (uid, amt, lot["id"]))
@@ -1283,7 +1323,7 @@ AUCTIONEER_WELCOME = ("Вас назначили аукционером📈\n"
                       "/некст лот (номер чата) - завершить текущий лот и перейти к следующему.")
 
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\n"
-                     "Теперь вы можете использовать скрытые команды (только в личке со мной❗ и в чатах❗).\n"
+                     "Теперь вы можете использовать скрытые команды (в личке со мной❗ и в чатах❗).\n"
                      "/verify @ - подтвердить карту.\n"
                      "/deny @ - отменить подтверждение.\n"
                      "/card @ - посмотреть карту любого.\n"
@@ -1295,6 +1335,8 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
     state = get_auction_state(sender, peer)
     if not state: return False
     step = state["step"]
+    if step.startswith("promo_"):
+        return False
     ctx = state.get("context", {})
     prompt_cmid = ctx.get("msg_cmid") or cmid
     if time.time() - ctx.get("ts", 0) > 300:
@@ -1425,7 +1467,11 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Прикрепите фото лота или нажмите «Пропустить».\n\n" + txt, kb)
             return True
         path = save_auction_photo_file(url)
-        att = upload_photo_file(peer, path) if path else None
+        att = None
+        if path:
+            att = upload_photo_file(peer, path)
+            if not att:
+                att = upload_photo_file(peer, path)
         finish_photo_step(path, att)
         return True
 
@@ -1521,7 +1567,11 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Прикрепите фото или нажмите «Пропустить».\n\n" + txt, kb)
             return True
         path = save_auction_photo_file(url)
-        att = upload_photo_file(peer, path) if path else None
+        att = None
+        if path:
+            att = upload_photo_file(peer, path)
+            if not att:
+                att = upload_photo_file(peer, path)
         finish_photo_step(path, att)
         return True
 
@@ -1544,7 +1594,11 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
             reply("❌ Прикрепите фото или нажмите «Пропустить».\n\n" + txt, kb)
             return True
         path = save_auction_photo_file(url)
-        att = upload_photo_file(peer, path) if path else None
+        att = None
+        if path:
+            att = upload_photo_file(peer, path)
+            if not att:
+                att = upload_photo_file(peer, path)
         finish_photo_step(path, att)
         return True
 
@@ -1600,14 +1654,210 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         do_cancel_last_bid(peer, pid)
         return True
 
-    if step == "next_lot_peer":
-        pid = need_chat("next_lot_peer")
-        if pid is None: return True
+    return False
+
+# ===== ПРОМОКОДЫ =====
+def promo_menu_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Создать", "payload": json.dumps({"cmd": "promo_create"})}, "color": "positive"},
+         {"action": {"type": "callback", "label": "Удалить", "payload": json.dumps({"cmd": "promo_del_btn"})}, "color": "negative"}]]}
+
+def promo_kind_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Экс. карта", "payload": json.dumps({"cmd": "promo_kind_ex"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "promo_cancel"})}, "color": "negative"}]]}
+
+def promo_type_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Активации", "payload": json.dumps({"cmd": "promo_type_act"})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "По времени", "payload": json.dumps({"cmd": "promo_type_time"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "promo_cancel"})}, "color": "negative"}]]}
+
+def get_promo(code):
+    with DB_LOCK:
+        row = CONN.execute("SELECT * FROM promos WHERE code=?", (code,)).fetchone()
+    return dict(row) if row else None
+
+def open_promo_menu(peer, sender):
+    set_auction_state(sender, peer, "promo_menu", {})
+    send_msg(peer, "Выберите действие", keyboard=promo_menu_kb())
+
+def handle_promo_input(sender, peer, text, cmid=None, attachments=None):
+    state = get_auction_state(sender, peer)
+    if not state: return False
+    step = state["step"]
+    if not step.startswith("promo_"): return False
+    if sender not in (CREATOR_ID, LEADER_ID): return False
+    ctx = state.get("context", {})
+    if time.time() - ctx.get("ts", 0) > 300:
         clear_auction_state(sender, peer)
-        do_next_lot(peer, pid)
+        send_msg(peer, "⏰ Время редактора промокодов вышло (5 минут бездействия).")
+        return True
+
+    def reply(msg, kb=None):
+        send_msg(peer, msg, keyboard=kb)
+
+    if text.lower() in ["отмена", "отменить"]:
+        clear_auction_state(sender, peer)
+        reply("❌ Редактор промокодов закрыт.")
+        return True
+
+    if step == "promo_card":
+        name = text.strip()
+        if not strict_template(name):
+            reply("❌ Такого названия карты нет в папке бота (нет файла card_male_{}). Введите название карты:".format(name))
+            return True
+        ctx["card_name"] = name
+        set_auction_state(sender, peer, "promo_code", ctx)
+        reply("Придумайте промокод # (например #exclusive):")
+        return True
+
+    if step == "promo_code":
+        code = text.strip()
+        if not code.startswith("#"):
+            reply("❌ Промокод обязательно писать с #. Придумайте промокод #:")
+            return True
+        if len(code) < 2:
+            reply("❌ Слишком короткий промокод. Придумайте промокод #:")
+            return True
+        if get_promo(code):
+            reply("❌ Такой промокод уже существует. Придумайте промокод #:")
+            return True
+        ctx["code"] = code
+        set_auction_state(sender, peer, "promo_type", ctx)
+        reply("Выберите тип промокода", keyboard=promo_type_kb())
+        return True
+
+    if step == "promo_limit":
+        if not text.strip().isdigit() or int(text.strip()) < 1:
+            reply("❌ Введите число людей (цифрой):")
+            return True
+        n = int(text.strip())
+        with DB_LOCK:
+            CONN.execute("INSERT INTO promos(code, kind, card_name, max_act, act, expire_ts, created_by, created_at) VALUES(?,?,?,?,0,0,?,?)",
+                         (ctx["code"], "activations", ctx["card_name"], n, sender, int(time.time())))
+            CONN.commit()
+        clear_auction_state(sender, peer)
+        reply("✅ Промокод {} создан: экс. карта «{}», лимит {} активаций.".format(ctx["code"], ctx["card_name"], n))
+        return True
+
+    if step == "promo_expire":
+        dt = parse_auction_dt(text)
+        if not dt:
+            reply("❌ Неверный формат. Пример: 26.06.25 11:23")
+            return True
+        ts = int(dt.timestamp())
+        with DB_LOCK:
+            CONN.execute("INSERT INTO promos(code, kind, card_name, max_act, act, expire_ts, created_by, created_at) VALUES(?,?,?,?,0,?,?,?)",
+                         (ctx["code"], "time", ctx["card_name"], 0, ts, sender, int(time.time())))
+            CONN.commit()
+        clear_auction_state(sender, peer)
+        reply("✅ Промокод {} создан: экс. карта «{}», действует до {}.".format(ctx["code"], ctx["card_name"], text.strip()))
+        return True
+
+    if step == "promo_del":
+        code = text.strip()
+        if not code.startswith("#"):
+            code = "#" + code
+        row = get_promo(code)
+        if not row:
+            reply("❌ Промокод {} не найден. Введите название промокода который нужно удалить:".format(code))
+            return True
+        with DB_LOCK:
+            CONN.execute("DELETE FROM promo_used WHERE promo_id=?", (row["id"],))
+            CONN.execute("DELETE FROM promos WHERE id=?", (row["id"],))
+            CONN.commit()
+        clear_auction_state(sender, peer)
+        reply("✅ Промокод {} удалён.".format(code))
         return True
 
     return False
+
+def handle_promo_use(peer, sender, raw):
+    code = raw.strip().split()[0] if raw.strip() else ""
+    if not code:
+        send_msg(peer, "❌ Формат: /promo #промокод")
+        return
+    if not code.startswith("#"):
+        code = "#" + code
+    row = get_promo(code)
+    if not row:
+        send_msg(peer, "❌ Промокод {} не найден.".format(code))
+        return
+    now = int(time.time())
+    if row["kind"] == "time" and row["expire_ts"] and now > row["expire_ts"]:
+        send_msg(peer, "❌ Промокод {} просрочен.".format(code))
+        return
+    if row["kind"] == "activations" and row["act"] >= row["max_act"]:
+        send_msg(peer, "❌ У промокода {} закончился лимит активаций.".format(code))
+        return
+    with DB_LOCK:
+        used = CONN.execute("SELECT 1 FROM promo_used WHERE promo_id=? AND user_id=?", (row["id"], sender)).fetchone()
+    if used:
+        send_msg(peer, "❌ Вы уже активировали этот промокод.")
+        return
+    if not strict_template(row["card_name"]):
+        send_msg(peer, "❌ Ошибка: карта промокода не найдена в папке бота.")
+        return
+    with DB_LOCK:
+        CONN.execute("INSERT OR IGNORE INTO promo_used(promo_id, user_id, used_at) VALUES(?,?,?)", (row["id"], sender, now))
+        CONN.execute("UPDATE promos SET act=act+1 WHERE id=?", (row["id"],))
+        CONN.commit()
+    grant_excard(sender, row["card_name"], apply=True)
+    send_msg(peer, "✅ Промокод {} активирован! Эксклюзивная карта «{}» добавлена в раздел «Эксклюзив» и применена.".format(code, row["card_name"]))
+    send_card_to(peer, sender)
+
+def handle_ex_card(peer, sender, raw, grant):
+    targets = extract_targets(raw, 0)
+    name = raw
+    name = re.sub(r"\[id\d+\|[^\]]*\]", " ", name)
+    name = re.sub(r"@id\d+", " ", name, flags=re.I)
+    name = re.sub(r"https?://vk\.(?:com|ru)/[a-zA-Z0-9._]+", " ", name)
+    name = re.sub(r"\b\d{5,}\b", " ", name)
+    name = " ".join(name.split())
+    if not targets or not name:
+        send_msg(peer, "❌ Формат: {} @юзер <название карты>".format("/экс карта" if grant else "/забрать карту"))
+        return
+    t = targets[0]
+    if grant:
+        if not strict_template(name):
+            send_msg(peer, "❌ Такого названия карты нет в папке бота: {}.".format(name))
+            return
+        grant_excard(t, name, apply=True)
+        send_msg(peer, "✅ {} выдана эксклюзивная карта «{}».".format(silent_mention_badge(t, peer), name))
+    else:
+        revoke_excard(t, name)
+        send_msg(peer, "✅ У {} забрана эксклюзивная карта «{}».".format(silent_mention_badge(t, peer), name))
+
+def handle_voice(peer, sender, msg_obj, raw):
+    reply = msg_obj.get("reply_message") or {}
+    if not reply.get("from_id"):
+        send_msg(peer, "❌ Ответьте на сообщение: /voice [номер чата]")
+        return
+    rtext = reply.get("text", "") or ""
+    atts = []
+    for a in reply.get("attachments", []) or []:
+        if a.get("type") == "photo":
+            ph = a.get("photo", {})
+            if ph.get("owner_id") and ph.get("id"):
+                atts.append("photo{}_{}".format(ph["owner_id"], ph["id"]))
+    m = re.search(r"(2\d{9})", raw or "")
+    if m:
+        targets = [int(m.group(1))]
+    else:
+        targets = get_all_bot_chats()
+    ok = 0
+    for t in targets:
+        sent = False
+        if atts:
+            sent = send_msg(t, rtext, attachments=",".join(atts))
+        if not sent:
+            sent = send_msg(t, rtext if rtext else "📷")
+            if not sent and rtext:
+                sent = send_msg(t, rtext)
+        if sent: ok += 1
+        time.sleep(0.3)
+    send_msg(peer, "✅ Рассылка завершена: чатов {}.".format(ok))
 
 # ===== ШРИФТ =====
 FONT_CACHE = os.path.join(DATA_DIR, "card_font_cyr.ttf")
@@ -1796,7 +2046,12 @@ def render_card(user_id):
     if not PIL_OK: return None
     card = get_card(user_id)
     design = get_design(user_id)
-    template = card_template_path(design.get("color", "red"))
+    template = None
+    ex = design.get("exclusive") or ""
+    if ex:
+        template = strict_template(ex)
+    if not template:
+        template = card_template_path(design.get("color", "red"))
     if not template: return None
     img = Image.open(template).convert("RGB")
     W, H = img.size
@@ -1809,6 +2064,7 @@ def render_card(user_id):
     draw = ImageDraw.Draw(img)
     name_rgb = TEXT_COLORS.get(design.get("name_color"), (255, 255, 255))
     fields_rgb = TEXT_COLORS.get(design.get("fields_color"), (30, 30, 30))
+    bold = 1 if design.get("bold") == "1" else 0
 
     def text_w(t, f):
         try: return draw.textlength(t, font=f)
@@ -1832,7 +2088,10 @@ def render_card(user_id):
         ty = y + (h - th) / 2 - yoff
         tw = text_w(text, f)
         tx = x + (w - tw) / 2 if center_x else x + pad
-        draw.text((tx, ty), text, font=f, fill=color)
+        try:
+            draw.text((tx, ty), text, font=f, fill=color, stroke_width=bold)
+        except TypeError:
+            draw.text((tx, ty), text, font=f, fill=color)
 
     biz = format_businesses(json.loads(card["businesses"] or "[]")) or "Неизвестно"
     realty = format_realty(json.loads(card["realty"] or "[]")) or "Неизвестно"
@@ -1926,6 +2185,12 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT, lot_id INTEGER, user_id INTEGER, amount REAL, bid_time INTEGER)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS auction_state (
             user_id INTEGER, peer_id INTEGER, step TEXT, context TEXT, PRIMARY KEY(user_id, peer_id))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS promos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, kind TEXT, card_name TEXT,
+            max_act INTEGER DEFAULT 0, act INTEGER DEFAULT 0, expire_ts INTEGER DEFAULT 0,
+            created_by INTEGER, created_at INTEGER)""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS promo_used (
+            promo_id INTEGER, user_id INTEGER, used_at INTEGER, PRIMARY KEY(promo_id, user_id))""")
         migrations = [
             "ALTER TABLE members ADD COLUMN warn_durations TEXT DEFAULT ''",
             "ALTER TABLE members ADD COLUMN last_vote_time INTEGER DEFAULT 0",
@@ -2289,9 +2554,10 @@ def ls_help_text(user_id):
     lines = [
         "📖 Команды, доступные тебе в ЛС с ботом:",
         "1. Мд карта — посмотреть свою карту.",
-        "2. Мд карта редактировать — редактировать карту (данные, цвет, фото).",
+        "2. Мд редактор карты (тихо: мд карта редактировать) — редактировать карту (данные, цвета, фото, текст, эксклюзив).",
         "3. Мд очистить карту [параметр] — очистить свою карту (параметры: бизнесы, недвижимость, имущество, гараж, телефон, фото, имя; без параметра — всё кроме цвета).",
-        "4. Мд команды — этот список.",
+        "4. /promo #промокод — активировать промокод.",
+        "5. Мд команды — этот список.",
     ]
     if is_inspector(user_id) or user_id in (CREATOR_ID, LEADER_ID):
         lines += [
@@ -2319,6 +2585,10 @@ def ls_help_text(user_id):
             "/проверяющие - список проверяющих.",
             "/аукционер @ - назначить/снять аукционера.",
             "/аукционеры - список аукционеров.",
+            "/cpromo - редактор промокодов.",
+            "/voice [номер чата] (ответом) - рассылка сообщения с фото.",
+            "/экс карта @ <название> - выдать эксклюзивную карту.",
+            "/забрать карту @ <название> - забрать эксклюзивную карту.",
             "/setkto @ <слова> <номер чата> - поставить статус «кто я».",
             "/чаты - список бесед бота.",
             "бр форум <ссылка> / бр админы <ссылка> - установить ссылки.",
@@ -2435,6 +2705,7 @@ HELP_GENERAL_TEXT = (
     "7. Мд топ — топы чата.\n"
     "8. Мд онлайн — кто сейчас онлайн.\n"
     "9. Мд правила — правила чата.\n"
+    "10. Мд редактор карты — редактор личной карточки.\n"
     "\n"
     "Информационные💼:\n"
     "1. Мд парк — информация об автопарке.\n"
@@ -2463,6 +2734,7 @@ HELP_ADMIN_TEXT = (
     "5. Мд назначить @игрок <ранг> — ранг 1.\n"
     "6. Мд снять @игрок — снять роль.\n"
     "7. Мд чистка @игрок <число> — удалить сообщения (макс 50, КД 30 сек).\n"
+    "8. Мд карта — своя карта (чужие смотрят только проверяющие через /card).\n"
     "Имеет возможности прошлых ролей."
 )
 HELP_REMIND_TEXT = (
@@ -2502,7 +2774,7 @@ HELP_BR_TEXT = (
     "3. Мд бр админы — актуальная таблица администрации BR BLUE🔹.\n\n"
     "🗃️Личная карточка:\n"
     "1. Мд карта — выводит фото карты.\n"
-    "2. Мд карта редактировать — редактирование, цвет и фото.\n"
+    "2. Мд редактор карты — редактирование: данные, цвет, фото, текст, эксклюзив.\n"
     "3. Мд очистить карту [параметр] — очистить свою карту.\n"
     "(параметры: бизнесы, недвижимость, имущество, гараж, телефон, фото, имя. "
     "(если не указать то очистит все кроме цвета).\n\n"
@@ -2577,27 +2849,49 @@ def text_colors_kb(sel_cmd, menu_cmd, page=1):
     nav = []
     if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": menu_cmd, "p": page - 1})}, "color": "primary"})
     if page < pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": menu_cmd, "p": page + 1})}, "color": "primary"})
-    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "primary"})
     rows.append(nav)
     return {"inline": True, "buttons": rows}
 
-def card_edit_main_kb():
-    P = lambda f: json.dumps({"cmd": "card_edit", "f": f, "field": f})
-    return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "Бизнесы", "payload": P("biz")}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Недвижимость", "payload": P("realty")}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Имущество", "payload": P("prop")}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Гараж", "payload": P("garage")}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Телефон", "payload": P("phone")}, "color": "primary"},
-         {"action": {"type": "callback", "label": "Имя", "payload": P("name")}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Цвет карточки", "payload": json.dumps({"cmd": "card_design_colors", "p": 1})}, "color": "secondary"},
-         {"action": {"type": "callback", "label": "Фото карточки", "payload": json.dumps({"cmd": "card_design_photo"})}, "color": "secondary"}],
-        [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_name_colors", "p": 1})}, "color": "secondary"},
-         {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_field_colors", "p": 1})}, "color": "secondary"}]]}
+CARD_EDIT_ENTRIES = [
+    ("biz", "Бизнесы"), ("realty", "Недвижимость"), ("prop", "Имущество"),
+    ("garage", "Гараж"), ("phone", "Телефон"), ("name", "Имя"),
+    ("design_colors", "Цвет карточки"), ("design_photo", "Фото карточки"),
+    ("name_colors", "Цвет имени"), ("field_colors", "Цвет полей"),
+    ("text_format", "Формат текста"), ("exclusive", "Эксклюзив"),
+]
+CARD_EDIT_PER_PAGE = 6
 
-def card_edit_fallback_kb():
+def card_edit_pages():
+    return max(1, -(-len(CARD_EDIT_ENTRIES) // CARD_EDIT_PER_PAGE))
+
+def card_edit_page_kb(p=1):
+    pages = card_edit_pages()
+    p = max(1, min(p, pages))
+    chunk = CARD_EDIT_ENTRIES[(p - 1) * CARD_EDIT_PER_PAGE: p * CARD_EDIT_PER_PAGE]
+    rows = []
+    for i in range(0, len(chunk), 2):
+        pair = chunk[i:i+2]
+        rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "card_edit_entry", "f": key, "p": p})}, "color": "primary"} for key, lab in pair])
+    nav = []
+    if p > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_edit_menu", "p": p - 1})}, "color": "secondary"})
+    if p < pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_edit_menu", "p": p + 1})}, "color": "secondary"})
+    if nav: rows.append(nav)
+    rows.append([{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}])
+    return {"inline": True, "buttons": rows}
+
+def card_edit_main_kb():
+    return card_edit_page_kb(1)
+
+def text_format_kb():
     return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
+        [{"action": {"type": "callback", "label": "Жирный шрифт", "payload": json.dumps({"cmd": "card_text_bold"})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Обычный шрифт", "payload": json.dumps({"cmd": "card_text_normal"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+
+def ex_back_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
 
 def card_bus_kb(page=1):
     page = max(1, min(page, BUS_PAGES))
@@ -2608,7 +2902,7 @@ def card_bus_kb(page=1):
     nav = []
     if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_bus_menu", "p": page - 1})}, "color": "primary"})
     if page < BUS_PAGES: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_bus_menu", "p": page + 1})}, "color": "primary"})
-    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 1})}, "color": "primary"})
     nav.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
     rows.append(nav)
     return {"inline": True, "buttons": rows}
@@ -2618,7 +2912,7 @@ def card_realty_kb():
         [{"action": {"type": "callback", "label": "Дом", "payload": json.dumps({"cmd": "card_realty", "t": "Дом", "type": "Дом"})}, "color": "secondary"},
          {"action": {"type": "callback", "label": "Квартира", "payload": json.dumps({"cmd": "card_realty", "t": "Квартира", "type": "Квартира"})}, "color": "secondary"}],
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"},
-         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"}]]}
+         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 1})}, "color": "primary"}]]}
 
 def card_input_kb(back_cmd, back_page=None):
     back_payload = {"cmd": back_cmd}
@@ -2637,7 +2931,7 @@ def design_colors_kb(page=1):
     nav = []
     if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_design_colors", "p": page - 1})}, "color": "primary"})
     if page < pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_design_colors", "p": page + 1})}, "color": "primary"})
-    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"})
+    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "primary"})
     nav.append({"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"})
     rows.append(nav)
     return {"inline": True, "buttons": rows}
@@ -2645,7 +2939,7 @@ def design_colors_kb(page=1):
 def design_photo_kb():
     return {"inline": True, "buttons": [[
         {"action": {"type": "callback", "label": "Дефолт", "payload": json.dumps({"cmd": "card_design_default"})}, "color": "primary"},
-        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu"})}, "color": "primary"},
+        {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "primary"},
         {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "card_cancel"})}, "color": "negative"}]]}
 
 def expire_stale_games(peer):
@@ -2655,23 +2949,6 @@ def expire_stale_games(peer):
         CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='playing' AND created_at<=?", (peer, now - 600))
         CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
         CONN.commit()
-
-def open_edit_menu(peer, sender):
-    msg_id = None
-    try:
-        msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, keyboard=json.dumps(card_edit_main_kb()), random_id=random.getrandbits(31))
-    except Exception as e:
-        print("open_edit_menu kb send fail:", e)
-    if msg_id is None:
-        try:
-            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, keyboard=json.dumps(card_edit_fallback_kb()), random_id=random.getrandbits(31))
-        except Exception as e:
-            print("open_edit_menu fallback send fail:", e)
-    if msg_id is None:
-        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
-        return
-    cmid = resolve_cmid_retry(peer, msg_id)
-    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id})
 
 def handle_event(event):
     try:
@@ -2712,6 +2989,47 @@ def handle_event(event):
             c = dict(extra or {})
             c["msg_cmid"] = cmid
             set_card_state(user_id, peer_id, step, c)
+
+        # ===== ПРОМОКОДЫ: КОЛБЭКИ (только босс) =====
+        if cmd.startswith("promo_"):
+            if user_id not in (CREATOR_ID, LEADER_ID):
+                snackbar("⛔ Недоступно!"); return
+            state = get_auction_state(user_id, peer_id)
+            if cmd == "promo_cancel":
+                if state: clear_auction_state(user_id, peer_id)
+                show("❌ Редактор промокодов закрыт.", None)
+                snackbar("❌ Закрыто"); return
+            if cmd == "promo_create":
+                set_auction_state(user_id, peer_id, "promo_kind", {"msg_cmid": cmid})
+                show("На что будет промокод?", promo_kind_kb()); snackbar("✅ Выберите")
+                return
+            if cmd == "promo_del_btn":
+                set_auction_state(user_id, peer_id, "promo_del", {"msg_cmid": cmid})
+                show("Введите название промокода который нужно удалить:", None); snackbar("✅ Введите")
+                return
+            if cmd == "promo_kind_ex":
+                if not state: snackbar("⛔ Редактор не открыт"); return
+                ctx = state.get("context", {})
+                ctx["kind"] = "excard"; ctx["msg_cmid"] = cmid
+                set_auction_state(user_id, peer_id, "promo_card", ctx)
+                show("Введите название карты:", None); snackbar("✅ Введите")
+                return
+            if cmd == "promo_type_act":
+                if not state: snackbar("⛔ Редактор не открыт"); return
+                ctx = state.get("context", {})
+                ctx["msg_cmid"] = cmid
+                set_auction_state(user_id, peer_id, "promo_limit", ctx)
+                show("Введите число: сколько людей смогут использовать промокод:", None); snackbar("✅ Введите")
+                return
+            if cmd == "promo_type_time":
+                if not state: snackbar("⛔ Редактор не открыт"); return
+                ctx = state.get("context", {})
+                ctx["msg_cmid"] = cmid
+                set_auction_state(user_id, peer_id, "promo_expire", ctx)
+                show("Введите дату и время до окончания действия промокода (пример: 26.06.25 11:23):", None); snackbar("✅ Введите")
+                return
+            snackbar("❌ Неизвестная кнопка промо")
+            return
 
         # ===== АУКЦИОНЫ: КОЛБЭКИ =====
         if cmd.startswith("auction_"):
@@ -2951,9 +3269,13 @@ def handle_event(event):
                 return
             try:
                 if cmd in ("card_main", "card_edit_menu", "card_back_main", "card_design_main"):
-                    set_state("edit_menu")
-                    show(MAIN_CARD_TEXT, card_edit_main_kb()); snackbar("✅ Меню")
-                elif cmd in ("card_edit", "card_field"):
+                    p = int(payload.get("p", 1) or 1)
+                    set_state("edit_menu", {"p": p})
+                    pages = card_edit_pages()
+                    p = max(1, min(p, pages))
+                    show("{} (стр. {}/{}):".format(MAIN_CARD_TEXT, p, pages), card_edit_page_kb(p))
+                    snackbar("✅ Меню")
+                elif cmd in ("card_edit_entry", "card_edit", "card_field"):
                     f = payload.get("f") or payload.get("field") or ""
                     if f == "biz":
                         set_state("bus_menu", {"p": 1})
@@ -2963,16 +3285,44 @@ def handle_event(event):
                         show("Что вы хотите добавить? (макс. 2 недвижимости)", card_realty_kb())
                     elif f == "prop":
                         set_state("property_input")
-                        show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
+                        show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu", 1))
                     elif f == "garage":
                         set_state("garage_input")
-                        show("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu"))
+                        show("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu", 1))
                     elif f == "phone":
                         set_state("phone_input")
-                        show("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu"))
+                        show("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu", 1))
                     elif f == "name":
                         set_state("name_input")
-                        show("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu"))
+                        show("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu", 1))
+                    elif f == "design_colors":
+                        set_state("design_color", {"p": 1})
+                        show(design_colors_text(1), design_colors_kb(1))
+                    elif f == "design_photo":
+                        set_state("design_photo_wait")
+                        show(DESIGN_PHOTO_TEXT, design_photo_kb())
+                    elif f == "name_colors":
+                        set_state("edit_menu", {"p": 2})
+                        show("Выберите цвет имени (стр. 1/{}):".format(text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", 1))
+                    elif f == "field_colors":
+                        set_state("edit_menu", {"p": 2})
+                        show("Выберите цвет полей (стр. 1/{}):".format(text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", 1))
+                    elif f == "text_format":
+                        set_state("edit_menu", {"p": 2})
+                        show("Выберите действия с текстом", text_format_kb())
+                    elif f == "exclusive":
+                        lst = get_excards(user_id)
+                        set_state("edit_menu", {"p": 2})
+                        if not lst:
+                            show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду (/promo #код) или от создателя.", ex_back_kb())
+                        else:
+                            rows = []
+                            for nm in lst[:6]:
+                                rows.append([{"action": {"type": "callback", "label": nm[:18], "payload": json.dumps({"cmd": "card_ex_apply", "name": nm})}, "color": "primary"}])
+                            rows.append([{"action": {"type": "callback", "label": "Снять эксклюзив", "payload": json.dumps({"cmd": "card_ex_clear"})}, "color": "negative"},
+                                         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}])
+                            show("🎩 Ваши эксклюзивные карты (нажмите для применения):", {"inline": True, "buttons": rows})
+                        snackbar("✅ Эксклюзив")
                     else:
                         snackbar("⚠️ debug payload: {}".format(str(payload)[:80])); return
                     snackbar("✅ Выполнено")
@@ -3014,19 +3364,19 @@ def handle_event(event):
                     snackbar("✅ Введите номер")
                 elif cmd == "card_garage":
                     set_state("garage_input")
-                    show("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu"))
+                    show("Введите номер гаража (макс. 4 цифры, без нуля в начале):", card_input_kb("card_edit_menu", 1))
                     snackbar("✅ Введите номер")
                 elif cmd == "card_phone":
                     set_state("phone_input")
-                    show("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu"))
+                    show("Введите номер телефона (4–7 цифр, без нуля в начале):", card_input_kb("card_edit_menu", 1))
                     snackbar("✅ Введите номер")
                 elif cmd == "card_name":
                     set_state("name_input")
-                    show("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu"))
+                    show("Введите имя формата Имя_Фамилия (англ. буквы, макс. 15+15):", card_input_kb("card_edit_menu", 1))
                     snackbar("✅ Введите имя")
                 elif cmd in ("card_prop", "card_property"):
                     set_state("property_input")
-                    show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu"))
+                    show("Введите сумму, в которую оцениваете имущество (только цифры):", card_input_kb("card_edit_menu", 1))
                     snackbar("✅ Введите сумму")
                 elif cmd == "card_design_colors":
                     p = int(payload.get("p", 1) or 1)
@@ -3037,13 +3387,13 @@ def handle_event(event):
                     if key not in ALL_COLOR_KEYS:
                         snackbar("❌ Неизвестный цвет"); return
                     p = int(payload.get("p", 1) or 1)
-                    set_design(user_id, color=key)
+                    set_design(user_id, color=key, exclusive="")
                     set_state("design_color", {"p": p})
                     show("✅ Цвет применён!\n" + design_colors_text(p), design_colors_kb(p))
                     snackbar("✅ Цвет применён")
                 elif cmd == "card_name_colors":
                     p = int(payload.get("p", 1) or 1)
-                    set_state("edit_menu")
+                    set_state("edit_menu", {"p": 2})
                     show("Выберите цвет имени (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", p))
                     snackbar("✅ Цвет имени")
                 elif cmd == "card_name_color":
@@ -3051,29 +3401,68 @@ def handle_event(event):
                     if key not in TEXT_COLORS:
                         snackbar("❌ Неизвестный цвет"); return
                     set_design(user_id, name_color=key)
-                    set_state("edit_menu")
+                    set_state("edit_menu", {"p": 2})
                     show("✅ Цвет имени применён!\nВыберите цвет имени (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", p))
                     snackbar("✅ Применено")
                 elif cmd == "card_field_colors":
                     p = int(payload.get("p", 1) or 1)
-                    set_state("edit_menu")
-                    show("Выберите цвет полей (текст в бизнесы и т.д.) (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", p))
+                    set_state("edit_menu", {"p": 2})
+                    show("Выберите цвет полей (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", p))
                     snackbar("✅ Цвет полей")
                 elif cmd == "card_field_color":
                     key = payload.get("key", ""); p = int(payload.get("p", 1) or 1)
                     if key not in TEXT_COLORS:
                         snackbar("❌ Неизвестный цвет"); return
                     set_design(user_id, fields_color=key)
-                    set_state("edit_menu")
+                    set_state("edit_menu", {"p": 2})
                     show("✅ Цвет полей применён!\nВыберите цвет полей (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", p))
                     snackbar("✅ Применено")
+                elif cmd == "card_text_format":
+                    set_state("edit_menu", {"p": 2})
+                    show("Выберите действия с текстом", text_format_kb()); snackbar("✅ Формат")
+                elif cmd == "card_text_bold":
+                    set_design(user_id, bold="1")
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Жирный шрифт включён!\nВыберите действия с текстом", text_format_kb())
+                    snackbar("✅ Жирный")
+                elif cmd == "card_text_normal":
+                    set_design(user_id, bold="0")
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Обычный шрифт включён!\nВыберите действия с текстом", text_format_kb())
+                    snackbar("✅ Обычный")
+                elif cmd == "card_exclusive":
+                    lst = get_excards(user_id)
+                    set_state("edit_menu", {"p": 2})
+                    if not lst:
+                        show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду (/promo #код) или от создателя.", ex_back_kb())
+                    else:
+                        rows = []
+                        for nm in lst[:6]:
+                            rows.append([{"action": {"type": "callback", "label": nm[:18], "payload": json.dumps({"cmd": "card_ex_apply", "name": nm})}, "color": "primary"}])
+                        rows.append([{"action": {"type": "callback", "label": "Снять эксклюзив", "payload": json.dumps({"cmd": "card_ex_clear"})}, "color": "negative"},
+                                     {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}])
+                        show("🎩 Ваши эксклюзивные карты (нажмите для применения):", {"inline": True, "buttons": rows})
+                    snackbar("✅ Эксклюзив")
+                elif cmd == "card_ex_apply":
+                    nm = payload.get("name", "")
+                    if not strict_template(nm) or nm not in get_excards(user_id):
+                        snackbar("❌ Карта недоступна"); return
+                    set_design(user_id, exclusive=nm)
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Эксклюзивная карта «{}» применена!".format(nm), ex_back_kb())
+                    snackbar("✅ Применено")
+                elif cmd == "card_ex_clear":
+                    set_design(user_id, exclusive="")
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Эксклюзив снят, вернулась обычная карта.", ex_back_kb())
+                    snackbar("✅ Снято")
                 elif cmd == "card_design_photo":
                     set_state("design_photo_wait")
                     show(DESIGN_PHOTO_TEXT, design_photo_kb()); snackbar("✅ Жду фото")
                 elif cmd == "card_design_default":
                     set_design(user_id, photo="")
-                    set_state("edit_menu")
-                    show("✅ Возвращена дефолтная фотография.\n" + MAIN_CARD_TEXT, card_edit_main_kb())
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Возвращена дефолтная фотография.\nВыберите действие:", card_edit_page_kb(2))
                     snackbar("✅ Дефолт")
                 else:
                     snackbar("❌ Неизвестная кнопка карточки")
@@ -3545,6 +3934,23 @@ LEGEND_SETKTO = {"пират": "Пират🏴‍️", "босс": "Босс �
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
 
+def open_edit_menu(peer, sender):
+    msg_id = None
+    try:
+        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
+    except Exception as e:
+        print("open_edit_menu kb send fail:", e)
+    if msg_id is None:
+        try:
+            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
+        except Exception as e:
+            print("open_edit_menu plain send fail:", e)
+    if msg_id is None:
+        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
+        return
+    cmid = resolve_cmid_retry(peer, msg_id)
+    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
+
 def handle_ls_card(peer, sender, cmd, args):
     if cmd == "карта":
         send_card_to(peer, sender)
@@ -3717,6 +4123,10 @@ def handle_message(peer, sender, text, msg_obj):
 
     if peer < 2000000000:
         low = text.strip().lower()
+        first_tok = low.split()[0] if low.split() else ""
+        if first_tok == "/promo":
+            handle_promo_use(peer, sender, text.strip()[len("/promo"):].strip())
+            return
         is_boss = sender in (CREATOR_ID, LEADER_ID) and peer == sender
         is_insp = is_inspector(sender) and peer == sender
         is_auct = is_auctioneer(sender) and peer == sender
@@ -3794,18 +4204,28 @@ def handle_message(peer, sender, text, msg_obj):
                 handle_verify(peer, sender, text[len("/deny"):].strip(), False)
                 return
             elif low.startswith("/стопаукцион"):
-                handle_stop_auction(peer, sender, text[len("/стопаукцион"):].strip())
+                handle_stop_auction(peer, sender, text)
                 return
             elif low.startswith("/отменить ласт ставку") or low.startswith("/отменить последнюю ставку"):
-                pref = "/отменить ласт ставку" if low.startswith("/отменить ласт ставку") else "/отменить последнюю ставку"
-                handle_cancel_last_bid(peer, sender, text[len(pref):].strip())
+                handle_cancel_last_bid(peer, sender, text)
                 return
             elif low.startswith("/некст лот") or low.startswith("/next lot"):
-                pref = "/некст лот" if low.startswith("/некст лот") else "/next lot"
-                handle_next_lot(peer, sender, text[len(pref):].strip())
+                handle_next_lot(peer, sender, text)
                 return
             elif low == "/аукцион":
                 open_auction_menu(peer, sender)
+                return
+            elif low == "/cpromo":
+                open_promo_menu(peer, sender)
+                return
+            elif low.startswith("/voice"):
+                handle_voice(peer, sender, msg_obj, text[len("/voice"):].strip())
+                return
+            elif low.startswith("/экс карта"):
+                handle_ex_card(peer, sender, text[len("/экс карта"):].strip(), True)
+                return
+            elif low.startswith("/забрать карту"):
+                handle_ex_card(peer, sender, text[len("/забрать карту"):].strip(), False)
                 return
             elif text.strip().startswith("/"):
                 handle_creator_ls(peer, text)
@@ -3820,13 +4240,11 @@ def handle_message(peer, sender, text, msg_obj):
             elif is_insp and low.startswith("/deny"):
                 handle_verify(peer, sender, text[len("/deny"):].strip(), False); return
             elif is_auct and low.startswith("/стопаукцион"):
-                handle_stop_auction(peer, sender, text[len("/стопаукцион"):].strip()); return
+                handle_stop_auction(peer, sender, text); return
             elif is_auct and (low.startswith("/отменить ласт ставку") or low.startswith("/отменить последнюю ставку")):
-                pref = "/отменить ласт ставку" if low.startswith("/отменить ласт ставку") else "/отменить последнюю ставку"
-                handle_cancel_last_bid(peer, sender, text[len(pref):].strip()); return
+                handle_cancel_last_bid(peer, sender, text); return
             elif is_auct and (low.startswith("/некст лот") or low.startswith("/next lot")):
-                pref = "/некст лот" if low.startswith("/некст лот") else "/next lot"
-                handle_next_lot(peer, sender, text[len(pref):].strip()); return
+                handle_next_lot(peer, sender, text); return
             elif is_auct and low == "/аукцион":
                 open_auction_menu(peer, sender); return
             elif low.startswith("/"):
@@ -3838,7 +4256,7 @@ def handle_message(peer, sender, text, msg_obj):
             pn = first[3:].strip().split()
             if pn:
                 c2 = "_".join(pn[:2])
-                if c2 == "карта_редактировать":
+                if c2 == "карта_редактировать" or c2 == "редактор_карты":
                     handle_ls_card(peer, sender, "карта_редактировать", pn[2:]); return
                 if c2 == "очистить_карту":
                     do_clear_card_command(peer, sender, pn[2:]); return
@@ -3854,6 +4272,8 @@ def handle_message(peer, sender, text, msg_obj):
         if handle_card_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
             return
         if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
+            return
+        if handle_promo_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")):
             return
         return
 
@@ -5059,9 +5479,9 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "карта":
         send_card_to(peer, sender)
 
-    elif cmd == "карта_редактировать":
+    elif cmd in ("карта_редактировать", "редактор_карты"):
         if args:
-            send_msg(peer, "❌ У команды `Мд карта редактировать` нет параметров.")
+            send_msg(peer, "❌ У команды `Мд редактор карты` нет параметров.")
             return
         if get_setting(peer, "card_edit_disabled", "0") == "1":
             send_msg(peer, "❌ Редактирование карт в данном чате запрещено, используйте в ЛС с ботом.")
@@ -5093,7 +5513,7 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
-            # Таймаут редактора аукционов (5 мин, тихое удаление меню)
+            # Таймаут редактора аукционов/промо (5 мин, тихое удаление меню)
             with DB_LOCK:
                 astale = CONN.execute("SELECT user_id, peer_id, context FROM auction_state").fetchall()
             for row in astale:
