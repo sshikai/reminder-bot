@@ -490,9 +490,13 @@ def increment_kmb_win(peer, user_id):
 # ===== ЭКСКЛЮЗИВНЫЕ КАРТЫ =====
 def strict_template(name):
     if not name: return None
-    for ext in (".jpg", ".png", ".jpeg"):
-        p = os.path.join(DATA_DIR, "card_male_{}{}".format(name, ext))
-        if os.path.isfile(p): return p
+    nm = name.strip()
+    if nm.lower().endswith((".png", ".jpg", ".jpeg")):
+        nm = nm.rsplit(".", 1)[0]
+    for base in (nm, "card_male_{}".format(nm)):
+        for ext in (".png", ".jpg", ".jpeg"):
+            p = os.path.join(DATA_DIR, base + ext)
+            if os.path.isfile(p): return p
     return None
 
 def get_excards(uid):
@@ -1704,8 +1708,10 @@ def handle_promo_input(sender, peer, text, cmid=None, attachments=None):
 
     if step == "promo_card":
         name = text.strip()
+        if name.lower().endswith((".png", ".jpg", ".jpeg")):
+            name = name.rsplit(".", 1)[0]
         if not strict_template(name):
-            reply("❌ Такого названия карты нет в папке бота (нет файла card_male_{}). Введите название карты:".format(name))
+            reply("❌ Такого названия карты нет в папке бота ({}). Введите название карты:".format(name))
             return True
         ctx["card_name"] = name
         set_auction_state(sender, peer, "promo_code", ctx)
@@ -1815,6 +1821,8 @@ def handle_ex_card(peer, sender, raw, grant):
     name = re.sub(r"https?://vk\.(?:com|ru)/[a-zA-Z0-9._]+", " ", name)
     name = re.sub(r"\b\d{5,}\b", " ", name)
     name = " ".join(name.split())
+    if name.lower().endswith((".png", ".jpg", ".jpeg")):
+        name = name.rsplit(".", 1)[0]
     if not targets or not name:
         send_msg(peer, "❌ Формат: {} @юзер <название карты>".format("/экс карта" if grant else "/забрать карту"))
         return
@@ -1834,27 +1842,45 @@ def handle_voice(peer, sender, msg_obj, raw):
     if not reply.get("from_id"):
         send_msg(peer, "❌ Ответьте на сообщение: /voice [номер чата]")
         return
-    rtext = reply.get("text", "") or ""
-    atts = []
-    for a in reply.get("attachments", []) or []:
-        if a.get("type") == "photo":
-            ph = a.get("photo", {})
-            if ph.get("owner_id") and ph.get("id"):
-                atts.append("photo{}_{}".format(ph["owner_id"], ph["id"]))
-    m = re.search(r"(2\d{9})", raw or "")
-    if m:
-        targets = [int(m.group(1))]
+    raw = (raw or "").strip()
+    targets = None
+    if raw:
+        m = re.fullmatch(r"(2\d{9})", raw)
+        if not m:
+            send_msg(peer, "❌ Неверный номер чата: «{}». Ожидалось ровно 10 цифр вида 2xxxxxxxxx. Рассылка ОТМЕНЕНА.".format(raw))
+            return
+        pid = int(m.group(1))
+        if not chat_exists(pid):
+            send_msg(peer, "❌ Такого чата нет у бота: {}. Рассылка ОТМЕНЕНА.".format(pid))
+            return
+        targets = [pid]
     else:
         targets = get_all_bot_chats()
+        if not targets:
+            send_msg(peer, "❌ Нет чатов для рассылки.")
+            return
+    rtext = reply.get("text", "") or ""
+    att = None
+    url = extract_photo_url(reply)
+    if url:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+            if len(data) > 1000:
+                att = upload_photo(targets[0], io.BytesIO(data))
+        except Exception as e:
+            print("voice photo error:", e)
+            att = None
+    if not rtext and not att:
+        rtext = "📷"
     ok = 0
     for t in targets:
         sent = False
-        if atts:
-            sent = send_msg(t, rtext, attachments=",".join(atts))
+        if att:
+            sent = send_msg(t, rtext, attachments=att)
         if not sent:
-            sent = send_msg(t, rtext if rtext else "📷")
-            if not sent and rtext:
-                sent = send_msg(t, rtext)
+            sent = send_msg(t, rtext)
         if sent: ok += 1
         time.sleep(0.3)
     send_msg(peer, "✅ Рассылка завершена: чатов {}.".format(ok))
@@ -2064,7 +2090,9 @@ def render_card(user_id):
     draw = ImageDraw.Draw(img)
     name_rgb = TEXT_COLORS.get(design.get("name_color"), (255, 255, 255))
     fields_rgb = TEXT_COLORS.get(design.get("fields_color"), (30, 30, 30))
-    bold = 1 if design.get("bold") == "1" else 0
+    bold_sw = 1 if design.get("bold") == "1" else 0
+    stroke_name_rgb = TEXT_COLORS.get(design.get("stroke_name")) if design.get("stroke_name") else None
+    stroke_fields_rgb = TEXT_COLORS.get(design.get("stroke_fields")) if design.get("stroke_fields") else None
 
     def text_w(t, f):
         try: return draw.textlength(t, font=f)
@@ -2072,7 +2100,7 @@ def render_card(user_id):
             try: return f.getsize(t)[0]
             except Exception: return len(t) * 10
 
-    def draw_box(key, text, color, center_x=False, pad=3):
+    def draw_box(key, text, color, center_x=False, pad=3, outline=None):
         rx, ry, rw, rh = CARD_BOXES[key]
         x, y, w, h = rx * W, ry * H, rw * W, rh * H
         size = max(14, int(h * 0.48))
@@ -2088,8 +2116,13 @@ def render_card(user_id):
         ty = y + (h - th) / 2 - yoff
         tw = text_w(text, f)
         tx = x + (w - tw) / 2 if center_x else x + pad
+        sw = bold_sw
+        sfill = color
+        if outline:
+            sw += 1
+            sfill = outline
         try:
-            draw.text((tx, ty), text, font=f, fill=color, stroke_width=bold)
+            draw.text((tx, ty), text, font=f, fill=color, stroke_width=sw, stroke_fill=sfill)
         except TypeError:
             draw.text((tx, ty), text, font=f, fill=color)
 
@@ -2099,12 +2132,12 @@ def render_card(user_id):
     garage = ("#" + card["garage"]) if card["garage"] else "Неизвестно"
     phone = format_phone(card["phone"]) if card["phone"] else "Неизвестно"
     name = card["name"] or "Неизвестно"
-    draw_box("name", name, name_rgb, center_x=True)
-    draw_box("biz", biz, fields_rgb, pad=3)
-    draw_box("realty", realty, fields_rgb, pad=3)
-    draw_box("prop", prop, fields_rgb, pad=3)
-    draw_box("garage", garage, fields_rgb, pad=3)
-    draw_box("phone", phone, fields_rgb, pad=3)
+    draw_box("name", name, name_rgb, center_x=True, outline=stroke_name_rgb)
+    draw_box("biz", biz, fields_rgb, pad=3, outline=stroke_fields_rgb)
+    draw_box("realty", realty, fields_rgb, pad=3, outline=stroke_fields_rgb)
+    draw_box("prop", prop, fields_rgb, pad=3, outline=stroke_fields_rgb)
+    draw_box("garage", garage, fields_rgb, pad=3, outline=stroke_fields_rgb)
+    draw_box("phone", phone, fields_rgb, pad=3, outline=stroke_fields_rgb)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=88, optimize=True)
     buf.seek(0)
@@ -2835,30 +2868,34 @@ def bus_menu_text(page=1):
 def design_colors_text(page=1):
     return "Выберите цвет карточки (стр. {}/{}):".format(page, design_pages_count())
 
-def text_colors_kb(sel_cmd, menu_cmd, page=1):
+def text_colors_kb(sel_cmd, menu_cmd, page=1, back_cmd="card_text_menu", none_target=None, sel_target=None):
     pages = text_color_pages()
     page = max(1, min(page, pages))
     chunk = TEXT_COLOR_ORDER[(page - 1) * TEXT_PER_PAGE: page * TEXT_PER_PAGE]
     rows = []
     line = []
     for key, lab in chunk:
-        line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": sel_cmd, "key": key, "p": page})}, "color": "secondary"})
+        pay = {"cmd": sel_cmd, "key": key, "p": page, "m": menu_cmd}
+        if sel_target: pay["target"] = sel_target
+        line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps(pay)}, "color": "secondary"})
         if len(line) == 3:
             rows.append(line); line = []
     if line: rows.append(line)
     nav = []
     if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": menu_cmd, "p": page - 1})}, "color": "primary"})
     if page < pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": menu_cmd, "p": page + 1})}, "color": "primary"})
-    nav.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "primary"})
-    rows.append(nav)
+    last = []
+    if none_target:
+        last.append({"action": {"type": "callback", "label": "Убрать", "payload": json.dumps({"cmd": "card_outline_clear", "target": none_target, "m": menu_cmd})}, "color": "negative"})
+    last.append({"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": back_cmd})}, "color": "secondary"})
+    rows.append(nav + last)
     return {"inline": True, "buttons": rows}
 
 CARD_EDIT_ENTRIES = [
     ("biz", "Бизнесы"), ("realty", "Недвижимость"), ("prop", "Имущество"),
     ("garage", "Гараж"), ("phone", "Телефон"), ("name", "Имя"),
     ("design_colors", "Цвет карточки"), ("design_photo", "Фото карточки"),
-    ("name_colors", "Цвет имени"), ("field_colors", "Цвет полей"),
-    ("text_format", "Формат текста"), ("exclusive", "Эксклюзив"),
+    ("text_format", "Текст"), ("exclusive", "Эксклюзив"),
 ]
 CARD_EDIT_PER_PAGE = 6
 
@@ -2883,11 +2920,20 @@ def card_edit_page_kb(p=1):
 def card_edit_main_kb():
     return card_edit_page_kb(1)
 
-def text_format_kb():
+def text_menu_kb():
     return {"inline": True, "buttons": [
         [{"action": {"type": "callback", "label": "Жирный шрифт", "payload": json.dumps({"cmd": "card_text_bold"})}, "color": "primary"},
          {"action": {"type": "callback", "label": "Обычный шрифт", "payload": json.dumps({"cmd": "card_text_normal"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+        [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_text_name_colors"})}, "color": "secondary"},
+         {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_text_field_colors"})}, "color": "secondary"}],
+        [{"action": {"type": "callback", "label": "Обводка", "payload": json.dumps({"cmd": "card_text_outline"})}, "color": "secondary"},
+         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+
+def outline_target_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Имя", "payload": json.dumps({"cmd": "card_outline_name"})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "Поля", "payload": json.dumps({"cmd": "card_outline_fields"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_menu"})}, "color": "secondary"}]]}
 
 def ex_back_kb():
     return {"inline": True, "buttons": [
@@ -2949,6 +2995,23 @@ def expire_stale_games(peer):
         CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='playing' AND created_at<=?", (peer, now - 600))
         CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
         CONN.commit()
+
+def open_edit_menu(peer, sender):
+    msg_id = None
+    try:
+        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
+    except Exception as e:
+        print("open_edit_menu kb send fail:", e)
+    if msg_id is None:
+        try:
+            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
+        except Exception as e:
+            print("open_edit_menu plain send fail:", e)
+    if msg_id is None:
+        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
+        return
+    cmid = resolve_cmid_retry(peer, msg_id)
+    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
 
 def handle_event(event):
     try:
@@ -3301,20 +3364,14 @@ def handle_event(event):
                     elif f == "design_photo":
                         set_state("design_photo_wait")
                         show(DESIGN_PHOTO_TEXT, design_photo_kb())
-                    elif f == "name_colors":
-                        set_state("edit_menu", {"p": 2})
-                        show("Выберите цвет имени (стр. 1/{}):".format(text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", 1))
-                    elif f == "field_colors":
-                        set_state("edit_menu", {"p": 2})
-                        show("Выберите цвет полей (стр. 1/{}):".format(text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", 1))
                     elif f == "text_format":
                         set_state("edit_menu", {"p": 2})
-                        show("Выберите действия с текстом", text_format_kb())
+                        show("Выберите действия с текстом", text_menu_kb())
                     elif f == "exclusive":
                         lst = get_excards(user_id)
                         set_state("edit_menu", {"p": 2})
                         if not lst:
-                            show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду (/promo #код).", ex_back_kb())
+                            show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду: /promo #код.", ex_back_kb())
                         else:
                             rows = []
                             for nm in lst[:6]:
@@ -3391,10 +3448,24 @@ def handle_event(event):
                     set_state("design_color", {"p": p})
                     show("✅ Цвет применён!\n" + design_colors_text(p), design_colors_kb(p))
                     snackbar("✅ Цвет применён")
-                elif cmd == "card_name_colors":
+                elif cmd == "card_text_menu":
+                    set_state("edit_menu", {"p": 2})
+                    show("Выберите действия с текстом", text_menu_kb()); snackbar("✅ Текст")
+                elif cmd == "card_text_bold":
+                    set_design(user_id, bold="1")
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Жирный шрифт включён!\nВыберите действия с текстом", text_menu_kb())
+                    snackbar("✅ Жирный")
+                elif cmd == "card_text_normal":
+                    set_design(user_id, bold="0")
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Обычный шрифт включён!\nВыберите действия с текстом", text_menu_kb())
+                    snackbar("✅ Обычный")
+                elif cmd in ("card_text_name_colors", "card_name_colors"):
                     p = int(payload.get("p", 1) or 1)
                     set_state("edit_menu", {"p": 2})
-                    show("Выберите цвет имени (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", p))
+                    show("Выберите цвет имени (стр. {}/{}):".format(p, text_color_pages()),
+                         text_colors_kb("card_name_color", "card_text_name_colors", p, "card_text_menu"))
                     snackbar("✅ Цвет имени")
                 elif cmd == "card_name_color":
                     key = payload.get("key", ""); p = int(payload.get("p", 1) or 1)
@@ -3402,12 +3473,14 @@ def handle_event(event):
                         snackbar("❌ Неизвестный цвет"); return
                     set_design(user_id, name_color=key)
                     set_state("edit_menu", {"p": 2})
-                    show("✅ Цвет имени применён!\nВыберите цвет имени (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_name_color", "card_name_colors", p))
+                    show("✅ Цвет имени применён!\nВыберите цвет имени (стр. {}/{}):".format(p, text_color_pages()),
+                         text_colors_kb("card_name_color", "card_text_name_colors", p, "card_text_menu"))
                     snackbar("✅ Применено")
-                elif cmd == "card_field_colors":
+                elif cmd in ("card_text_field_colors", "card_field_colors"):
                     p = int(payload.get("p", 1) or 1)
                     set_state("edit_menu", {"p": 2})
-                    show("Выберите цвет полей (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", p))
+                    show("Выберите цвет полей (стр. {}/{}):".format(p, text_color_pages()),
+                         text_colors_kb("card_field_color", "card_text_field_colors", p, "card_text_menu"))
                     snackbar("✅ Цвет полей")
                 elif cmd == "card_field_color":
                     key = payload.get("key", ""); p = int(payload.get("p", 1) or 1)
@@ -3415,26 +3488,49 @@ def handle_event(event):
                         snackbar("❌ Неизвестный цвет"); return
                     set_design(user_id, fields_color=key)
                     set_state("edit_menu", {"p": 2})
-                    show("✅ Цвет полей применён!\nВыберите цвет полей (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_field_color", "card_field_colors", p))
+                    show("✅ Цвет полей применён!\nВыберите цвет полей (стр. {}/{}):".format(p, text_color_pages()),
+                         text_colors_kb("card_field_color", "card_text_field_colors", p, "card_text_menu"))
                     snackbar("✅ Применено")
-                elif cmd == "card_text_format":
+                elif cmd == "card_text_outline":
                     set_state("edit_menu", {"p": 2})
-                    show("Выберите действия с текстом", text_format_kb()); snackbar("✅ Формат")
-                elif cmd == "card_text_bold":
-                    set_design(user_id, bold="1")
+                    show("Какой текст хотите обвести?", outline_target_kb()); snackbar("✅ Обводка")
+                elif cmd == "card_outline_name":
+                    p = int(payload.get("p", 1) or 1)
                     set_state("edit_menu", {"p": 2})
-                    show("✅ Жирный шрифт включён!\nВыберите действия с текстом", text_format_kb())
-                    snackbar("✅ Жирный")
-                elif cmd == "card_text_normal":
-                    set_design(user_id, bold="0")
+                    show("Выберите цвет обводки ИМЕНИ (стр. {}/{}):".format(p, text_color_pages()),
+                         text_colors_kb("card_outline_set", "card_outline_name", p, "card_text_outline", none_target="name", sel_target="name"))
+                    snackbar("✅ Обводка имени")
+                elif cmd == "card_outline_fields":
+                    p = int(payload.get("p", 1) or 1)
                     set_state("edit_menu", {"p": 2})
-                    show("✅ Обычный шрифт включён!\nВыберите действия с текстом", text_format_kb())
-                    snackbar("✅ Обычный")
+                    show("Выберите цвет обводки ПОЛЕЙ (стр. {}/{}):".format(p, text_color_pages()),
+                         text_colors_kb("card_outline_set", "card_outline_fields", p, "card_text_outline", none_target="fields", sel_target="fields"))
+                    snackbar("✅ Обводка полей")
+                elif cmd == "card_outline_set":
+                    key = payload.get("key", ""); tgt = payload.get("target", ""); p = int(payload.get("p", 1) or 1)
+                    mcmd = payload.get("m") or ("card_outline_name" if tgt == "name" else "card_outline_fields")
+                    if key not in TEXT_COLORS or tgt not in ("name", "fields"):
+                        snackbar("❌ Неизвестный цвет"); return
+                    set_design(user_id, **{"stroke_{}".format(tgt): key})
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Обводка ({}) применена!\n".format("имя" if tgt == "name" else "поля") +
+                         "Выберите цвет обводки (стр. {}/{}):".format(p, text_color_pages()),
+                         text_colors_kb("card_outline_set", mcmd, p, "card_text_outline", none_target=tgt, sel_target=tgt))
+                    snackbar("✅ Обводка")
+                elif cmd == "card_outline_clear":
+                    tgt = payload.get("target", ""); mcmd = payload.get("m") or ("card_outline_name" if tgt == "name" else "card_outline_fields")
+                    if tgt not in ("name", "fields"):
+                        snackbar("❌ Ошибка"); return
+                    set_design(user_id, **{"stroke_{}".format(tgt): ""})
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Обводка ({}) убрана!\n".format("имя" if tgt == "name" else "поля") +
+                         "Выберите цвет обводки:", text_colors_kb("card_outline_set", mcmd, 1, "card_text_outline", none_target=tgt, sel_target=tgt))
+                    snackbar("✅ Убрано")
                 elif cmd == "card_exclusive":
                     lst = get_excards(user_id)
                     set_state("edit_menu", {"p": 2})
                     if not lst:
-                        show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду (/promo #код) или от создателя.", ex_back_kb())
+                        show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду: /promo #код.", ex_back_kb())
                     else:
                         rows = []
                         for nm in lst[:6]:
@@ -3933,23 +4029,6 @@ LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют �
 LEGEND_SETKTO = {"пират": "Пират🏴‍️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
-
-def open_edit_menu(peer, sender):
-    msg_id = None
-    try:
-        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
-    except Exception as e:
-        print("open_edit_menu kb send fail:", e)
-    if msg_id is None:
-        try:
-            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
-        except Exception as e:
-            print("open_edit_menu plain send fail:", e)
-    if msg_id is None:
-        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
-        return
-    cmid = resolve_cmid_retry(peer, msg_id)
-    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
 
 def handle_ls_card(peer, sender, cmd, args):
     if cmd == "карта":
