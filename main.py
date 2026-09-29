@@ -166,6 +166,10 @@ TEXT_PER_PAGE = 6
 def text_color_pages():
     return max(1, -(-len(TEXT_COLOR_ORDER) // TEXT_PER_PAGE))
 
+POS_FIELDS = {"biz": "Бизнесы", "realty": "Недвижимость", "prop": "Имущество",
+              "garage": "Гараж", "phone": "Телефон", "name": "Имя"}
+POS_STEP = 0.0025
+
 FRAME_BOX = (0.070, 0.190, 0.280, 0.605)
 FRAME_BOXES_FILE = os.path.join(DATA_DIR, "frame_boxes.json")
 _FRAME_BOXES_CACHE = {"data": None, "ts": 0.0}
@@ -551,6 +555,23 @@ def set_design(user_id, **kw):
     design = get_design(user_id)
     design.update(kw)
     set_card_field(user_id, design=json.dumps(design, ensure_ascii=False))
+
+def get_pos(user_id, field):
+    d = get_design(user_id)
+    p = (d.get("pos") or {}).get(field) or [0.0, 0.0]
+    try: return float(p[0]), float(p[1])
+    except Exception: return 0.0, 0.0
+
+def set_pos(user_id, field, dx, dy):
+    d = get_design(user_id)
+    pos = d.get("pos") or {}
+    pos[field] = [round(dx, 5), round(dy, 5)]
+    d["pos"] = pos
+    set_card_field(user_id, design=json.dumps(d, ensure_ascii=False))
+
+def pos_adjust_text(user_id, f):
+    dx, dy = get_pos(user_id, f)
+    return ("🎯 Положение «{}»:\nСмещение X: {:+.4f} | Y: {:+.4f}\nКаждое нажатие сдвигает текст на маленький шаг.".format(POS_FIELDS.get(f, f), dx, dy))
 
 def clear_card_data(user_id):
     set_card_field(user_id, name="", businesses="[]", realty="[]", property_val="", garage="", phone="")
@@ -2093,6 +2114,7 @@ def render_card(user_id):
     bold_sw = 1 if design.get("bold") == "1" else 0
     stroke_name_rgb = TEXT_COLORS.get(design.get("stroke_name")) if design.get("stroke_name") else None
     stroke_fields_rgb = TEXT_COLORS.get(design.get("stroke_fields")) if design.get("stroke_fields") else None
+    pos_map = design.get("pos") or {}
 
     def text_w(t, f):
         try: return draw.textlength(t, font=f)
@@ -2102,7 +2124,12 @@ def render_card(user_id):
 
     def draw_box(key, text, color, center_x=False, pad=3, outline=None):
         rx, ry, rw, rh = CARD_BOXES[key]
-        x, y, w, h = rx * W, ry * H, rw * W, rh * H
+        off = pos_map.get(key) or [0.0, 0.0]
+        try:
+            ox, oy = float(off[0]), float(off[1])
+        except Exception:
+            ox, oy = 0.0, 0.0
+        x, y, w, h = (rx + ox) * W, (ry + oy) * H, rw * W, rh * H
         size = max(14, int(h * 0.48))
         f = get_font(size)
         while text_w(text, f) > w - pad * 2 and size > 10:
@@ -2927,7 +2954,26 @@ def text_menu_kb():
         [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_text_name_colors"})}, "color": "secondary"},
          {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_text_field_colors"})}, "color": "secondary"}],
         [{"action": {"type": "callback", "label": "Обводка", "payload": json.dumps({"cmd": "card_text_outline"})}, "color": "secondary"},
-         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+         {"action": {"type": "callback", "label": "Положение", "payload": json.dumps({"cmd": "card_text_pos"})}, "color": "secondary"}],
+        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+
+def text_pos_menu_kb():
+    items = [("biz", "Бизнесы"), ("realty", "Недвижимость"), ("prop", "Имущество"),
+             ("garage", "Гараж"), ("phone", "Телефон"), ("name", "Имя")]
+    rows = []
+    for i in range(0, len(items), 2):
+        rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "card_pos_menu", "f": key})}, "color": "primary"} for key, lab in items[i:i+2]])
+    rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_menu"})}, "color": "secondary"}])
+    return {"inline": True, "buttons": rows}
+
+def pos_adjust_kb(f):
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "⬆️ Вверх", "payload": json.dumps({"cmd": "card_pos_move", "f": f, "dir": "up"})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "⬇️ Вниз", "payload": json.dumps({"cmd": "card_pos_move", "f": f, "dir": "down"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "⬅️ Влево", "payload": json.dumps({"cmd": "card_pos_move", "f": f, "dir": "left"})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "➡️ Вправо", "payload": json.dumps({"cmd": "card_pos_move", "f": f, "dir": "right"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "Сброс", "payload": json.dumps({"cmd": "card_pos_reset", "f": f})}, "color": "negative"},
+         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_pos"})}, "color": "secondary"}]]}
 
 def outline_target_kb():
     return {"inline": True, "buttons": [
@@ -2995,23 +3041,6 @@ def expire_stale_games(peer):
         CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='playing' AND created_at<=?", (peer, now - 600))
         CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
         CONN.commit()
-
-def open_edit_menu(peer, sender):
-    msg_id = None
-    try:
-        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
-    except Exception as e:
-        print("open_edit_menu kb send fail:", e)
-    if msg_id is None:
-        try:
-            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
-        except Exception as e:
-            print("open_edit_menu plain send fail:", e)
-    if msg_id is None:
-        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
-        return
-    cmid = resolve_cmid_retry(peer, msg_id)
-    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
 
 def handle_event(event):
     try:
@@ -3526,6 +3555,38 @@ def handle_event(event):
                     show("✅ Обводка ({}) убрана!\n".format("имя" if tgt == "name" else "поля") +
                          "Выберите цвет обводки:", text_colors_kb("card_outline_set", mcmd, 1, "card_text_outline", none_target=tgt, sel_target=tgt))
                     snackbar("✅ Убрано")
+                elif cmd == "card_text_pos":
+                    set_state("edit_menu", {"p": 2})
+                    show(" Положение текста: выберите поле для настройки:", text_pos_menu_kb())
+                    snackbar("✅ Положение")
+                elif cmd == "card_pos_menu":
+                    f = payload.get("f", "")
+                    if f not in POS_FIELDS:
+                        snackbar("❌ Неизвестное поле"); return
+                    set_state("edit_menu", {"p": 2})
+                    show(pos_adjust_text(user_id, f), pos_adjust_kb(f))
+                    snackbar("✅ Настройка")
+                elif cmd == "card_pos_move":
+                    f = payload.get("f", ""); d = payload.get("dir", "")
+                    if f not in POS_FIELDS or d not in ("up", "down", "left", "right"):
+                        snackbar("❌ Ошибка"); return
+                    dx, dy = get_pos(user_id, f)
+                    if d == "up": dy -= POS_STEP
+                    elif d == "down": dy += POS_STEP
+                    elif d == "left": dx -= POS_STEP
+                    elif d == "right": dx += POS_STEP
+                    set_pos(user_id, f, dx, dy)
+                    set_state("edit_menu", {"p": 2})
+                    show(pos_adjust_text(user_id, f), pos_adjust_kb(f))
+                    snackbar("✅ Сдвинуто")
+                elif cmd == "card_pos_reset":
+                    f = payload.get("f", "")
+                    if f not in POS_FIELDS:
+                        snackbar("❌ Ошибка"); return
+                    set_pos(user_id, f, 0.0, 0.0)
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Положение «{}» сброшено.\n".format(POS_FIELDS[f]) + pos_adjust_text(user_id, f), pos_adjust_kb(f))
+                    snackbar("✅ Сброс")
                 elif cmd == "card_exclusive":
                     lst = get_excards(user_id)
                     set_state("edit_menu", {"p": 2})
@@ -4025,7 +4086,7 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍🔥", "Мафиози🕴️"]
+LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍", "Мафиози🕴️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
@@ -5569,6 +5630,23 @@ def handle_message(peer, sender, text, msg_obj):
 
     elif cmd == "очистить_карту":
         do_clear_card_command(peer, sender, args)
+
+def open_edit_menu(peer, sender):
+    msg_id = None
+    try:
+        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
+    except Exception as e:
+        print("open_edit_menu kb send fail:", e)
+    if msg_id is None:
+        try:
+            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
+        except Exception as e:
+            print("open_edit_menu plain send fail:", e)
+    if msg_id is None:
+        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
+        return
+    cmid = resolve_cmid_retry(peer, msg_id)
+    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
 
 def timer_loop():
     while True:
