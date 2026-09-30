@@ -1685,7 +1685,8 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
 def promo_menu_kb():
     return {"inline": True, "buttons": [
         [{"action": {"type": "callback", "label": "Создать", "payload": json.dumps({"cmd": "promo_create"})}, "color": "positive"},
-         {"action": {"type": "callback", "label": "Удалить", "payload": json.dumps({"cmd": "promo_del_btn"})}, "color": "negative"}]]}
+         {"action": {"type": "callback", "label": "Удалить", "payload": json.dumps({"cmd": "promo_del_btn"})}, "color": "negative"}],
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "promo_cancel"})}, "color": "negative"}]]}
 
 def promo_kind_kb():
     return {"inline": True, "buttons": [
@@ -1698,6 +1699,10 @@ def promo_type_kb():
          {"action": {"type": "callback", "label": "По времени", "payload": json.dumps({"cmd": "promo_type_time"})}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "promo_cancel"})}, "color": "negative"}]]}
 
+def promo_cancel_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "promo_cancel"})}, "color": "negative"}]]}
+
 def get_promo(code):
     with DB_LOCK:
         row = CONN.execute("SELECT * FROM promos WHERE code=?", (code,)).fetchone()
@@ -1707,6 +1712,17 @@ def open_promo_menu(peer, sender):
     set_auction_state(sender, peer, "promo_menu", {})
     send_msg(peer, "Выберите действие", keyboard=promo_menu_kb())
 
+def close_promo_session(peer, ctx, txt):
+    cm = ctx.get("msg_cmid"); mid = ctx.get("msg_id")
+    for kw in (({"conversation_message_ids": [cm]} if cm else None), ({"message_ids": [mid]} if mid else None)):
+        if not kw: continue
+        try:
+            VK.messages.delete(peer_id=peer, delete_for_all=1, **kw)
+            break
+        except Exception:
+            continue
+    send_msg(peer, txt)
+
 def handle_promo_input(sender, peer, text, cmid=None, attachments=None):
     state = get_auction_state(sender, peer)
     if not state: return False
@@ -1714,9 +1730,9 @@ def handle_promo_input(sender, peer, text, cmid=None, attachments=None):
     if not step.startswith("promo_"): return False
     if sender not in (CREATOR_ID, LEADER_ID): return False
     ctx = state.get("context", {})
-    if time.time() - ctx.get("ts", 0) > 300:
+    if time.time() - ctx.get("ts", 0) > 60:
         clear_auction_state(sender, peer)
-        send_msg(peer, "⏰ Время редактора промокодов вышло (5 минут бездействия).")
+        close_promo_session(peer, ctx, "⏰ Время редактора промокодов вышло, вы бездействовали минуту.")
         return True
 
     def reply(msg, kb=None):
@@ -1727,37 +1743,49 @@ def handle_promo_input(sender, peer, text, cmid=None, attachments=None):
         reply("❌ Редактор промокодов закрыт.")
         return True
 
+    if step == "promo_menu":
+        reply("Выберите действие", promo_menu_kb())
+        return True
+
+    if step == "promo_kind":
+        reply("На что будет промокод?", promo_kind_kb())
+        return True
+
+    if step == "promo_type":
+        reply("Выберите тип промокода", promo_type_kb())
+        return True
+
     if step == "promo_card":
         name = text.strip()
         if name.lower().endswith((".png", ".jpg", ".jpeg")):
             name = name.rsplit(".", 1)[0]
         if not strict_template(name):
-            reply("❌ Такого названия карты нет в папке бота ({}). Введите название карты:".format(name))
+            reply("❌ Такого названия карты нет в папке бота ({}). Введите название карты:".format(name), promo_cancel_kb())
             return True
         ctx["card_name"] = name
         set_auction_state(sender, peer, "promo_code", ctx)
-        reply("Придумайте промокод # (например #exclusive):")
+        reply("Придумайте промокод # (например #exclusive):", promo_cancel_kb())
         return True
 
     if step == "promo_code":
         code = text.strip()
         if not code.startswith("#"):
-            reply("❌ Промокод обязательно писать с #. Придумайте промокод #:")
+            reply("❌ Промокод обязательно писать с #. Придумайте промокод #:", promo_cancel_kb())
             return True
         if len(code) < 2:
-            reply("❌ Слишком короткий промокод. Придумайте промокод #:")
+            reply("❌ Слишком короткий промокод. Придумайте промокод #:", promo_cancel_kb())
             return True
         if get_promo(code):
-            reply("❌ Такой промокод уже существует. Придумайте промокод #:")
+            reply("❌ Такой промокод уже существует. Придумайте промокод #:", promo_cancel_kb())
             return True
         ctx["code"] = code
         set_auction_state(sender, peer, "promo_type", ctx)
-        reply("Выберите тип промокода", keyboard=promo_type_kb())
+        reply("Выберите тип промокода", promo_type_kb())
         return True
 
     if step == "promo_limit":
         if not text.strip().isdigit() or int(text.strip()) < 1:
-            reply("❌ Введите число людей (цифрой):")
+            reply("❌ Введите число людей (цифрой):", promo_cancel_kb())
             return True
         n = int(text.strip())
         with DB_LOCK:
@@ -1771,7 +1799,7 @@ def handle_promo_input(sender, peer, text, cmid=None, attachments=None):
     if step == "promo_expire":
         dt = parse_auction_dt(text)
         if not dt:
-            reply("❌ Неверный формат. Пример: 26.06.25 11:23")
+            reply("❌ Неверный формат. Пример: 26.06.25 11:23", promo_cancel_kb())
             return True
         ts = int(dt.timestamp())
         with DB_LOCK:
@@ -1788,7 +1816,7 @@ def handle_promo_input(sender, peer, text, cmid=None, attachments=None):
             code = "#" + code
         row = get_promo(code)
         if not row:
-            reply("❌ Промокод {} не найден. Введите название промокода который нужно удалить:".format(code))
+            reply("❌ Промокод {} не найден. Введите название промокода который нужно удалить:".format(code), promo_cancel_kb())
             return True
         with DB_LOCK:
             CONN.execute("DELETE FROM promo_used WHERE promo_id=?", (row["id"],))
@@ -3042,6 +3070,23 @@ def expire_stale_games(peer):
         CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
         CONN.commit()
 
+def open_edit_menu(peer, sender):
+    msg_id = None
+    try:
+        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
+    except Exception as e:
+        print("open_edit_menu kb send fail:", e)
+    if msg_id is None:
+        try:
+            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
+        except Exception as e:
+            print("open_edit_menu plain send fail:", e)
+    if msg_id is None:
+        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
+        return
+    cmid = resolve_cmid_retry(peer, msg_id)
+    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
+
 def handle_event(event):
     try:
         obj = event.object if hasattr(event, 'object') else event.obj
@@ -3097,28 +3142,28 @@ def handle_event(event):
                 return
             if cmd == "promo_del_btn":
                 set_auction_state(user_id, peer_id, "promo_del", {"msg_cmid": cmid})
-                show("Введите название промокода который нужно удалить:", None); snackbar("✅ Введите")
+                show("Введите название промокода который нужно удалить:", promo_cancel_kb()); snackbar("✅ Введите")
                 return
             if cmd == "promo_kind_ex":
                 if not state: snackbar("⛔ Редактор не открыт"); return
                 ctx = state.get("context", {})
                 ctx["kind"] = "excard"; ctx["msg_cmid"] = cmid
                 set_auction_state(user_id, peer_id, "promo_card", ctx)
-                show("Введите название карты:", None); snackbar("✅ Введите")
+                show("Введите название карты:", promo_cancel_kb()); snackbar("✅ Введите")
                 return
             if cmd == "promo_type_act":
                 if not state: snackbar("⛔ Редактор не открыт"); return
                 ctx = state.get("context", {})
                 ctx["msg_cmid"] = cmid
                 set_auction_state(user_id, peer_id, "promo_limit", ctx)
-                show("Введите число: сколько людей смогут использовать промокод:", None); snackbar("✅ Введите")
+                show("Введите число: сколько людей смогут использовать промокод:", promo_cancel_kb()); snackbar("✅ Введите")
                 return
             if cmd == "promo_type_time":
                 if not state: snackbar("⛔ Редактор не открыт"); return
                 ctx = state.get("context", {})
                 ctx["msg_cmid"] = cmid
                 set_auction_state(user_id, peer_id, "promo_expire", ctx)
-                show("Введите дату и время до окончания действия промокода (пример: 26.06.25 11:23):", None); snackbar("✅ Введите")
+                show("Введите дату и время до окончания действия промокода (пример: 26.06.25 11:23):", promo_cancel_kb()); snackbar("✅ Введите")
                 return
             snackbar("❌ Неизвестная кнопка промо")
             return
@@ -3557,7 +3602,7 @@ def handle_event(event):
                     snackbar("✅ Убрано")
                 elif cmd == "card_text_pos":
                     set_state("edit_menu", {"p": 2})
-                    show(" Положение текста: выберите поле для настройки:", text_pos_menu_kb())
+                    show("🎯 Положение текста: выберите поле для настройки:", text_pos_menu_kb())
                     snackbar("✅ Положение")
                 elif cmd == "card_pos_menu":
                     f = payload.get("f", "")
@@ -4086,7 +4131,7 @@ def build_status_page(peer, page):
     if page < total_pages: buttons.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "status_next", "page": page+1})}, "color": "secondary"})
     return "\n".join(lines), json.dumps({"inline": True, "buttons": [buttons]}), total_pages
 
-LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍", "Мафиози🕴️"]
+LEGENDARY_WHO = ["Пират🏴‍☠️", "Босс 👑", "Абсолют 🪐", "Легенда 🐐", "Олигарх 🎩", "Вампир 🧛", "Чародей 🧙", "Клоун 🤡", "Феникс🐦‍", "Мафиози️"]
 LEGEND_SETKTO = {"пират": "Пират🏴‍️", "босс": "Босс 👑", "абсолют": "Абсолют 🪐", "легенда": "Легенда 🐐",
                  "олигарх": "Олигарх 🎩", "вампир": "Вампир 🧛", "чародей": "Чародей 🧙", "клоун": "Клоун 🤡",
                  "феникс": "Феникс🐦", "мафиози": "Мафиози🕴️"}
@@ -5631,23 +5676,6 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "очистить_карту":
         do_clear_card_command(peer, sender, args)
 
-def open_edit_menu(peer, sender):
-    msg_id = None
-    try:
-        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
-    except Exception as e:
-        print("open_edit_menu kb send fail:", e)
-    if msg_id is None:
-        try:
-            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
-        except Exception as e:
-            print("open_edit_menu plain send fail:", e)
-    if msg_id is None:
-        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
-        return
-    cmid = resolve_cmid_retry(peer, msg_id)
-    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
-
 def timer_loop():
     while True:
         try:
@@ -5670,14 +5698,20 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
-            # Таймаут редактора аукционов/промо (5 мин, тихое удаление меню)
+            # Таймауты редакторов аукционов (5 мин, тихо) и промокодов (1 мин, без упоминания)
             with DB_LOCK:
-                astale = CONN.execute("SELECT user_id, peer_id, context FROM auction_state").fetchall()
+                astale = CONN.execute("SELECT user_id, peer_id, step, context FROM auction_state").fetchall()
             for row in astale:
                 try: ctx = json.loads(row["context"] or "{}")
                 except Exception: ctx = {}
-                if now - ctx.get("ts", 0) > 300:
-                    uid, pid = row["user_id"], row["peer_id"]
+                age = now - ctx.get("ts", 0)
+                uid, pid = row["user_id"], row["peer_id"]
+                if row["step"].startswith("promo_"):
+                    if age > 60:
+                        with DB_LOCK:
+                            CONN.execute("DELETE FROM auction_state WHERE user_id=? AND peer_id=?", (uid, pid))
+                        close_promo_session(pid, ctx, "⏰ Время редактора промокодов вышло, вы бездействовали минуту.")
+                elif age > 300:
                     cm = ctx.get("msg_cmid"); mid = ctx.get("msg_id")
                     with DB_LOCK:
                         CONN.execute("DELETE FROM auction_state WHERE user_id=? AND peer_id=?", (uid, pid))
