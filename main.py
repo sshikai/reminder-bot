@@ -2370,7 +2370,8 @@ def handle_event(event):
                         if nav: rows.append(nav)
                         rows.append([{"action": {"type": "callback", "label": "Снять эксклюзив", "payload": json.dumps({"cmd": "card_ex_clear"})}, "color": "negative"}, {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}])
                         show(f"🎩 Ваши эксклюзивные карты (стр. {page}/{total_pages}):", {"inline": True, "buttons": rows})
-                    snackbar("✅ Эксклюзив")
+                snackbar("✅ Эксклюзив")
+                
                 elif cmd == "card_ex_apply":
                     nm = payload.get("name", "")
                     if not strict_template(nm) or nm not in get_excards(user_id): snackbar("❌ Карта недоступна"); return
