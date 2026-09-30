@@ -1274,6 +1274,56 @@ def handle_voice(peer, sender, msg_obj, raw):
     set_auction_state(sender, peer, "voice_menu", {"reply_text": rtext, "reply_att": att, "msg_cmid": cmid, "msg_id": msg_id})
 # -----------------------------------------
 
+# ===== ШРИФТЫ ДЛЯ КАРТОЧКИ =====
+FONTS_DIR = os.path.join(DATA_DIR, "fonts")
+try: os.makedirs(FONTS_DIR, exist_ok=True)
+except: pass
+
+# key -> (Отображаемое имя, [список URL для скачивания], системные пути fallback)
+FONTS_MAP = {
+    "default":   ("Обычный",      [], ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"]),
+    "dejavu_b":  ("Жирный",       ["https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans-Bold.ttf"], ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]),
+    "liberation":("Liberation",   [], ["/usr/share/fonts/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"]),
+    "ptsans":    ("PT Sans",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Regular.ttf"], []),
+    "roboto":    ("Roboto",       ["https://raw.githubusercontent.com/google/fonts/main/apache/roboto/static/Roboto-Regular.ttf"], []),
+    "noto":      ("Noto Sans",    ["https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf"], []),
+    "pixel":     ("Пиксельный",   ["https://raw.githubusercontent.com/google/fonts/main/ofl/vt323/VT323-Regular.ttf"], []),
+    "mono":      ("Моно",         ["https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSansMono.ttf"], ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]),
+    "serif":     ("Serif",        [], ["/usr/share/fonts/liberation/LiberationSerif-Regular.ttf", "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"]),
+    "condensed": ("Condensed",    ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptsansnarrow/PT_Sans-Narrow-Web-Regular.ttf"], []),
+}
+FONTS_ORDER = list(FONTS_MAP.keys())
+FONT_PAGE_SIZE = 6
+def font_pages_count(): return max(1, -(-len(FONTS_ORDER) // FONT_PAGE_SIZE))
+
+_FONT_PATHS_CACHE = {}
+def _download_font(key):
+    """Скачивает ttf для ключа, кэширует локально. Возвращает путь или None."""
+    if key in _FONT_PATHS_CACHE:
+        p = _FONT_PATHS_CACHE[key]
+        if p and os.path.isfile(p): return p
+    name, urls, sys_paths = FONTS_MAP.get(key, FONTS_MAP["default"])
+    for p in sys_paths:
+        if os.path.isfile(p): _FONT_PATHS_CACHE[key] = p; return p
+    local = os.path.join(FONTS_DIR, "cardfont_{}.ttf".format(key))
+    if os.path.isfile(local) and os.path.getsize(local) > 10000:
+        _FONT_PATHS_CACHE[key] = local; return local
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+            if len(data) > 10000:
+                with open(local, "wb") as f: f.write(data)
+                _FONT_PATHS_CACHE[key] = local; return local
+        except Exception as e: print("font download {} err: {}".format(key, e))
+    # fallback на дефолтный
+    if key != "default": return _download_font("default")
+    return None
+
+def font_display_name(key):
+    return FONTS_MAP.get(key, FONTS_MAP["default"])[0]
+
 # ===== ШРИФТ =====
 FONT_CACHE = os.path.join(DATA_DIR, "card_font_cyr.ttf")
 _FONT_RESOLVED = {"path": None, "tried": False}
@@ -1302,15 +1352,23 @@ def ensure_font():
                     with open(FONT_CACHE, "wb") as f: f.write(data); return FONT_CACHE
         except Exception as e: print("font download error:", e)
     return None
-def get_font(size):
-    if not _FONT_RESOLVED["tried"]: _FONT_RESOLVED["path"] = ensure_font(); _FONT_RESOLVED["tried"] = True
-    p = _FONT_RESOLVED["path"]
-    if p:
-        try: return ImageFont.truetype(p, size)
-        except: pass
+def get_font(size, font_key="default"):
+    # Ключ пустой/неизвестный — берём дефолт
+    if font_key not in FONTS_MAP: font_key = "default"
+    # default использует старую логику (ensure_font + fallback на что угодно системное)
+    if font_key == "default":
+        if not _FONT_RESOLVED["tried"]: _FONT_RESOLVED["path"] = ensure_font(); _FONT_RESOLVED["tried"] = True
+        p = _FONT_RESOLVED["path"]
+        if p:
+            try: return ImageFont.truetype(p, size)
+            except: pass
+    else:
+        p = _download_font(font_key)
+        if p:
+            try: return ImageFont.truetype(p, size)
+            except: pass
     try: return ImageFont.load_default(size)
     except: return ImageFont.load_default()
-
 # ===== ЗАГРУЗКА ФОТО В ВК + КЭШ =====
 def upload_photo(peer, img_buf):
     try: img_buf.seek(0)
@@ -1381,23 +1439,21 @@ def parse_custom_color(val):
 # --- Идеальная обводка + жирный ---
 def draw_text_advanced(draw, pos, text, font, fill, outline_color=None, outline_w=1, bold=False):
     x, y = pos
-    bold_r = 1 if bold else 0
-    # 1. Рисуем обводку. При bold — расширяем радиус, чтобы обводка не залезала под утолщённый текст.
-    if outline_color and outline_w > 0:
-        r = outline_w + bold_r
+    # Ядро текста: 3x3 при bold, 1x1 при обычном. Обводка = кольцо вокруг ядра, без зазоров.
+    core = 1 if bold else 0
+    r = max(0, int(outline_w)) + core
+    if outline_color and r > 0:
         for dx in range(-r, r + 1):
             for dy in range(-r, r + 1):
-                if dx == 0 and dy == 0: continue
-                if bold and abs(dx) <= 1 and abs(dy) <= 1: continue  # внутренняя зона — там будет bold-заливка
+                if abs(dx) <= core and abs(dy) <= core: continue  # ядро — там будет сама заливка
                 draw.text((x + dx, y + dy), text, font=font, fill=outline_color)
-    # 2. Рисуем основной текст (bold = 3x3 утолщение)
     if bold:
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
                 draw.text((x + dx, y + dy), text, font=font, fill=fill)
     else:
         draw.text((x, y), text, font=font, fill=fill)
-
+        
 def get_frame_box(color_key):
     now = time.time()
     if _FRAME_BOXES_CACHE["data"] is None or now - _FRAME_BOXES_CACHE["ts"] > 60:
@@ -1484,7 +1540,7 @@ def render_card(user_id):
         size = int(base_size * scale)
         size = max(10, min(size, int(h * 0.85)))
         
-        f = get_font(size)
+        f = get_font(size, design.get("font_key", "default"))
         def text_w(t, fnt):
             try: return draw.textlength(t, font=fnt)
             except:
@@ -1924,13 +1980,36 @@ def card_edit_page_kb(p=1):
     return {"inline": True, "buttons": rows}
 def card_edit_main_kb(): return card_edit_page_kb(1)
 
-def text_menu_kb():
+TEXT_MENU_PAGES = 2
+def text_menu_kb(page=1):
+    page = max(1, min(int(page), TEXT_MENU_PAGES))
+    if page == 1:
+        return {"inline": True, "buttons": [
+            [{"action": {"type": "callback", "label": "Жирный шрифт", "payload": json.dumps({"cmd": "card_text_bold"})}, "color": "primary"}, {"action": {"type": "callback", "label": "Обычный шрифт", "payload": json.dumps({"cmd": "card_text_normal"})}, "color": "primary"}],
+            [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_text_name_colors"})}, "color": "secondary"}, {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_text_field_colors"})}, "color": "secondary"}],
+            [{"action": {"type": "callback", "label": "Обводка", "payload": json.dumps({"cmd": "card_text_outline"})}, "color": "secondary"}, {"action": {"type": "callback", "label": "Положение", "payload": json.dumps({"cmd": "card_text_pos"})}, "color": "secondary"}],
+            [{"action": {"type": "callback", "label": "📏 Размер", "payload": json.dumps({"cmd": "card_text_size"})}, "color": "primary"}, {"action": {"type": "callback", "label": "🎨 Свой Цвет", "payload": json.dumps({"cmd": "card_custom_color_menu"})}, "color": "primary"}],
+            [{"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_text_menu", "p": 2})}, "color": "secondary"}, {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
     return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "Жирный шрифт", "payload": json.dumps({"cmd": "card_text_bold"})}, "color": "primary"}, {"action": {"type": "callback", "label": "Обычный шрифт", "payload": json.dumps({"cmd": "card_text_normal"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Цвет имени", "payload": json.dumps({"cmd": "card_text_name_colors"})}, "color": "secondary"}, {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_text_field_colors"})}, "color": "secondary"}],
-        [{"action": {"type": "callback", "label": "Обводка", "payload": json.dumps({"cmd": "card_text_outline"})}, "color": "secondary"}, {"action": {"type": "callback", "label": "Положение", "payload": json.dumps({"cmd": "card_text_pos"})}, "color": "secondary"}],
-        [{"action": {"type": "callback", "label": "📏 Размер", "payload": json.dumps({"cmd": "card_text_size"})}, "color": "primary"}, {"action": {"type": "callback", "label": "🎨 Свой Цвет", "payload": json.dumps({"cmd": "card_custom_color_menu"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+        [{"action": {"type": "callback", "label": "🖋 Шрифты", "payload": json.dumps({"cmd": "card_font_menu", "p": 1})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_text_menu", "p": 1})}, "color": "secondary"}, {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+
+def card_font_kb(page=1):
+    page = max(1, min(int(page), font_pages_count()))
+    chunk = FONTS_ORDER[(page-1)*FONT_PAGE_SIZE : page*FONT_PAGE_SIZE]
+    rows = []; line = []
+    for key in chunk:
+        lab = font_display_name(key)
+        line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "card_font_set", "key": key, "p": page})}, "color": "primary"})
+        if len(line) == 2: rows.append(line); line = []
+    if line: rows.append(line)
+    nav = []
+    if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_font_menu", "p": page - 1})}, "color": "secondary"})
+    nav.append({"action": {"type": "callback", "label": "{}/{}".format(page, font_pages_count()), "payload": json.dumps({"cmd": "page_info", "page": page, "total": font_pages_count()})}, "color": "default"})
+    if page < font_pages_count(): nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "card_font_menu", "p": page + 1})}, "color": "secondary"})
+    rows.append(nav)
+    rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_menu", "p": 2})}, "color": "secondary"}])
+    return {"inline": True, "buttons": rows}
 
 def text_pos_menu_kb():
     items = [("biz","Бизнесы"),("realty","Недвижимость"),("prop","Имущество"),("garage","Гараж"),("phone","Телефон"),("name","Имя")]
@@ -2281,9 +2360,44 @@ def handle_event(event):
                     key = payload.get("key", "")
                     if key not in ALL_COLOR_KEYS: snackbar("❌ Неизвестный цвет"); return
                     p = int(payload.get("p", 1) or 1); set_design(user_id, color=key, exclusive=""); set_state("design_color", {"p": p}); show("✅ Цвет применён!\n" + design_colors_text(p), design_colors_kb(p)); snackbar("✅ Цвет применён")
-                elif cmd == "card_text_menu": set_state("edit_menu", {"p": 2}); show("Выберите действия с текстом", text_menu_kb()); snackbar("✅ Текст")
-                elif cmd == "card_text_bold": set_design(user_id, bold="1"); set_state("edit_menu", {"p": 2}); show("✅ Жирный шрифт включён!\nВыберите действия с текстом", text_menu_kb()); snackbar("✅ Жирный")
-                elif cmd == "card_text_normal": set_design(user_id, bold="0"); set_state("edit_menu", {"p": 2}); show("✅ Обычный шрифт включён!\nВыберите действия с текстом", text_menu_kb()); snackbar("✅ Обычный")
+                elif cmd == "card_text_menu":
+                    try: p = int(payload.get("p", 1))
+                    except Exception: p = 1
+                    p = max(1, min(p, TEXT_MENU_PAGES))
+                    set_state("edit_menu", {"p": 2}); show("Выберите действия с текстом (стр. {}/{}):".format(p, TEXT_MENU_PAGES), text_menu_kb(p)); snackbar("✅ Текст")
+                elif cmd == "card_text_bold":
+                    set_design(user_id, bold="1")
+                    try: p = int(payload.get("p", 1))
+                    except Exception: p = 1
+                    p = max(1, min(p, TEXT_MENU_PAGES))
+                    set_state("edit_menu", {"p": 2}); show("✅ Жирный шрифт включён!\nВыберите действия с текстом:", text_menu_kb(p)); snackbar("✅ Жирный")
+                elif cmd == "card_text_normal":
+                    set_design(user_id, bold="0")
+                    try: p = int(payload.get("p", 1))
+                    except Exception: p = 1
+                    p = max(1, min(p, TEXT_MENU_PAGES))
+                    set_state("edit_menu", {"p": 2}); show("✅ Обычный шрифт включён!\nВыберите действия с текстом:", text_menu_kb(p)); snackbar("✅ Обычный")
+                elif cmd == "card_font_menu":
+                    try: p = int(payload.get("p", 1))
+                    except Exception: p = 1
+                    p = max(1, min(p, font_pages_count()))
+                    set_state("edit_menu", {"p": 2})
+                    cur = get_design(user_id).get("font_key", "default")
+                    cur_name = font_display_name(cur)
+                    show("🖋 Выберите шрифт (стр. {}/{}).\nТекущий: {}".format(p, font_pages_count(), cur_name), card_font_kb(p))
+                    snackbar("✅ Шрифты")
+                elif cmd == "card_font_set":
+                    key = payload.get("key", "default")
+                    try: p = int(payload.get("p", 1))
+                    except Exception: p = 1
+                    if key not in FONTS_MAP: snackbar("❌ Неизвестный шрифт"); return
+                    # сразу пробуем скачать — чтобы сообщить об ошибке если что
+                    path = _download_font(key)
+                    if not path and key != "default": snackbar("❌ Не удалось загрузить шрифт"); return
+                    set_design(user_id, font_key=key)
+                    set_state("edit_menu", {"p": 2})
+                    show("✅ Шрифт «{}» применён!\n\nВыберите шрифт (стр. {}/{}):".format(font_display_name(key), p, font_pages_count()), card_font_kb(p))
+                    snackbar("✅ {}".format(font_display_name(key)))
                 elif cmd in ("card_text_name_colors", "card_name_colors"):
                     p = int(payload.get("p", 1) or 1); set_state("edit_menu", {"p": 2}); show("Выберите цвет имени (стр. {}/{}):".format(p, text_color_pages()), text_colors_kb("card_name_color", "card_text_name_colors", p, "card_text_menu")); snackbar("✅ Цвет имени")
                 elif cmd == "card_name_color":
