@@ -3889,25 +3889,36 @@ def main():
     print("=== MD BOT starting ===")
     init_db()
     threading.Thread(target=timer_loop, daemon=True).start()
+    
     if not VK_TOKEN:
         print("ERROR: VK_TOKEN not set!")
         while not VK_TOKEN: time.sleep(60)
+        
     while True:
         try:
-            session = vk_api.VkApi(token=VK_TOKEN); VK = session.get_api()
-            group_id = VK.groups.getById()[0]["id"]; longpoll = VkBotLongPoll(session, group_id)
+            session = vk_api.VkApi(token=VK_TOKEN)
+            VK = session.get_api()
+            group_id = VK.groups.getById()[0]["id"]
+            longpoll = VkBotLongPoll(session, group_id)
             print("MD BOT started, group id:", group_id)
             for event in longpoll.listen():
-                if event.type == VkBotEventType.MESSAGE_EVENT: handle_event(event); continue
+                if event.type == VkBotEventType.MESSAGE_EVENT:
+                    handle_event(event)
+                    continue
                 if event.type != VkBotEventType.MESSAGE_NEW: continue
                 try:
-                    obj = event.obj; msg = obj.get("message", obj) if isinstance(obj, dict) else {}
-                    peer = int(msg.get("peer_id", 0) or 0); sender = int(msg.get("from_id", 0) or 0)
+                    obj = event.obj
+                    msg = obj.get("message", obj) if isinstance(obj, dict) else {}
+                    peer = int(msg.get("peer_id", 0) or 0)
+                    sender = int(msg.get("from_id", 0) or 0)
                     txt = (msg.get("text") or "").strip()
-                    if peer > 0 and sender > 0: handle_message(peer, sender, txt, msg)
-                except Exception as e: print("message error:", e)
-        except Exception as e: print("longpoll error:", e)
+                    if peer > 0 and sender > 0:
+                        handle_message(peer, sender, txt, msg)
+                except Exception as e:
+                    print("message error:", e)
+        except Exception as e:
+            print("longpoll error:", e)
         time.sleep(5)
-
+        
 if __name__ == "__main__":
     main()
