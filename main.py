@@ -2357,6 +2357,10 @@ def handle_event(event):
                     edit_msg(f"📏 Размер обводки: {cur}px", kb)
 
                 elif cmd == "card_exclusive":
+                    lst = get_excards(user_id); set_state("edit_menu", {"p": 2})
+                    if not lst: show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду: /promo #код.", ex_back_kb())
+                    else:
+                        page = int(payload.get("p", 1)); per_page = 6; total_pages = max(1, (len(lst) + per_page - 1) // per_page); page = max(1, min(page, total_pages))
                         chunk = lst[(page-1)*per_page : page*per_page]
                         rows = []; line = []
                         for nm in chunk:
@@ -2370,7 +2374,7 @@ def handle_event(event):
                         if nav: rows.append(nav)
                         rows.append([{"action": {"type": "callback", "label": "Снять эксклюзив", "payload": json.dumps({"cmd": "card_ex_clear"})}, "color": "negative"}, {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}])
                         show(f"🎩 Ваши эксклюзивные карты (стр. {page}/{total_pages}):", {"inline": True, "buttons": rows})
-                snackbar("✅ Эксклюзив")
+                    snackbar("✅ Эксклюзив")
                 
                 elif cmd == "card_ex_apply":
                     nm = payload.get("name", "")
