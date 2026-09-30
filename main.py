@@ -728,10 +728,12 @@ def auction_step_kb(back_to, with_skip=False):
     rows.append([{"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "auction_back", "to": back_to})}, "color": "primary"}, {"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "auction_cancel"})}, "color": "negative"}])
     return {"inline": True, "buttons": rows}
 def auction_list_kb(auctions, cmd):
-    rows = []
+    rows = []; line = []
     for i, a in enumerate(auctions[:8]):
         lab = NUM_EMOJI[i] if i < len(NUM_EMOJI) else str(i + 1)
-        rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": cmd, "id": a["id"]})}, "color": "secondary"}])
+        line.append({"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": cmd, "id": a["id"]})}, "color": "secondary"})
+        if len(line) == 4: rows.append(line); line = []
+    if line: rows.append(line)
     rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "auction_menu_show"})}, "color": "primary"}, {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "auction_cancel"})}, "color": "negative"}])
     return {"inline": True, "buttons": rows}
 def auction_lots_kb(lots, back_cmd, back_id=None):
@@ -2221,13 +2223,12 @@ def handle_event(event):
                     elif f == "design_photo": set_state("design_photo_wait"); show(DESIGN_PHOTO_TEXT, design_photo_kb())
                     elif f == "text_format": set_state("edit_menu", {"p": 2}); show("Выберите действия с текстом", text_menu_kb())
                     elif f == "exclusive":
-                        lst = get_excards(user_id); set_state("edit_menu", {"p": 2})
-                        if not lst: show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду: /promo #код.", ex_back_kb())
-                        else:
-                            page = int(payload.get("p", 1)); per_page = 6; total_pages = max(1, (len(lst) + per_page - 1) // per_page); page = max(1, min(page, total_pages))
                             chunk = lst[(page-1)*per_page : page*per_page]
-                            rows = []
-                            for nm in chunk: rows.append([{"action": {"type": "callback", "label": nm[:18], "payload": json.dumps({"cmd": "card_ex_apply", "name": nm})}, "color": "primary"}])
+                            rows = []; line = []
+                            for nm in chunk:
+                                line.append({"action": {"type": "callback", "label": nm[:18], "payload": json.dumps({"cmd": "card_ex_apply", "name": nm})}, "color": "primary"})
+                                if len(line) == 2: rows.append(line); line = []
+                            if line: rows.append(line)
                             nav = []
                             if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_exclusive", "p": page-1})}, "color": "secondary"})
                             nav.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info"})}, "color": "default"})
@@ -2356,13 +2357,12 @@ def handle_event(event):
                     edit_msg(f"📏 Размер обводки: {cur}px", kb)
 
                 elif cmd == "card_exclusive":
-                    lst = get_excards(user_id); set_state("edit_menu", {"p": 2})
-                    if not lst: show("У вас пока нет эксклюзивных карт.\nИх можно получить по промокоду: /promo #код.", ex_back_kb())
-                    else:
-                        page = int(payload.get("p", 1)); per_page = 6; total_pages = max(1, (len(lst) + per_page - 1) // per_page); page = max(1, min(page, total_pages))
                         chunk = lst[(page-1)*per_page : page*per_page]
-                        rows = []
-                        for nm in chunk: rows.append([{"action": {"type": "callback", "label": nm[:18], "payload": json.dumps({"cmd": "card_ex_apply", "name": nm})}, "color": "primary"}])
+                        rows = []; line = []
+                        for nm in chunk:
+                            line.append({"action": {"type": "callback", "label": nm[:18], "payload": json.dumps({"cmd": "card_ex_apply", "name": nm})}, "color": "primary"})
+                            if len(line) == 2: rows.append(line); line = []
+                        if line: rows.append(line)
                         nav = []
                         if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "card_exclusive", "p": page-1})}, "color": "secondary"})
                         nav.append({"action": {"type": "callback", "label": f"{page}/{total_pages}", "payload": json.dumps({"cmd": "page_info"})}, "color": "default"})
