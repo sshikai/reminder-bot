@@ -1546,7 +1546,7 @@ def render_card(user_id):
             except:
                 try: return fnt.getsize(t)[0]
                 except: return len(t) * 10
-        while text_w(text, f) > w - pad * 2 and size > 10: size -= 1; f = get_font(size)
+        while text_w(text, f) > w - pad * 2 and size > 10: size -= 1; f = get_font(size, design.get("font_key", "default"))
         try: bb = draw.textbbox((0, 0), text, font=f); th = bb[3] - bb[1]; yoff = bb[1]
         except: th, yoff = size, 0
         ty = y + (h - th) / 2 - yoff; tw = text_w(text, f)
