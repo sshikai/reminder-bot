@@ -5744,14 +5744,20 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
-            # Таймаут редактора аукционов/промо (5 мин, тихое удаление меню)
+            # Таймауты: промо 1 мин (без упоминания), аукцион 5 мин (тихо)
             with DB_LOCK:
-                astale = CONN.execute("SELECT user_id, peer_id, context FROM auction_state").fetchall()
+                astale = CONN.execute("SELECT user_id, peer_id, step, context FROM auction_state").fetchall()
             for row in astale:
                 try: ctx = json.loads(row["context"] or "{}")
                 except Exception: ctx = {}
-                if now - ctx.get("ts", 0) > 300:
-                    uid, pid = row["user_id"], row["peer_id"]
+                age = now - ctx.get("ts", 0)
+                uid, pid = row["user_id"], row["peer_id"]
+                if row["step"].startswith("promo_"):
+                    if age > 60:
+                        with DB_LOCK:
+                            CONN.execute("DELETE FROM auction_state WHERE user_id=? AND peer_id=?", (uid, pid))
+                        close_promo_session(pid, ctx, "⏰ Время редактора промокодов вышло, вы бездействовали минуту.")
+                elif age > 300:
                     cm = ctx.get("msg_cmid"); mid = ctx.get("msg_id")
                     with DB_LOCK:
                         CONN.execute("DELETE FROM auction_state WHERE user_id=? AND peer_id=?", (uid, pid))
@@ -5896,7 +5902,7 @@ def timer_loop():
                     lpk = "last_poll_{}{}".format(ch, pm)
                     if get_setting(peer, lpk, "0") != "1":
                         pct = int(time.time())
-                        kb = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote", "time": pct})}, "color": "positive
+                        kb = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "✅ Проголосовать: Я", "payload": json.dumps({"cmd": "poll_vote", "time": pct})}, "color": "positive"}]]})
                         try:
                             mid = VK.messages.send(peer_id=peer, message="📊 Опрос: Кто заходит на этот кд? @all", keyboard=kb, random_id=random.getrandbits(31))
                             set_setting(peer, lpk, "1"); set_setting(peer, "last_poll_msg_id", str(mid)); set_setting(peer, "last_poll_time", str(pct))
