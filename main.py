@@ -169,8 +169,6 @@ def text_color_pages():
 POS_FIELDS = {"biz": "Бизнесы", "realty": "Недвижимость", "prop": "Имущество",
               "garage": "Гараж", "phone": "Телефон", "name": "Имя"}
 POS_STEP = 0.0025
-SIZE_STEP = 1
-SIZE_MIN, SIZE_MAX = -20, 40
 
 FRAME_BOX = (0.070, 0.190, 0.280, 0.605)
 FRAME_BOXES_FILE = os.path.join(DATA_DIR, "frame_boxes.json")
@@ -574,21 +572,6 @@ def set_pos(user_id, field, dx, dy):
 def pos_adjust_text(user_id, f):
     dx, dy = get_pos(user_id, f)
     return ("🎯 Положение «{}»:\nСмещение X: {:+.4f} | Y: {:+.4f}\nКаждое нажатие сдвигает текст на маленький шаг.".format(POS_FIELDS.get(f, f), dx, dy))
-
-def get_size(user_id, field):
-    d = get_design(user_id)
-    try: return int((d.get("size") or {}).get(field, 0))
-    except Exception: return 0
-
-def set_size(user_id, field, val):
-    d = get_design(user_id)
-    sz = d.get("size") or {}
-    sz[field] = max(SIZE_MIN, min(SIZE_MAX, int(val)))
-    d["size"] = sz
-    set_card_field(user_id, design=json.dumps(d, ensure_ascii=False))
-
-def size_adjust_text(user_id, f):
-    return ("📏 Размер «{}»: {:+d} (шаг {} пункт, пределы {}…{}).".format(POS_FIELDS.get(f, f), get_size(user_id, f), SIZE_STEP, SIZE_MIN, SIZE_MAX))
 
 def clear_card_data(user_id):
     set_card_field(user_id, name="", businesses="[]", realty="[]", property_val="", garage="", phone="")
@@ -1868,9 +1851,6 @@ def handle_promo_use(peer, sender, raw):
     if used:
         send_msg(peer, "❌ Вы уже активировали этот промокод.")
         return
-    if row["card_name"] in get_excards(sender):
-        send_msg(peer, "❌ У вас уже есть карта «{}» (получали её ранее) — активировать промокод на неё снова нельзя.".format(row["card_name"]))
-        return
     if not strict_template(row["card_name"]):
         send_msg(peer, "❌ Ошибка: карта промокода не найдена в папке бота.")
         return
@@ -2163,7 +2143,6 @@ def render_card(user_id):
     stroke_name_rgb = TEXT_COLORS.get(design.get("stroke_name")) if design.get("stroke_name") else None
     stroke_fields_rgb = TEXT_COLORS.get(design.get("stroke_fields")) if design.get("stroke_fields") else None
     pos_map = design.get("pos") or {}
-    size_map = design.get("size") or {}
 
     def text_w(t, f):
         try: return draw.textlength(t, font=f)
@@ -2179,13 +2158,9 @@ def render_card(user_id):
         except Exception:
             ox, oy = 0.0, 0.0
         x, y, w, h = (rx + ox) * W, (ry + oy) * H, rw * W, rh * H
-        try:
-            soff = int(size_map.get(key, 0) or 0)
-        except Exception:
-            soff = 0
-        size = max(8, int(h * 0.48) + soff)
+        size = max(14, int(h * 0.48))
         f = get_font(size)
-        while text_w(text, f) > w - pad * 2 and size > 8:
+        while text_w(text, f) > w - pad * 2 and size > 10:
             size -= 1
             f = get_font(size)
         try:
@@ -3008,8 +2983,7 @@ def text_menu_kb():
          {"action": {"type": "callback", "label": "Цвет полей", "payload": json.dumps({"cmd": "card_text_field_colors"})}, "color": "secondary"}],
         [{"action": {"type": "callback", "label": "Обводка", "payload": json.dumps({"cmd": "card_text_outline"})}, "color": "secondary"},
          {"action": {"type": "callback", "label": "Положение", "payload": json.dumps({"cmd": "card_text_pos"})}, "color": "secondary"}],
-        [{"action": {"type": "callback", "label": "Размер", "payload": json.dumps({"cmd": "card_text_size"})}, "color": "secondary"},
-         {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
+        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_edit_menu", "p": 2})}, "color": "secondary"}]]}
 
 def text_pos_menu_kb():
     items = [("biz", "Бизнесы"), ("realty", "Недвижимость"), ("prop", "Имущество"),
@@ -3017,15 +2991,6 @@ def text_pos_menu_kb():
     rows = []
     for i in range(0, len(items), 2):
         rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "card_pos_menu", "f": key})}, "color": "primary"} for key, lab in items[i:i+2]])
-    rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_menu"})}, "color": "secondary"}])
-    return {"inline": True, "buttons": rows}
-
-def text_size_menu_kb():
-    items = [("biz", "Бизнесы"), ("realty", "Недвижимость"), ("prop", "Имущество"),
-             ("garage", "Гараж"), ("phone", "Телефон"), ("name", "Имя")]
-    rows = []
-    for i in range(0, len(items), 2):
-        rows.append([{"action": {"type": "callback", "label": lab, "payload": json.dumps({"cmd": "card_size_menu", "f": key})}, "color": "primary"} for key, lab in items[i:i+2]])
     rows.append([{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_menu"})}, "color": "secondary"}])
     return {"inline": True, "buttons": rows}
 
@@ -3037,12 +3002,6 @@ def pos_adjust_kb(f):
          {"action": {"type": "callback", "label": "➡️ Вправо", "payload": json.dumps({"cmd": "card_pos_move", "f": f, "dir": "right"})}, "color": "primary"}],
         [{"action": {"type": "callback", "label": "Сброс", "payload": json.dumps({"cmd": "card_pos_reset", "f": f})}, "color": "negative"},
          {"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_pos"})}, "color": "secondary"}]]}
-
-def size_adjust_kb(f):
-    return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "➕ Больше", "payload": json.dumps({"cmd": "card_size_move", "f": f, "dir": "big"})}, "color": "primary"},
-         {"action": {"type": "callback", "label": "➖ Меньше", "payload": json.dumps({"cmd": "card_size_move", "f": f, "dir": "small"})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Назад", "payload": json.dumps({"cmd": "card_text_size"})}, "color": "secondary"}]]}
 
 def outline_target_kb():
     return {"inline": True, "buttons": [
@@ -3110,6 +3069,23 @@ def expire_stale_games(peer):
         CONN.execute("UPDATE dice_games SET state='expired' WHERE peer_id=? AND state='playing' AND created_at<=?", (peer, now - 600))
         CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
         CONN.commit()
+
+def open_edit_menu(peer, sender):
+    msg_id = None
+    try:
+        msg_id = VK.messages.send(peer_id=peer, message="{} (стр. 1/{}):".format(MAIN_CARD_TEXT, card_edit_pages()), keyboard=json.dumps(card_edit_page_kb(1)), random_id=random.getrandbits(31))
+    except Exception as e:
+        print("open_edit_menu kb send fail:", e)
+    if msg_id is None:
+        try:
+            msg_id = VK.messages.send(peer_id=peer, message=MAIN_CARD_TEXT, random_id=random.getrandbits(31))
+        except Exception as e:
+            print("open_edit_menu plain send fail:", e)
+    if msg_id is None:
+        send_msg(peer, "❌ Не удалось открыть редактор карты (VK отклонил сообщение).")
+        return
+    cmid = resolve_cmid_retry(peer, msg_id)
+    set_card_state(sender, peer, "edit_menu", {"msg_cmid": cmid, "msg_id": msg_id, "p": 1})
 
 def handle_event(event):
     try:
@@ -3651,33 +3627,11 @@ def handle_event(event):
                 elif cmd == "card_pos_reset":
                     f = payload.get("f", "")
                     if f not in POS_FIELDS:
-                        snackbar("❌ Неизвестное поле"); return
+                        snackbar("❌ Ошибка"); return
                     set_pos(user_id, f, 0.0, 0.0)
                     set_state("edit_menu", {"p": 2})
                     show("✅ Положение «{}» сброшено.\n".format(POS_FIELDS[f]) + pos_adjust_text(user_id, f), pos_adjust_kb(f))
                     snackbar("✅ Сброс")
-                elif cmd == "card_text_size":
-                    set_state("edit_menu", {"p": 2})
-                    show("📏 Размер текста: выберите поле для настройки:", text_size_menu_kb())
-                    snackbar("✅ Размер")
-                elif cmd == "card_size_menu":
-                    f = payload.get("f", "")
-                    if f not in POS_FIELDS:
-                        snackbar("❌ Неизвестное поле"); return
-                    set_state("edit_menu", {"p": 2})
-                    show(size_adjust_text(user_id, f), size_adjust_kb(f))
-                    snackbar("✅ Настройка")
-                elif cmd == "card_size_move":
-                    f = payload.get("f", ""); d = payload.get("dir", "")
-                    if f not in POS_FIELDS or d not in ("big", "small"):
-                        snackbar("❌ Ошибка"); return
-                    cur = get_size(user_id, f)
-                    cur = cur + SIZE_STEP if d == "big" else cur - SIZE_STEP
-                    cur = max(SIZE_MIN, min(SIZE_MAX, cur))
-                    set_size(user_id, f, cur)
-                    set_state("edit_menu", {"p": 2})
-                    show(size_adjust_text(user_id, f), size_adjust_kb(f))
-                    snackbar("✅ Изменено")
                 elif cmd == "card_exclusive":
                     lst = get_excards(user_id)
                     set_state("edit_menu", {"p": 2})
@@ -5744,7 +5698,7 @@ def timer_loop():
                     with DB_LOCK:
                         CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
-            # Таймауты: промо 1 мин (без упоминания), аукцион 5 мин (тихо)
+            # Таймауты редакторов аукционов (5 мин, тихо) и промокодов (1 мин, без упоминания)
             with DB_LOCK:
                 astale = CONN.execute("SELECT user_id, peer_id, step, context FROM auction_state").fetchall()
             for row in astale:
