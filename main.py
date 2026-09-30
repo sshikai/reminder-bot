@@ -1287,7 +1287,7 @@ FONTS_MAP = {
     "ptsans":    ("PT Sans",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Regular.ttf"], []),
     "roboto":    ("Roboto",       ["https://raw.githubusercontent.com/google/fonts/main/apache/roboto/static/Roboto-Regular.ttf"], []),
     "noto":      ("Noto Sans",    ["https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf"], []),
-    "pixel":     ("Пиксельный",   ["https://raw.githubusercontent.com/google/fonts/main/ofl/pixelifysans/PixelifySans%5Bwght%5D.ttf", "https://raw.githubusercontent.com/google/fonts/main/ofl/handjet/Handjet%5BELGR%2CELSH%2CELSP%2CELWG%2Cwght%5D.ttf"], []),
+    "pixel":     ("Пиксельный",   ["https://fonts.gstatic.com/s/rubikpixels/v3/SlGXmQOaupkIeSx4CEpB7AdSaBYRagrQrA.ttf", "https://fonts.gstatic.com/s/pressstart2p/v15/e3t4euO8T-267oIAQAu6jDQyK0nSgPJE4580.ttf"], []),
     "mono":      ("Моно",         ["https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSansMono.ttf"], ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]),
     "serif":     ("Serif",        [], ["/usr/share/fonts/liberation/LiberationSerif-Regular.ttf", "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"]),
     "condensed": ("Condensed",    ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptsansnarrow/PT_Sans-Narrow-Web-Regular.ttf"], []),
