@@ -1470,12 +1470,17 @@ def handle_calc_input(sender, peer, text, cmid=None, attachments=None):
         op = ctx.get("op")
         if op == "auto_profit":
             parts = [p.strip() for p in text.replace(" ", "").split(",")]
-            if len(parts) != 2: reply("❌ Формат: купил,продал (через запятую)."); return True
+            if len(parts) != 2: reply("❌ Формат: купил,продал (через запятую, например 123,321)."); return True
             buy = calc_amount(parts[0]); sell = calc_amount(parts[1])
             if buy is None or sell is None: reply("❌ Не понял числа. Пример: 123,321"); return True
-            commission = sell * 0.01; profit = sell - buy - commission
+            commission = sell * 0.01
+            profit = sell - buy - commission
             clear_auction_state(sender, peer)
-            reply("💰 Купил за {}\n💵 Продал за {}\n📉 Комиссия 1%: {}\n\n✨ Профит: {}".format(fmt_money(buy), fmt_money(sell), fmt_money(commission), fmt_money(profit)), calc_main_kb()); return True
+            if profit >= 0:
+                reply("💰 Купил за {}\n💵 Продал за {}\n📉 Комиссия 1%: {}\n\n✨ Профит: {}".format(fmt_money(buy), fmt_money(sell), fmt_money(commission), fmt_money(profit)), calc_main_kb())
+            else:
+                reply("💰 Купил за {}\n💵 Продал за {}\n📉 Комиссия 1%: {}\n\n🔻 Вы в минусе на {}".format(fmt_money(buy), fmt_money(sell), fmt_money(commission), fmt_money(abs(profit))), calc_main_kb())
+            return True
         if op == "auto_sell":
             s = calc_amount(text)
             if s is None: reply("❌ Не понял число."); return True
