@@ -1918,36 +1918,56 @@ def resolve_cmid(peer, sent_id):
     except: pass
     return sent_id
 
+def _ttt_debug(msg):
+    try:
+        with open("/app/data/debug.log", "a", encoding="utf-8") as f:
+            f.write("[{}] {}\n".format(datetime.datetime.now(MSK_TZ).strftime("%H:%M:%S"), msg))
+    except Exception as e: print("debug log fail:", e)
+
 def edit_game_message(peer, game_id, text, keyboard_json=None, table="dice_games"):
     if keyboard_json is not None and not isinstance(keyboard_json, str): keyboard_json = json.dumps(keyboard_json)
     with DB_LOCK:
         row = CONN.execute("SELECT message_id FROM {} WHERE id=?".format(table), (game_id,)).fetchone()
         stored = row["message_id"] if row else 0
     kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
-    # Пробуем оба варианта id подряд
+    _ttt_debug("edit_game_message start: table={} gid={} stored={}".format(table, game_id, stored))
     if stored and int(stored) > 0:
-        for method in ("conversation_message_id", "message_id"):
+        # Попытка 1 — по conversation_message_id
+        try:
+            VK.messages.edit(peer_id=peer, conversation_message_id=int(stored), message=text, keyboard=kb)
+            _ttt_debug("  OK cmid={}".format(stored))
+            return True
+        except Exception as e:
+            _ttt_debug("  FAIL cmid={} err={}".format(stored, str(e)[:250]))
+        # Попытка 2 — по message_id
+        try:
+            VK.messages.edit(peer_id=peer, message_id=int(stored), message=text, keyboard=kb)
+            _ttt_debug("  OK mid={}".format(stored))
+            return True
+        except Exception as e:
+            _ttt_debug("  FAIL mid={} err={}".format(stored, str(e)[:250]))
+    # Удаляем старое
+    if stored and int(stored) > 0:
+        try:
+            VK.messages.delete(peer_id=peer, conversation_message_ids=[int(stored)], delete_for_all=1)
+            _ttt_debug("  DEL by cmid OK")
+        except Exception as e1:
+            _ttt_debug("  DEL cmid FAIL err={}".format(str(e1)[:250]))
             try:
-                if method == "conversation_message_id":
-                    VK.messages.edit(peer_id=peer, conversation_message_id=int(stored), message=text, keyboard=kb)
-                else:
-                    VK.messages.edit(peer_id=peer, message_id=int(stored), message=text, keyboard=kb)
-                return True
-            except Exception as e:
-                print("edit_game_message {} fail: {}".format(method, str(e)[:120]))
-    # Fallback — удаляем старое и шлём новое, сохраняем cmid
-    if stored and int(stored) > 0:
-        try: VK.messages.delete(peer_id=peer, conversation_message_ids=[int(stored)], delete_for_all=1)
-        except Exception:
-            try: VK.messages.delete(peer_id=peer, message_ids=[int(stored)], delete_for_all=1)
-            except Exception: pass
+                VK.messages.delete(peer_id=peer, message_ids=[int(stored)], delete_for_all=1)
+                _ttt_debug("  DEL by mid OK")
+            except Exception as e2:
+                _ttt_debug("  DEL mid FAIL err={}".format(str(e2)[:250]))
+    # Новое сообщение
     try:
         new_mid = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
+        _ttt_debug("  SENT new mid={}".format(new_mid))
         new_cmid = resolve_cmid(peer, new_mid)
+        _ttt_debug("  resolved cmid={}".format(new_cmid))
         with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (new_cmid, game_id)); CONN.commit()
         return True
     except Exception as e:
-        print("edit_game_message send new fail:", e)
+        _ttt_debug("  SEND new FAIL err={}".format(str(e)[:250]))
         return False
         
 def get_user_name(user_id):
@@ -3836,7 +3856,6 @@ def handle_message(peer, sender, text, msg_obj):
         if not targets: send_msg(peer, "❌ Укажите пользователя: `Мд кнб @игрок`"); return
         opponent = targets[0]
         if opponent == sender: send_msg(peer, "❌ Нельзя играть с самим собой!"); return
-        expire_stale_games(peer)
         if has_active_game(peer): send_msg(peer, "❌ В чате уже идёт игра! Дождись окончания."); return
         now = int(time.time())
         with DB_LOCK: cursor = CONN.execute("INSERT INTO kmb_games(peer_id, initiator, opponent, state, created_at) VALUES(?,?,?,?,?)", (peer, sender, opponent, "pending", now)); game_id = cursor.lastrowid; CONN.commit()
@@ -3845,7 +3864,7 @@ def handle_message(peer, sender, text, msg_obj):
             msg_id = VK.messages.send(peer_id=peer, message="✊✌️✋ {}, {} вызывает вас на КНБ! ⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)), keyboard=kb, random_id=random.getrandbits(31))
             cmid = resolve_cmid(peer, msg_id)
             with DB_LOCK: CONN.execute("UPDATE kmb_games SET message_id=? WHERE id=?", (cmid, game_id)); CONN.commit()
-        except: pass
+        except Exception as e: print("kmb send error:", e)
     elif cmd == "кн":
         targets = extract_targets(" ".join(args), reply_from)
         if not targets: send_msg(peer, "❌ Укажите пользователя: `Мд кн @игрок`"); return
