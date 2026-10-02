@@ -1494,18 +1494,18 @@ try: os.makedirs(FONTS_DIR, exist_ok=True)
 except: pass
 
 FONTS_MAP = {
-    "default":    ("DejaVu Sans",       [], ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"]),
-    "serif":      ("Serif",             [], ["/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", "/usr/share/fonts/dejavu/DejaVuSerif.ttf"]),
-    "mono":       ("Monospace",         [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", "/usr/share/fonts/dejavu/DejaVuSansMono.ttf"]),
-    "condensed":  ("Condensed",         [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf", "/usr/share/fonts/dejavu/DejaVuSansCondensed.ttf"]),
-    "liberation": ("Liberation",        [], ["/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"]),
-    "libserif":   ("Liberation Serif",  [], ["/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"]),
-    "libmono":    ("Liberation Mono",   [], ["/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"]),
-    "freesans":   ("FreeSans",          [], ["/usr/share/fonts/truetype/freefont/FreeSans.ttf", "/usr/share/fonts/freefont/FreeSans.ttf"]),
-    "freeserif":  ("FreeSerif",         [], ["/usr/share/fonts/truetype/freefont/FreeSerif.ttf", "/usr/share/fonts/freefont/FreeSerif.ttf"]),
-    "freemono":   ("FreeMono",          [], ["/usr/share/fonts/truetype/freefont/FreeMono.ttf", "/usr/share/fonts/freefont/FreeMono.ttf"]),
+    "default":    ("DejaVu Sans",       [], ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf"]),
+    "serif":      ("Serif",             ["https://raw.githubusercontent.com/ggez/ggez/master/resources/DejaVuSerif.ttf"], []),
+    "mono":       ("Monospace",         ["https://raw.githubusercontent.com/ggez/ggez/master/resources/DejaVuSansMono.ttf"], []),
+    "condensed":  ("Condensed",         [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf"]),
+    "liberation": ("Liberation",        ["https://raw.githubusercontent.com/ggez/ggez/master/resources/LiberationSans-Regular.ttf"], []),
+    "libserif":   ("Liberation Serif",  ["https://raw.githubusercontent.com/ggez/ggez/master/resources/LiberationSerif-Regular.ttf"], []),
+    "libmono":    ("Liberation Mono",   ["https://raw.githubusercontent.com/ggez/ggez/master/resources/LiberationMono-Regular.ttf"], []),
+    "freesans":   ("FreeSans",          ["https://raw.githubusercontent.com/opensourcedesign/fonts/master/gnu-freefont_freesans/FreeSans.ttf"], []),
+    "freeserif":  ("FreeSerif",         ["https://raw.githubusercontent.com/opensourcedesign/fonts/master/gnu-freefont_freeserif/FreeSerif.ttf"], []),
+    "freemono":   ("FreeMono",          ["https://raw.githubusercontent.com/opensourcedesign/fonts/master/gnu-freefont_freemono/FreeMono.ttf"], []),
     "pixel":      ("Пиксельный",        ["https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"], []),
-    "minecraft":  ("Minecraft",         ["https://github.com/IdreesInc/Monocraft/raw/main/dist/Monocraft.ttf", "https://cdn.jsdelivr.net/gh/IdreesInc/Monocraft@main/dist/Monocraft.ttf"], []),
+    "minecraft":  ("Minecraft",         ["https://github.com/IdreesInc/Monocraft/raw/main/dist/Monocraft-ttf/Monocraft.ttf"], []),
 }
 FONTS_ORDER = list(FONTS_MAP.keys())
 FONT_PAGE_SIZE = 6
