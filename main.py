@@ -1950,7 +1950,7 @@ def _ttt_debug(msg):
             f.write("[{}] {}\n".format(datetime.datetime.now(MSK_TZ).strftime("%H:%M:%S"), msg))
     except Exception as e: print("debug log fail:", e)
 
-MARKER = "\u200b"  # невидимый пробел для маркера
+MARKER = chr(0x200B)  # невидимый пробел для маркера
 
 def _make_marker(kind, game_id):
     """kind = TTT/KMB/DICE/MARRY, game_id = число"""
