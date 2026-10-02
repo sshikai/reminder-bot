@@ -1868,14 +1868,46 @@ def is_owner(sender, peer):
     if is_real_owner(sender, peer): return True
     return sender > 0 and get_user_role(peer, sender) >= 4
 
+# ===== АНТИ-FLOOD =====
+FLOOD_GUARD = {}  # (peer, "send"/"edit") -> until_ts
+
+def _flood_blocked(peer, kind):
+    key = (peer, kind)
+    until = FLOOD_GUARD.get(key, 0)
+    if until > time.time(): return True, int(until - time.time())
+    return False, 0
+
+def _flood_set(peer, kind, cooldown=10):
+    FLOOD_GUARD[(peer, kind)] = time.time() + cooldown
+
+def _is_flood_err(e):
+    s = str(e)
+    return "[9]" in s or "Flood control" in s or "too much" in s.lower()
+
+def _flood_cooldown_from_err(e):
+    return 10
+# ============================================
+
+
 def send_msg(peer, text, attachments=None, keyboard=None):
     if VK is None or not peer: return False
+    blocked, left = _flood_blocked(peer, "send")
+    if blocked:
+        print("FLOOD GUARD: peer={} send blocked, {}s left".format(peer, left))
+        return False
     try:
         params = {'peer_id': peer, 'message': text, 'random_id': random.getrandbits(31)}
         if attachments: params['attachment'] = attachments
         if keyboard: params['keyboard'] = keyboard if isinstance(keyboard, str) else json.dumps(keyboard)
         return VK.messages.send(**params)
-    except Exception as e: LAST_ERR["msg"] = str(e); print("send error:", e); return False
+    except Exception as e:
+        LAST_ERR["msg"] = str(e)
+        if _is_flood_err(e):
+            _flood_set(peer, "send", _flood_cooldown_from_err(e))
+            print("FLOOD DETECTED send peer={} err={}".format(peer, e))
+        else:
+            print("send error:", e)
+        return False
 
 def resolve_cmid(peer, sent_id):
     try:
@@ -2305,8 +2337,19 @@ def handle_event(event):
         def edit_msg(text, kb=None):
             kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
             if cmid:
-                try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=kbj); return True
-                except Exception as e: LAST_ERR["msg"] = str(e); return False
+                blocked, left = _flood_blocked(peer_id, "edit")
+                if blocked:
+                    print("FLOOD GUARD: peer={} edit blocked, {}s left".format(peer_id, left))
+                    LAST_ERR["msg"] = "[9] Flood control local guard"
+                    return False
+                try:
+                    VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=kbj); return True
+                except Exception as e:
+                    LAST_ERR["msg"] = str(e)
+                    if _is_flood_err(e):
+                        _flood_set(peer_id, "edit", _flood_cooldown_from_err(e))
+                        print("FLOOD DETECTED edit peer={} err={}".format(peer_id, e))
+                    return False
             return send_msg(peer_id, text, keyboard=kb)
         def show(text, kb):
             ok = edit_msg(text, kb)
