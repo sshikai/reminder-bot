@@ -4389,7 +4389,7 @@ def timer_loop():
                     CONN.execute("UPDATE ttt_games SET state='expired' WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)); CONN.commit()
                     for g in exp_ttt:
                         edit_game_message(g["peer_id"], g["id"], "⏰ Игра в крестики-нолики закрыта из-за бездействия.", None, table="ttt_games")
-                        except: pass
+                except: pass
                 pend_rows = CONN.execute("SELECT peer_id, value FROM settings WHERE key='top_clean_pending'").fetchall()
                 for pr in pend_rows:
                     try: pend = json.loads(pr["value"])
