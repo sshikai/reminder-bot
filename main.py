@@ -1350,6 +1350,19 @@ def do_broadcast_users(rtext, att, notify_peer):
     try: send_msg(notify_peer, "✅ Рассылка в ЛС завершена. Успешно: {}/{} (из {} подписчиков)".format(ok, total, len(subscribers) if subscribers else "?"))
     except: pass
 
+def plural_ru(n, one, few, many):
+    """n — число, one/few/many — формы слов (1 / 2-4 / 5+).
+    plural_ru(1, 'чат', 'чата', 'чатов') → 'чат'
+    plural_ru(3, 'чат', 'чата', 'чатов') → 'чата'
+    plural_ru(5, 'чат', 'чата', 'чатов') → 'чатов'
+    """
+    n = abs(int(n))
+    if n % 100 in (11, 12, 13, 14): return many
+    last = n % 10
+    if last == 1: return one
+    if last in (2, 3, 4): return few
+    return many
+
 def do_announce_broadcast(cmid, notify_peer):
     chats = get_all_bot_chats()
     ok = 0; total = 0
@@ -1363,7 +1376,7 @@ def do_announce_broadcast(cmid, notify_peer):
             ok += 1
             time.sleep(0.35)
         except Exception as e: print("announce err in", cp, e)
-    try: send_msg(notify_peer, "✅ Объявление разослано в {} чатов (успешно: {}/{}).".format(total, ok, total))
+    try: send_msg(notify_peer, "✅ Объявление разослано в {} {}.".format(ok, plural_ru(ok, "чат", "чата", "чатов")))
     except: pass
 
 # ===== КРЕСТИКИ-НОЛИКИ =====
