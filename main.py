@@ -1151,10 +1151,18 @@ def get_promo(code):
 
 def open_promo_menu(peer, sender):
     close_existing_editors(peer, sender)
-    with DB_LOCK: count = CONN.execute("SELECT COUNT(*) FROM promos").fetchone()[0]
+    now_ts = int(time.time())
+    with DB_LOCK:
+        rows = CONN.execute("SELECT kind, max_act, act, expire_ts FROM promos").fetchall()
+    count = 0
+    for r in rows:
+        if r["kind"] == "activations":
+            if (r["max_act"] or 0) - (r["act"] or 0) > 0: count += 1
+        else:
+            if not r["expire_ts"] or now_ts <= r["expire_ts"]: count += 1
     set_auction_state(sender, peer, "promo_menu", {})
     send_msg(peer, f"📊 Всего активных промокодов: {count}\n\nВыберите действие:", keyboard=promo_menu_kb())
-
+    
 def build_promo_active_text():
     with DB_LOCK:
         rows = CONN.execute("SELECT code, kind, card_name, max_act, act, expire_ts FROM promos ORDER BY id").fetchall()
@@ -3185,8 +3193,6 @@ def handle_message(peer, sender, text, msg_obj):
                 try: send_msg(peer, "👋 Привет, {}!\nЯ бот семьи Million Dollars.\n\n📖 Список команд: напиши «Мд команды»\n🎁 Промокоды: /promo #код".format(mention(sender)))
                 except: pass
         if first_tok == "/promo": handle_promo_use(peer, sender, text.strip()[len("/promo"):].strip()); return
-        if re.fullmatch(r"#[a-zA-Zа-яА-Я0-9_]+", text.strip()):
-            send_msg(peer, "❌ Так промокод не активируется.\nИспользуй команду: /promo {}".format(text.strip())); return
         is_boss = sender in (CREATOR_ID, LEADER_ID) and peer == sender
         is_insp = is_inspector(sender) and peer == sender
         is_auct = is_auctioneer(sender) and peer == sender
@@ -3265,6 +3271,8 @@ def handle_message(peer, sender, text, msg_obj):
         if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_promo_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_calc_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
+        if re.fullmatch(r"#[a-zA-Zа-яА-Я0-9_]+", text.strip()):
+            send_msg(peer, "❌ Так промокод не активируется.\nИспользуй команду: /promo {}".format(text.strip())); return
         return
 
     # ЧАТ
