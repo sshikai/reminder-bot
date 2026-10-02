@@ -66,7 +66,7 @@ TEXT_PER_PAGE = 6
 def text_color_pages(): return max(1, -(-len(TEXT_COLOR_ORDER) // TEXT_PER_PAGE))
 
 POS_FIELDS = {"biz":"Бизнесы","realty":"Недвижимость","prop":"Имущество","garage":"Гараж","phone":"Телефон","name":"Имя"}
-POS_STEP = 0.0025
+POS_STEP = 0.005
 FRAME_BOX = (0.070, 0.190, 0.280, 0.605)
 FRAME_BOXES_FILE = os.path.join(DATA_DIR, "frame_boxes.json")
 _FRAME_BOXES_CACHE = {"data": None, "ts": 0.0}
