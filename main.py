@@ -1924,26 +1924,24 @@ def edit_game_message(peer, game_id, text, keyboard_json=None, table="dice_games
         row = CONN.execute("SELECT message_id FROM {} WHERE id=?".format(table), (game_id,)).fetchone()
         stored = row["message_id"] if row else 0
     kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
-    # 1. Пробуем редактировать по cmid
+    # 1. Резолвим cmid динамически по сохранённому message_id, редактируем по cmid
     if stored and int(stored) > 0:
         try:
-            VK.messages.edit(peer_id=peer, conversation_message_id=stored, message=text, keyboard=kb)
-            return True
-        except Exception:
-            pass
-    # 2. Пробуем редактировать по mid
+            resp = VK.messages.getById(message_ids=[int(stored)])
+            items = resp.get("items", [])
+            if items:
+                cm = items[0].get("conversation_message_id")
+                if cm:
+                    VK.messages.edit(peer_id=peer, conversation_message_id=int(cm), message=text, keyboard=kb)
+                    return True
+        except Exception as e:
+            print("edit_game_message resolve fail:", e)
+    # 2. Резолв не удался — удаляем старое и шлём новое
     if stored and int(stored) > 0:
-        try:
-            VK.messages.edit(peer_id=peer, message_id=stored, message=text, keyboard=kb)
-            return True
+        try: VK.messages.delete(peer_id=peer, message_ids=[int(stored)], delete_for_all=1)
         except Exception:
-            pass
-    # 3. Фоллбек — удаляем старое, шлём новое
-    if stored and int(stored) > 0:
-        try:
-            VK.messages.delete(peer_id=peer, message_ids=[stored], delete_for_all=1)
-        except Exception:
-            pass
+            try: VK.messages.delete(peer_id=peer, conversation_message_ids=[int(stored)], delete_for_all=1)
+            except Exception: pass
     try:
         new_id = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
         with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (new_id, game_id)); CONN.commit()
@@ -1951,7 +1949,7 @@ def edit_game_message(peer, game_id, text, keyboard_json=None, table="dice_games
     except Exception as e:
         print("edit_game_message send new fail:", e)
         return False
-
+        
 def get_user_name(user_id):
     if user_id in NAME_CACHE: return NAME_CACHE[user_id]
     name = "Пользователь"
@@ -2800,12 +2798,10 @@ def handle_event(event):
             gid = payload.get("g", 0)
             with DB_LOCK: game = CONN.execute("SELECT * FROM ttt_games WHERE id=?", (gid,)).fetchone()
             if not game: snackbar("❌ Игра не найдена"); return
-            # СНАЧАЛА проверяем state — если уже не pending/playing, выходим
             if game["state"] not in ("pending", "playing"):
                 snackbar("⚠️ Игра уже завершена"); return
             chat_peer = game["peer_id"]
             now = int(time.time())
-            # Только теперь проверяем таймаут
             if now - game["created_at"] > 60:
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET state='expired' WHERE id=?", (gid,)); CONN.commit()
                 edit_game_message(chat_peer, gid, "⏰ Игра в крестики-нолики отменена из-за бездействия.", None, table="ttt_games")
@@ -2814,10 +2810,9 @@ def handle_event(event):
                 if user_id != game["opponent"]: snackbar("⛔ Это не твой вызов"); return
                 if game["state"] != "pending": snackbar("⚠️ Игра уже неактивна"); return
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET state='playing', current_turn=?, created_at=? WHERE id=?", (game["initiator"], now, gid)); CONN.commit()
-                board = game["board"]
                 turn_name = silent_mention_badge(game["initiator"], chat_peer)
-                txt = "{}, ваш ход (крестики)\n\n{}".format(turn_name, ttt_board_text(board))
-                edit_game_message(chat_peer, gid, txt, ttt_kb(gid, board), table="ttt_games")
+                txt = "{}, ваш ход (крестики)".format(turn_name)
+                edit_game_message(chat_peer, gid, txt, ttt_kb(gid, game["board"]), table="ttt_games")
                 snackbar("🎮 Игра началась!"); return
             elif cmd == "ttt_decline":
                 if user_id != game["opponent"]: snackbar("⛔ Это не твой вызов"); return
@@ -2837,17 +2832,17 @@ def handle_event(event):
                 board[idx] = mark; board = "".join(board)
                 winner = ttt_check_winner(board)
                 if winner:
-                    if winner == 'D': txt = "🤝 Ничья!\n\n{}".format(ttt_board_text(board))
+                    if winner == 'D': txt = "🤝 Ничья!"
                     else:
                         w_id = game["initiator"] if winner == 'X' else game["opponent"]
-                        txt = "🏆 {} побеждает ({})!\n\n{}".format(silent_mention_badge(w_id, chat_peer), 'крестики' if winner == 'X' else 'нолики', ttt_board_text(board))
+                        txt = "🏆 {} побеждает ({})!".format(silent_mention_badge(w_id, chat_peer), 'крестики' if winner == 'X' else 'нолики')
                     with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, state='finished', winner=? WHERE id=?", (board, 0 if winner=='D' else 1, gid)); CONN.commit()
                     edit_game_message(chat_peer, gid, txt, None, table="ttt_games")
                     snackbar("🎉 Конец игры"); return
                 next_id = game["opponent"] if user_id == game["initiator"] else game["initiator"]
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, current_turn=?, created_at=? WHERE id=?", (board, next_id, now, gid)); CONN.commit()
                 turn_word = 'крестики' if next_id == game["initiator"] else 'нолики'
-                txt = "{}, ваш ход ({})\n\n{}".format(silent_mention_badge(next_id, chat_peer), turn_word, ttt_board_text(board))
+                txt = "{}, ваш ход ({})".format(silent_mention_badge(next_id, chat_peer), turn_word)
                 edit_game_message(chat_peer, gid, txt, ttt_kb(gid, board), table="ttt_games")
                 snackbar("✅ Ход сделан"); return
 
