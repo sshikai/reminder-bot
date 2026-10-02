@@ -1315,10 +1315,11 @@ def do_broadcast_chats(rtext, att, notify_peer):
     ok = 0; total = len(chats)
     for t in chats:
         try:
-            res = send_msg(t, rtext, attachments=att) if att else send_msg(t, rtext)
-            if res: ok += 1
+            if att: VK.messages.send(peer_id=t, message=rtext, attachment=att, random_id=random.getrandbits(31))
+            else: VK.messages.send(peer_id=t, message=rtext, random_id=random.getrandbits(31))
+            ok += 1
             time.sleep(0.25)
-        except: pass
+        except Exception as e: print("broadcast chat err in", t, e)
     try: send_msg(notify_peer, "✅ Рассылка по чатам завершена. Успешно: {}/{}".format(ok, total))
     except: pass
 
@@ -1330,13 +1331,14 @@ def do_broadcast_users(rtext, att, notify_peer):
     ok = 0; total = len(targets)
     for uid in targets:
         try:
-            res = send_msg(uid, rtext, attachments=att) if att else send_msg(uid, rtext)
-            if res: ok += 1
+            if att: VK.messages.send(peer_id=uid, message=rtext, attachment=att, random_id=random.getrandbits(31))
+            else: VK.messages.send(peer_id=uid, message=rtext, random_id=random.getrandbits(31))
+            ok += 1
             time.sleep(0.15)
-        except: pass
+        except Exception as e: print("broadcast user err in", uid, e)
     try: send_msg(notify_peer, "✅ Рассылка в ЛС завершена. Успешно: {}/{} (из {} подписчиков группы)".format(ok, total, len(subscribers) if subscribers else "?"))
     except: pass
-
+        
 def do_announce_broadcast(cmid, notify_peer):
     chats = get_all_bot_chats()
     ok = 0; total = 0
@@ -1346,10 +1348,11 @@ def do_announce_broadcast(cmid, notify_peer):
         total += 1
         try:
             fj = json.dumps({"peer_id": MD_CHAT_PEER, "conversation_message_ids": [cmid]})
-            res = VK.messages.send(peer_id=cp, message="📢 Объявление от семьи Million Dollars:", forward=fj, random_id=random.getrandbits(31))
-            if res: ok += 1
+            VK.messages.send(peer_id=cp, message="📢 Объявление от семьи Million Dollars:", forward=fj, random_id=random.getrandbits(31))
+            ok += 1  # дошли сюда без исключения — значит VK принял
             time.sleep(0.35)
-        except Exception as e: print("announce err in", cp, e)
+        except Exception as e:
+            print("announce err in", cp, e)
     try: send_msg(notify_peer, "✅ Объявление разослано в {} чатов (успешно: {}/{}).".format(total, ok, total))
     except: pass
 
@@ -1494,20 +1497,19 @@ try: os.makedirs(FONTS_DIR, exist_ok=True)
 except: pass
 
 FONTS_MAP = {
-    # --- Системные шрифты (работают сразу, без интернета) ---
-    "default":    ("DejaVu Sans",       [], ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"]),
-    "serif":      ("DejaVu Serif",      [], ["/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", "/usr/share/fonts/dejavu/DejaVuSerif.ttf"]),
-    "mono":       ("DejaVu Sans Mono",  [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", "/usr/share/fonts/dejavu/DejaVuSansMono.ttf"]),
-    "condensed":  ("DejaVu Condensed",  [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf", "/usr/share/fonts/dejavu/DejaVuSansCondensed.ttf"]),
-    "liberation": ("Liberation Sans",   [], ["/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"]),
-    "libserif":   ("Liberation Serif",  [], ["/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"]),
-    "libmono":    ("Liberation Mono",   [], ["/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"]),
-    "freesans":   ("FreeSans",          [], ["/usr/share/fonts/truetype/freefont/FreeSans.ttf", "/usr/share/fonts/freefont/FreeSans.ttf"]),
-    "freeserif":  ("FreeSerif",         [], ["/usr/share/fonts/truetype/freefont/FreeSerif.ttf", "/usr/share/fonts/freefont/FreeSerif.ttf"]),
-    "freemono":   ("FreeMono",          [], ["/usr/share/fonts/truetype/freefont/FreeMono.ttf", "/usr/share/fonts/freefont/FreeMono.ttf"]),
-    # --- Шрифты, скачиваемые из GitHub (проверенные, с кириллицей) ---
-    "pixel":      ("Пиксельный",        ["https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"], []),
-    "minecraft":  ("Minecraft",         ["https://github.com/IdreesInc/Monocraft/raw/main/dist/Monocraft-ttf/Monocraft.ttf"], []),
+    "default":     ("DejaVu Sans",     ["https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf"], []),
+    "ptsans":      ("PT Sans",         ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Regular.ttf"], []),
+    "ptserif":     ("PT Serif",        ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PT_Serif-Web-Regular.ttf"], []),
+    "roboto":      ("Roboto",          ["https://raw.githubusercontent.com/google/fonts/main/ofl/roboto/static/Roboto-Regular.ttf", "https://raw.githubusercontent.com/google/fonts/main/apache/roboto/static/Roboto-Regular.ttf"], []),
+    "philosopher": ("Philosopher",     ["https://raw.githubusercontent.com/google/fonts/main/ofl/philosopher/Philosopher-Regular.ttf"], []),
+    "yeseva":      ("Yeseva One",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/yesevaone/YesevaOne-Regular.ttf"], []),
+    "kelly":       ("Kelly Slab",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/kellyslab/KellySlab-Regular.ttf"], []),
+    "neucha":      ("Neucha",          ["https://raw.githubusercontent.com/google/fonts/main/ofl/neucha/Neucha.ttf"], []),
+    "badscript":   ("Bad Script",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/badscript/BadScript-Regular.ttf"], []),
+    "marck":       ("Marck Script",    ["https://raw.githubusercontent.com/google/fonts/main/ofl/marckscript/MarckScript-Regular.ttf"], []),
+    "pixel":       ("Пиксельный",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"], []),
+    "minecraft":   ("Minecraft",       ["https://github.com/IdreesInc/Monocraft/raw/main/dist/Monocraft.ttf"], []),
+    "underdog":    ("Underdog",        ["https://raw.githubusercontent.com/google/fonts/main/ofl/underdog/Underdog-Regular.ttf"], []),
 }
 FONTS_ORDER = list(FONTS_MAP.keys())
 FONT_PAGE_SIZE = 6
@@ -1519,14 +1521,14 @@ def _download_font(key):
         p = _FONT_PATHS_CACHE[key]
         if p and os.path.isfile(p): return p
     name, urls, sys_paths = FONTS_MAP.get(key, FONTS_MAP["default"])
-    # 1. Системные пути
+    # 1. Системные пути (если есть — используем)
     for p in sys_paths:
         if os.path.isfile(p): _FONT_PATHS_CACHE[key] = p; return p
-    # 2. Локальный кэш
+    # 2. Локальный кэш в /app/data/fonts/
     local = os.path.join(FONTS_DIR, "cardfont_{}.ttf".format(key))
     if os.path.isfile(local) and os.path.getsize(local) > 10000:
         _FONT_PATHS_CACHE[key] = local; return local
-    # 3. Скачивание из интернета
+    # 3. Скачиваем по прямым ссылкам
     for url in urls:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
@@ -1536,12 +1538,11 @@ def _download_font(key):
                 with open(local, "wb") as f: f.write(data)
                 _FONT_PATHS_CACHE[key] = local; return local
         except Exception as e: print("font download {} err: {}".format(key, e))
-    # 4. Fallback на системный DejaVu, если сам ключ не default
+    # 4. Fallback — если у ключа не default, пробуем default
     if key != "default":
-        print("FALLBACK to DejaVu Sans for font key:", key)
+        print("FALLBACK to DejaVu for key:", key)
         fb = _download_font("default")
         if fb: return fb
-    # 5. Совсем ничего не нашли — возвращаем None, get_font сам решит, что делать
     return None
     
 def font_display_name(key):
