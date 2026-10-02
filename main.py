@@ -1460,9 +1460,12 @@ def handle_calc_input(sender, peer, text, cmid=None, attachments=None):
     if time.time() - ctx.get("ts", 0) > 60:
         clear_auction_state(sender, peer); close_calc_session(peer, ctx, "⏰ Калькулятор закрыт из-за бездействия."); return True
     def reply(msg, kb=None):
+        # 1. Старое сообщение вопроса → "✅ Готово" без кнопок
         if prompt_cmid:
-            try: VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message=msg, keyboard=json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})); return
+            try:
+                VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message="✅ Готово", keyboard=json.dumps({"inline": True, "buttons": []}))
             except: pass
+        # 2. Новое сообщение с результатом
         send_msg(peer, msg, keyboard=kb)
     if text.strip().lower() in ("отмена", "отменить"):
         clear_auction_state(sender, peer); reply("❌ Калькулятор закрыт."); return True
@@ -1475,7 +1478,7 @@ def handle_calc_input(sender, peer, text, cmid=None, attachments=None):
             if buy is None or sell is None: reply("❌ Не понял числа. Пример: 123,321"); return True
             commission = sell * 0.01
             profit = sell - buy - commission
-            clear_auction_state(sender, peer)
+            set_auction_state(sender, peer, "calc_menu", ctx)
             if profit >= 0:
                 reply("💰 Купил за {}\n💵 Продал за {}\n📉 Комиссия 1%: {}\n\n✨ Профит: {}".format(fmt_money(buy), fmt_money(sell), fmt_money(commission), fmt_money(profit)), calc_main_kb())
             else:
@@ -1484,23 +1487,31 @@ def handle_calc_input(sender, peer, text, cmid=None, attachments=None):
         if op == "auto_sell":
             s = calc_amount(text)
             if s is None: reply("❌ Не понял число."); return True
-            c = s * 0.01; clear_auction_state(sender, peer)
-            reply("🏷 Продажа: {}\n📉 Комиссия 1%: {}".format(fmt_money(s), fmt_money(c)), calc_main_kb()); return True
+            c = s * 0.01
+            set_auction_state(sender, peer, "calc_menu", ctx)
+            reply("🏷 Продажа: {}\n📉 Комиссия 1%: {}".format(fmt_money(s), fmt_money(c)), calc_main_kb())
+            return True
         if op == "trade":
             s = calc_amount(text)
             if s is None: reply("❌ Не понял число."); return True
-            c = s * 0.01; clear_auction_state(sender, peer)
-            reply("🤝 Сумма трейда: {}\n📉 Комиссия 1%: {}".format(fmt_money(s), fmt_money(c)), calc_main_kb()); return True
+            c = s * 0.01
+            set_auction_state(sender, peer, "calc_menu", ctx)
+            reply("🤝 Сумма трейда: {}\n📉 Комиссия 1%: {}".format(fmt_money(s), fmt_money(c)), calc_main_kb())
+            return True
         if op == "auction":
             s = calc_amount(text)
             if s is None: reply("❌ Не понял число."); return True
-            c = s * 0.05; clear_auction_state(sender, peer)
-            reply("🔨 Продажа на аукционе: {}\n📉 Комиссия 5%: {}".format(fmt_money(s), fmt_money(c)), calc_main_kb()); return True
+            c = s * 0.05
+            set_auction_state(sender, peer, "calc_menu", ctx)
+            reply("🔨 Продажа на аукционе: {}\n📉 Комиссия 5%: {}".format(fmt_money(s), fmt_money(c)), calc_main_kb())
+            return True
         if op == "gos":
             s = calc_amount(text)
             if s is None: reply("❌ Не понял число."); return True
-            half = s * 0.5; clear_auction_state(sender, peer)
-            reply("🏛 Госс стоимость: {}\n💰 Половина (что вы получите): {}".format(fmt_money(s), fmt_money(half)), calc_main_kb()); return True
+            half = s * 0.5
+            set_auction_state(sender, peer, "calc_menu", ctx)
+            reply("🏛 Госс стоимость: {}\n💰 Половина (что вы получите): {}".format(fmt_money(s), fmt_money(half)), calc_main_kb())
+            return True
         return False
     return False
 def open_calc_menu(peer, sender):
@@ -3058,8 +3069,10 @@ def handle_event(event):
 # ===== КАЛЬКУЛЯТОР CALLBACK =====
 def handle_calc_callback(cmd, user_id, peer_id, cmid, payload):
     state = get_auction_state(user_id, peer_id)
-    if not state: return False
-    if state["step"] not in ("calc_menu", "calc_auto", "calc_input"): return False
+    if not state or state["step"] not in ("calc_menu", "calc_auto", "calc_input"):
+        # State потерялся — восстанавливаем, чтобы первое нажатие сработало
+        set_auction_state(user_id, peer_id, "calc_menu", {"msg_cmid": cmid})
+        state = get_auction_state(user_id, peer_id)
     ctx = state.get("context", {}); prompt_cmid = ctx.get("msg_cmid") or cmid
     def calc_edit(msg, kb=None):
         if prompt_cmid:
