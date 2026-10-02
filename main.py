@@ -2310,6 +2310,14 @@ def expire_stale_games(peer):
         CONN.execute("UPDATE kmb_games SET state='expired' WHERE peer_id=? AND state IN ('pending','choosing') AND created_at<=?", (peer, now - 300))
         CONN.commit()
 
+def has_active_game(peer):
+    """True если в чате уже идёт любая из трёх игр."""
+    with DB_LOCK:
+        d = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending','playing')", (peer,)).fetchone()
+        k = CONN.execute("SELECT id FROM kmb_games WHERE peer_id=? AND state IN ('pending','choosing')", (peer,)).fetchone()
+        t = CONN.execute("SELECT id FROM ttt_games WHERE peer_id=? AND state IN ('pending','playing')", (peer,)).fetchone()
+    return bool(d or k or t)
+
 def open_edit_menu(peer, sender):
     close_existing_editors(peer, sender)
     msg_id = None
@@ -2779,9 +2787,7 @@ def handle_event(event):
             now = int(time.time())
             if now - game["created_at"] > 60:
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET state='expired' WHERE id=?", (gid,)); CONN.commit()
-                try:
-                    VK.messages.edit(peer_id=chat_peer, conversation_message_id=game["message_id"], message="⏰ Игра в крестики-нолики отменена из-за бездействия.", keyboard=json.dumps({"inline": True, "buttons": []}))
-                except: pass
+                edit_game_message(chat_peer, gid, "⏰ Игра в крестики-нолики отменена из-за бездействия.", None, table="ttt_games")
                 snackbar("⏰ Время вышло"); return
             if cmd == "ttt_accept":
                 if user_id != game["opponent"]: snackbar("⛔ Это не твой вызов"); return
@@ -2790,15 +2796,15 @@ def handle_event(event):
                 board = game["board"]
                 turn_name = silent_mention_badge(game["initiator"], chat_peer)
                 txt = "{}, ваш ход (крестики)\n\n{}".format(turn_name, ttt_board_text(board))
-                try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=game["message_id"], message=txt, keyboard=json.dumps(ttt_kb(gid, board)))
-                except: pass
-                snackbar("🎮 Игра началась!"); return
+                ok = edit_game_message(chat_peer, gid, txt, ttt_kb(gid, board), table="ttt_games")
+                if ok: snackbar("🎮 Игра началась!")
+                else: snackbar("⚠️ Не удалось обновить поле, напиши «Мд кн» заново")
+                return
             elif cmd == "ttt_decline":
                 if user_id != game["opponent"]: snackbar("⛔ Это не твой вызов"); return
                 if game["state"] != "pending": snackbar("⚠️ Игра уже неактивна"); return
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET state='declined' WHERE id=?", (gid,)); CONN.commit()
-                try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=game["message_id"], message="😞 {} отказался от игры.".format(silent_mention_badge(game["opponent"], chat_peer)), keyboard=json.dumps({"inline": True, "buttons": []}))
-                except: pass
+                edit_game_message(chat_peer, gid, "😞 {} отказался от игры.".format(silent_mention_badge(game["opponent"], chat_peer)), None, table="ttt_games")
                 snackbar("❌ Отклонено"); return
             elif cmd == "ttt_move":
                 if game["state"] != "playing": snackbar("⚠️ Игра не активна"); return
@@ -2817,15 +2823,13 @@ def handle_event(event):
                         w_id = game["initiator"] if winner == 'X' else game["opponent"]
                         txt = "🏆 {} побеждает ({})!\n\n{}".format(silent_mention_badge(w_id, chat_peer), 'крестики' if winner == 'X' else 'нолики', ttt_board_text(board))
                     with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, state='finished', winner=? WHERE id=?", (board, 0 if winner=='D' else 1, gid)); CONN.commit()
-                    try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=game["message_id"], message=txt, keyboard=json.dumps({"inline": True, "buttons": []}))
-                    except: pass
+                    edit_game_message(chat_peer, gid, txt, None, table="ttt_games")
                     snackbar("🎉 Конец игры"); return
                 next_id = game["opponent"] if user_id == game["initiator"] else game["initiator"]
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, current_turn=?, created_at=? WHERE id=?", (board, next_id, now, gid)); CONN.commit()
                 turn_word = 'крестики' if next_id == game["initiator"] else 'нолики'
                 txt = "{}, ваш ход ({})\n\n{}".format(silent_mention_badge(next_id, chat_peer), turn_word, ttt_board_text(board))
-                try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=game["message_id"], message=txt, keyboard=json.dumps(ttt_kb(gid, board)))
-                except: pass
+                edit_game_message(chat_peer, gid, txt, ttt_kb(gid, board), table="ttt_games")
                 snackbar("✅ Ход сделан"); return
 
         # ===== КАЛЬКУЛЯТОР ПЕРЕКУПА: КОЛБЭКИ =====
@@ -3803,10 +3807,7 @@ def handle_message(peer, sender, text, msg_obj):
         if dice_blocked(peer, sender): send_msg(peer, "❌ Ты не можешь играть: оба наказания активны!"); return
         if dice_blocked(peer, opponent): send_msg(peer, "❌ {} не может играть!".format(silent_mention_badge(opponent, peer))); return
         expire_stale_games(peer)
-        with DB_LOCK:
-            active = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending','playing')", (peer,)).fetchone()
-            active_kmb = CONN.execute("SELECT id FROM kmb_games WHERE peer_id=? AND state IN ('pending','choosing')", (peer,)).fetchone()
-        if active or active_kmb: send_msg(peer, "❌ Уже идёт игра!"); return
+        if has_active_game(peer): send_msg(peer, "❌ В чате уже идёт игра! Дождись окончания."); return
         now = int(time.time())
         with DB_LOCK: cursor = CONN.execute("INSERT INTO dice_games(peer_id, initiator, opponent, state, created_at) VALUES(?,?,?,?,?)", (peer, sender, opponent, "pending", now)); game_id = cursor.lastrowid; CONN.commit()
         kb = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "✅ Принять", "payload": json.dumps({"cmd": "dice_accept", "game_id": game_id})}, "color": "positive"}, {"action": {"type": "callback", "label": "❌ Отказаться", "payload": json.dumps({"cmd": "dice_decline", "game_id": game_id})}, "color": "negative"}]]})
@@ -3822,10 +3823,7 @@ def handle_message(peer, sender, text, msg_obj):
         opponent = targets[0]
         if opponent == sender: send_msg(peer, "❌ Нельзя играть с самим собой!"); return
         expire_stale_games(peer)
-        with DB_LOCK:
-            active = CONN.execute("SELECT id FROM dice_games WHERE peer_id=? AND state IN ('pending','playing')", (peer,)).fetchone()
-            active_kmb = CONN.execute("SELECT id FROM kmb_games WHERE peer_id=? AND state IN ('pending','choosing')", (peer,)).fetchone()
-        if active or active_kmb: send_msg(peer, "❌ Уже идёт игра!"); return
+        if has_active_game(peer): send_msg(peer, "❌ В чате уже идёт игра! Дождись окончания."); return
         now = int(time.time())
         with DB_LOCK: cursor = CONN.execute("INSERT INTO kmb_games(peer_id, initiator, opponent, state, created_at) VALUES(?,?,?,?,?)", (peer, sender, opponent, "pending", now)); game_id = cursor.lastrowid; CONN.commit()
         kb = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "✅ Принять", "payload": json.dumps({"cmd": "kmb_accept", "game_id": game_id})}, "color": "positive"}, {"action": {"type": "callback", "label": "❌ Отказаться", "payload": json.dumps({"cmd": "kmb_decline", "game_id": game_id})}, "color": "negative"}]]})
@@ -3839,9 +3837,7 @@ def handle_message(peer, sender, text, msg_obj):
         if not targets: send_msg(peer, "❌ Укажите пользователя: `Мд кн @игрок`"); return
         opponent = targets[0]
         if opponent == sender: send_msg(peer, "❌ Нельзя играть с самим собой!"); return
-        with DB_LOCK:
-            active = CONN.execute("SELECT id FROM ttt_games WHERE peer_id=? AND state IN ('pending','playing')", (peer,)).fetchone()
-        if active: send_msg(peer, "❌ Уже идёт игра в крестики-нолики!"); return
+        if has_active_game(peer): send_msg(peer, "❌ В чате уже идёт игра! Дождись окончания."); return
         now = int(time.time())
         with DB_LOCK:
             cur = CONN.execute("INSERT INTO ttt_games(peer_id, initiator, opponent, state, current_turn, created_at) VALUES(?,?,?,?,?,?)", (peer, sender, opponent, "pending", sender, now))
