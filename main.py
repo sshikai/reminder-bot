@@ -1494,16 +1494,18 @@ try: os.makedirs(FONTS_DIR, exist_ok=True)
 except: pass
 
 FONTS_MAP = {
-    "default":    ("DejaVu Sans",       [], ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf"]),
-    "serif":      ("Serif",             ["https://raw.githubusercontent.com/ggez/ggez/master/resources/DejaVuSerif.ttf"], []),
-    "mono":       ("Monospace",         ["https://raw.githubusercontent.com/ggez/ggez/master/resources/DejaVuSansMono.ttf"], []),
-    "condensed":  ("Condensed",         [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf"]),
-    "liberation": ("Liberation",        ["https://raw.githubusercontent.com/ggez/ggez/master/resources/LiberationSans-Regular.ttf"], []),
-    "libserif":   ("Liberation Serif",  ["https://raw.githubusercontent.com/ggez/ggez/master/resources/LiberationSerif-Regular.ttf"], []),
-    "libmono":    ("Liberation Mono",   ["https://raw.githubusercontent.com/ggez/ggez/master/resources/LiberationMono-Regular.ttf"], []),
-    "freesans":   ("FreeSans",          ["https://raw.githubusercontent.com/opensourcedesign/fonts/master/gnu-freefont_freesans/FreeSans.ttf"], []),
-    "freeserif":  ("FreeSerif",         ["https://raw.githubusercontent.com/opensourcedesign/fonts/master/gnu-freefont_freeserif/FreeSerif.ttf"], []),
-    "freemono":   ("FreeMono",          ["https://raw.githubusercontent.com/opensourcedesign/fonts/master/gnu-freefont_freemono/FreeMono.ttf"], []),
+    # --- Системные шрифты (работают сразу, без интернета) ---
+    "default":    ("DejaVu Sans",       [], ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"]),
+    "serif":      ("DejaVu Serif",      [], ["/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", "/usr/share/fonts/dejavu/DejaVuSerif.ttf"]),
+    "mono":       ("DejaVu Sans Mono",  [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", "/usr/share/fonts/dejavu/DejaVuSansMono.ttf"]),
+    "condensed":  ("DejaVu Condensed",  [], ["/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf", "/usr/share/fonts/dejavu/DejaVuSansCondensed.ttf"]),
+    "liberation": ("Liberation Sans",   [], ["/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/liberation/LiberationSans-Regular.ttf"]),
+    "libserif":   ("Liberation Serif",  [], ["/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf"]),
+    "libmono":    ("Liberation Mono",   [], ["/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf", "/usr/share/fonts/liberation/LiberationMono-Regular.ttf"]),
+    "freesans":   ("FreeSans",          [], ["/usr/share/fonts/truetype/freefont/FreeSans.ttf", "/usr/share/fonts/freefont/FreeSans.ttf"]),
+    "freeserif":  ("FreeSerif",         [], ["/usr/share/fonts/truetype/freefont/FreeSerif.ttf", "/usr/share/fonts/freefont/FreeSerif.ttf"]),
+    "freemono":   ("FreeMono",          [], ["/usr/share/fonts/truetype/freefont/FreeMono.ttf", "/usr/share/fonts/freefont/FreeMono.ttf"]),
+    # --- Шрифты, скачиваемые из GitHub (проверенные, с кириллицей) ---
     "pixel":      ("Пиксельный",        ["https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"], []),
     "minecraft":  ("Minecraft",         ["https://github.com/IdreesInc/Monocraft/raw/main/dist/Monocraft-ttf/Monocraft.ttf"], []),
 }
@@ -1517,11 +1519,14 @@ def _download_font(key):
         p = _FONT_PATHS_CACHE[key]
         if p and os.path.isfile(p): return p
     name, urls, sys_paths = FONTS_MAP.get(key, FONTS_MAP["default"])
+    # 1. Системные пути
     for p in sys_paths:
         if os.path.isfile(p): _FONT_PATHS_CACHE[key] = p; return p
+    # 2. Локальный кэш
     local = os.path.join(FONTS_DIR, "cardfont_{}.ttf".format(key))
     if os.path.isfile(local) and os.path.getsize(local) > 10000:
         _FONT_PATHS_CACHE[key] = local; return local
+    # 3. Скачивание из интернета
     for url in urls:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
@@ -1531,9 +1536,14 @@ def _download_font(key):
                 with open(local, "wb") as f: f.write(data)
                 _FONT_PATHS_CACHE[key] = local; return local
         except Exception as e: print("font download {} err: {}".format(key, e))
-    if key != "default": return _download_font("default")
+    # 4. Fallback на системный DejaVu, если сам ключ не default
+    if key != "default":
+        print("FALLBACK to DejaVu Sans for font key:", key)
+        fb = _download_font("default")
+        if fb: return fb
+    # 5. Совсем ничего не нашли — возвращаем None, get_font сам решит, что делать
     return None
-
+    
 def font_display_name(key):
     return FONTS_MAP.get(key, FONTS_MAP["default"])[0]
 
