@@ -243,14 +243,9 @@ def get_all_auctioneers():
 def get_all_inspectors():
     with DB_LOCK: return [int(r["key"].replace("inspector_", "")) for r in CONN.execute("SELECT key FROM settings WHERE key LIKE 'inspector_%' AND value='1'").fetchall()]
 def get_all_bot_chats():
-    chats = set()
-    try:
-        with DB_LOCK:
-            for tbl in ["members", "reminders"]:
-                for r in CONN.execute("SELECT DISTINCT peer_id FROM {}".format(tbl)).fetchall():
-                    pid = r["peer_id"]
-                    if pid and pid >= 2000000000: chats.add(pid)
-    except: pass
+    """Возвращает только живые чаты, в которых бот реально может писать. Мёртвые чистит из БД."""
+    real = set()
+    # 1. Собираем живые диалоги через VK
     try:
         offset = 0
         while True:
@@ -259,15 +254,38 @@ def get_all_bot_chats():
             if not items: break
             for item in items:
                 pid = item.get("peer", {}).get("id", 0)
-                if pid and pid >= 2000000000: chats.add(pid)
+                if pid and pid >= 2000000000: real.add(pid)
             if len(items) < 200: break
             offset += 200
             if offset > 1000: break
-    except: pass
-    return list(chats)
-def chat_exists(pid):
-    try: r = VK.messages.getConversationsById(peer_ids=[pid]); return bool(r.get("items"))
-    except: return False
+    except Exception as e:
+        print("get_all_bot_chats: VK error:", e)
+    # 2. Если VK ничего не вернул — падаем на старое поведение (фолбэк)
+    if not real:
+        cached = set()
+        try:
+            with DB_LOCK:
+                for tbl in ["members", "reminders"]:
+                    for r in CONN.execute("SELECT DISTINCT peer_id FROM {}".format(tbl)).fetchall():
+                        pid = r["peer_id"]
+                        if pid and pid >= 2000000000: cached.add(pid)
+        except: pass
+        return list(cached)
+    # 3. Чистим из БД те peer_id, которых больше нет в VK
+    try:
+        with DB_LOCK:
+            for tbl in ["members", "reminders", "settings", "message_cache", "message_stats", "badges", "roles", "statuses", "user_statuses", "marriages", "join_stats", "player_cards"]:
+                try:
+                    db_pids = [r["peer_id"] for r in CONN.execute("SELECT DISTINCT peer_id FROM {}".format(tbl)).fetchall() if r["peer_id"] and r["peer_id"] >= 2000000000]
+                except: continue
+                for pid in db_pids:
+                    if pid not in real:
+                        try: CONN.execute("DELETE FROM {} WHERE peer_id=?".format(tbl), (pid,))
+                        except: pass
+            CONN.commit()
+    except Exception as e:
+        print("get_all_bot_chats cleanup err:", e)
+    return list(real)
 
 def has_active_dice_punishments(peer, user_id):
     now = int(time.time())
