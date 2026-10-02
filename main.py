@@ -1500,7 +1500,6 @@ FONTS_MAP = {
     "default":     ("DejaVu Sans",     ["https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf"], []),
     "ptsans":      ("PT Sans",         ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Regular.ttf"], []),
     "ptserif":     ("PT Serif",        ["https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PT_Serif-Web-Regular.ttf"], []),
-    "roboto":      ("Roboto",          ["https://raw.githubusercontent.com/google/fonts/main/ofl/roboto/static/Roboto-Regular.ttf", "https://raw.githubusercontent.com/google/fonts/main/apache/roboto/static/Roboto-Regular.ttf"], []),
     "philosopher": ("Philosopher",     ["https://raw.githubusercontent.com/google/fonts/main/ofl/philosopher/Philosopher-Regular.ttf"], []),
     "yeseva":      ("Yeseva One",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/yesevaone/YesevaOne-Regular.ttf"], []),
     "kelly":       ("Kelly Slab",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/kellyslab/KellySlab-Regular.ttf"], []),
@@ -1508,7 +1507,7 @@ FONTS_MAP = {
     "badscript":   ("Bad Script",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/badscript/BadScript-Regular.ttf"], []),
     "marck":       ("Marck Script",    ["https://raw.githubusercontent.com/google/fonts/main/ofl/marckscript/MarckScript-Regular.ttf"], []),
     "pixel":       ("Пиксельный",      ["https://raw.githubusercontent.com/google/fonts/main/ofl/pressstart2p/PressStart2P-Regular.ttf"], []),
-    "minecraft":   ("Minecraft",       ["https://github.com/IdreesInc/Monocraft/raw/main/dist/Monocraft.ttf"], []),
+    "minecraft":   ("Minecraft",       ["https://github.com/IdreesInc/Monocraft/raw/main/dist/Monocraft-ttf/Monocraft.ttf"], []),
     "underdog":    ("Underdog",        ["https://raw.githubusercontent.com/google/fonts/main/ofl/underdog/Underdog-Regular.ttf"], []),
 }
 FONTS_ORDER = list(FONTS_MAP.keys())
