@@ -2750,7 +2750,7 @@ def handle_event(event):
             with DB_LOCK: game = CONN.execute("SELECT * FROM dice_games WHERE id=?", (game_id,)).fetchone()
             if not game: snackbar("❌"); return
             now = int(time.time())
-                if (now - game["created_at"]) > 60:
+            if (now - game["created_at"]) > 60:
                 with DB_LOCK: CONN.execute("UPDATE dice_games SET state='expired' WHERE id=?", (game_id,)); CONN.commit()
                 try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="⏰ Время вышло!", keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
@@ -2832,7 +2832,7 @@ def handle_event(event):
             with DB_LOCK: game = CONN.execute("SELECT * FROM kmb_games WHERE id=?", (game_id,)).fetchone()
             if not game: snackbar("❌"); return
             chat_peer = game["peer_id"]; now = int(time.time())
-                if (now - game["created_at"]) > 60:
+            if (now - game["created_at"]) > 60:
                 with DB_LOCK: CONN.execute("UPDATE kmb_games SET state='expired' WHERE id=?", (game_id,)); CONN.commit()
                 try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=cmid, message="⏰ КНБ: время вышло!", keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
