@@ -1329,20 +1329,28 @@ def get_group_members_set():
     GROUP_ID_CACHE["_members_ts"] = now
     return members
 
-def do_broadcast_chats(rtext, att, notify_peer):
-    chats = get_all_bot_chats()
-    ok = 0; total = len(chats)
-    for t in chats:
-        try:
-            if att: VK.messages.send(peer_id=t, message=rtext, attachment=att, random_id=random.getrandbits(31))
-            else: VK.messages.send(peer_id=t, message=rtext, random_id=random.getrandbits(31))
-            ok += 1
-            time.sleep(0.25)
-        except Exception as e: print("broadcast chat err in", t, e)
-    try: send_msg(notify_peer, "✅ Рассылка по чатам завершена. Успешно: {}/{}".format(ok, total))
-    except: pass
-
 def do_broadcast_users(rtext, att, notify_peer):
+    # Бэкфилл: собрать всех, кто писал боту в ЛС (включая старые диалоги)
+    try:
+        offset = 0
+        while True:
+            resp = VK.messages.getConversations(count=200, offset=offset)
+            items = resp.get("items", [])
+            if not items: break
+            with DB_LOCK:
+                for item in items:
+                    peer = item.get("peer", {}).get("id", 0)
+                    if 0 < peer < 2000000000:
+                        try:
+                            CONN.execute("INSERT OR IGNORE INTO bot_dm_users(user_id, first_seen) VALUES(?,?)", (peer, int(time.time())))
+                        except: pass
+                CONN.commit()
+            if len(items) < 200: break
+            offset += 200
+            if offset > 5000: break
+    except Exception as e:
+        print("backfill bot_dm_users err:", e)
+
     subscribers = get_group_members_set()
     with DB_LOCK:
         dm_users = [int(r["user_id"]) for r in CONN.execute("SELECT user_id FROM bot_dm_users").fetchall()]
@@ -1354,8 +1362,9 @@ def do_broadcast_users(rtext, att, notify_peer):
             else: VK.messages.send(peer_id=uid, message=rtext, random_id=random.getrandbits(31))
             ok += 1
             time.sleep(0.15)
-        except Exception as e: print("broadcast user err in", uid, e)
-    try: send_msg(notify_peer, "✅ Рассылка в ЛС завершена. Успешно: {}/{} (из {} подписчиков)".format(ok, total, len(subscribers) if subscribers else "?"))
+        except Exception as e:
+            print("broadcast user err in", uid, e)
+    try: send_msg(notify_peer, "✅ Рассылка в ЛС завершена. Успешно: {} (из {} подписчиков группы)".format(ok, len(subscribers) if subscribers else "?"))
     except: pass
 
 def plural_ru(n, one, few, many):
