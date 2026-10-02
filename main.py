@@ -3314,6 +3314,9 @@ def handle_message(peer, sender, text, msg_obj):
     if not first.startswith("мд "):
         if check_clear_pending(peer, sender, text): return
         if handle_card_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
+        if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
+        if handle_promo_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
+        if handle_calc_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
 
     if sender > 0:
         is_sticker = any(att.get("type") == "sticker" for att in (msg_obj.get("attachments") or []))
