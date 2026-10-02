@@ -2892,6 +2892,11 @@ def handle_event(event):
                 except: pass
                 snackbar("❌"); return
 
+        # ===== КАЛЬКУЛЯТОР ПЕРЕКУПА =====
+        if cmd.startswith("calc_"):
+            handle_calc_callback(cmd, user_id, peer_id, cmid, payload)
+            return
+
         # ===== ПРОЧИЕ CALLBACK =====
         if cmd == "poll_vote":
             now_ts = int(time.time()); today_str = get_msk_now().strftime("%Y-%m-%d"); payload_time = payload.get("time", 0)
