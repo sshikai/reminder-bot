@@ -1950,57 +1950,69 @@ def _ttt_debug(msg):
             f.write("[{}] {}\n".format(datetime.datetime.now(MSK_TZ).strftime("%H:%M:%S"), msg))
     except Exception as e: print("debug log fail:", e)
 
+MARKER = "\u200b"  # невидимый пробел для маркера
+
+def _make_marker(kind, game_id):
+    """kind = TTT/KMB/DICE/MARRY, game_id = число"""
+    return "{}{}:{}".format(MARKER, kind, game_id)
+
+def _find_cmid_by_marker(peer, kind, game_id, count=30):
+    """Ищет в истории сообщение с нужным невидимым маркером. Возвращает cmid или 0."""
+    marker = _make_marker(kind, game_id)
+    try:
+        hist = VK.messages.getHistory(peer_id=peer, count=count)
+        for item in hist.get("items", []):
+            if int(item.get("from_id", 0)) < 0:
+                txt = item.get("text", "") or ""
+                if marker in txt:
+                    cm = item.get("conversation_message_id")
+                    if cm: return int(cm)
+    except Exception as e:
+        print("_find_cmid_by_marker err:", e)
+    return 0
+
 def edit_game_message(peer, game_id, text, keyboard_json=None, table="dice_games"):
     if keyboard_json is not None and not isinstance(keyboard_json, str): keyboard_json = json.dumps(keyboard_json)
+    # Определяем маркер по таблице
+    kind_map = {"ttt_games": "TTT", "kmb_games": "KMB", "dice_games": "DICE"}
+    kind = kind_map.get(table, "GAME")
+    marker = _make_marker(kind, game_id)
+    full_text = text + marker  # добавляем невидимую метку в конец
+    kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
+
+    # 1. Ищем cmid по маркеру в истории — самый надёжный способ
+    cmid = _find_cmid_by_marker(peer, kind, game_id)
+    if cmid:
+        try:
+            VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=full_text, keyboard=kb)
+            with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (cmid, game_id)); CONN.commit()
+            return True
+        except Exception as e:
+            print("edit by marker fail:", e)
+
+    # 2. Fallback — берём сохранённый stored (если есть)
     with DB_LOCK:
         row = CONN.execute("SELECT message_id FROM {} WHERE id=?".format(table), (game_id,)).fetchone()
         stored = row["message_id"] if row else 0
-    kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
-    _ttt_debug("edit start: table={} gid={} stored={}".format(table, game_id, stored))
-    # Если stored пуст — берём последнее сообщение бота из истории
-    if not stored or int(stored) <= 0:
-        try:
-            hist = VK.messages.getHistory(peer_id=peer, count=5)
-            for item in hist.get("items", []):
-                if int(item.get("from_id", 0)) < 0:
-                    cm = item.get("conversation_message_id")
-                    if cm:
-                        stored = int(cm)
-                        _ttt_debug("  found via history cmid={}".format(stored))
-                        break
-        except Exception as e:
-            _ttt_debug("  history fail: {}".format(str(e)[:200]))
     if stored and int(stored) > 0:
         try:
-            VK.messages.edit(peer_id=peer, conversation_message_id=int(stored), message=text, keyboard=kb)
-            _ttt_debug("  OK cmid={}".format(stored))
-            with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (int(stored), game_id)); CONN.commit()
+            VK.messages.edit(peer_id=peer, conversation_message_id=int(stored), message=full_text, keyboard=kb)
             return True
-        except Exception as e:
-            _ttt_debug("  FAIL cmid={} err={}".format(stored, str(e)[:250]))
-    if stored and int(stored) > 0:
-        try: VK.messages.delete(peer_id=peer, conversation_message_ids=[int(stored)], delete_for_all=1)
         except: pass
+
+    # 3. Совсем плохо — шлём новое
     try:
-        new_mid = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
-        _ttt_debug("  SENT new mid={}".format(new_mid))
-        cmid = 0
+        new_mid = VK.messages.send(peer_id=peer, message=full_text, keyboard=kb, random_id=random.getrandbits(31))
+        cmid2 = 0
         if isinstance(new_mid, int) and new_mid > 0:
-            cmid = resolve_cmid(peer, new_mid)
-        if not cmid or cmid <= 0:
-            try:
-                hist = VK.messages.getHistory(peer_id=peer, count=3)
-                for item in hist.get("items", []):
-                    if int(item.get("from_id", 0)) < 0:
-                        cm = item.get("conversation_message_id")
-                        if cm: cmid = int(cm); break
-            except: pass
-        _ttt_debug("  resolved cmid={}".format(cmid))
-        if cmid and cmid > 0:
-            with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (cmid, game_id)); CONN.commit()
+            cmid2 = resolve_cmid(peer, new_mid)
+        if not cmid2 or cmid2 <= 0:
+            cmid2 = _find_cmid_by_marker(peer, kind, game_id)  # ищем по метке в свежих
+        if cmid2 and cmid2 > 0:
+            with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (cmid2, game_id)); CONN.commit()
         return True
     except Exception as e:
-        _ttt_debug("  SEND new FAIL err={}".format(str(e)[:250]))
+        print("edit_game_message send new fail:", e)
         return False
         
 def get_user_name(user_id):
@@ -3878,8 +3890,9 @@ def handle_message(peer, sender, text, msg_obj):
         now = int(time.time())
         with DB_LOCK: cursor = CONN.execute("INSERT INTO dice_games(peer_id, initiator, opponent, state, created_at) VALUES(?,?,?,?,?)", (peer, sender, opponent, "pending", now)); game_id = cursor.lastrowid; CONN.commit()
         kb = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "✅ Принять", "payload": json.dumps({"cmd": "dice_accept", "game_id": game_id})}, "color": "positive"}, {"action": {"type": "callback", "label": "❌ Отказаться", "payload": json.dumps({"cmd": "dice_decline", "game_id": game_id})}, "color": "negative"}]]})
+        invite_text = "🎲 {}, {} вызывает вас в кости! ⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)) + _make_marker("DICE", game_id)
         try:
-            _, cmid = send_and_get_cmid(peer, "🎲 {}, {} вызывает вас в кости! ⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)), keyboard=kb)
+            _, cmid = send_and_get_cmid(peer, invite_text, keyboard=kb)
             with DB_LOCK: CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (cmid, game_id)); CONN.commit()
         except Exception as e: print("dice send error:", e)
     elif cmd == "кнб":
@@ -3892,8 +3905,9 @@ def handle_message(peer, sender, text, msg_obj):
         now = int(time.time())
         with DB_LOCK: cursor = CONN.execute("INSERT INTO kmb_games(peer_id, initiator, opponent, state, created_at) VALUES(?,?,?,?,?)", (peer, sender, opponent, "pending", now)); game_id = cursor.lastrowid; CONN.commit()
         kb = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "✅ Принять", "payload": json.dumps({"cmd": "kmb_accept", "game_id": game_id})}, "color": "positive"}, {"action": {"type": "callback", "label": "❌ Отказаться", "payload": json.dumps({"cmd": "kmb_decline", "game_id": game_id})}, "color": "negative"}]]})
+        invite_text = "✊✌️✋ {}, {} вызывает вас на КНБ! ⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)) + _make_marker("KMB", game_id)
         try:
-            _, cmid = send_and_get_cmid(peer, "✊✌️✋ {}, {} вызывает вас на КНБ! ⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)), keyboard=kb)
+            _, cmid = send_and_get_cmid(peer, invite_text, keyboard=kb)
             with DB_LOCK: CONN.execute("UPDATE kmb_games SET message_id=? WHERE id=?", (cmid, game_id)); CONN.commit()
         except Exception as e: print("kmb send error:", e)
     elif cmd == "кн":
@@ -3907,8 +3921,9 @@ def handle_message(peer, sender, text, msg_obj):
             cur = CONN.execute("INSERT INTO ttt_games(peer_id, initiator, opponent, state, current_turn, created_at) VALUES(?,?,?,?,?,?)", (peer, sender, opponent, "pending", sender, now))
             gid = cur.lastrowid; CONN.commit()
         kb = json.dumps(ttt_invite_kb(gid))
+        invite_text = "❌⭕ {}, {} предлагает сыграть в крестики-нолики!\n⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)) + _make_marker("TTT", gid)
         try:
-            _, cmid = send_and_get_cmid(peer, "❌⭕ {}, {} предлагает сыграть в крестики-нолики!\n⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)), keyboard=kb)
+            _, cmid = send_and_get_cmid(peer, invite_text, keyboard=kb)
             with DB_LOCK: CONN.execute("UPDATE ttt_games SET message_id=? WHERE id=?", (cmid, gid)); CONN.commit()
         except Exception as e: print("ttt send error:", e)
     elif cmd == "айди":
@@ -4212,10 +4227,15 @@ def handle_message(peer, sender, text, msg_obj):
         if target == sender: send_msg(peer, "❌ На себе жениться нельзя!"); return
         if get_marriage(peer, sender): send_msg(peer, "❌ Ты уже в браке!"); return
         if get_marriage(peer, target): send_msg(peer, "❌ {} уже в браке!".format(silent_mention_badge(target, peer))); return
+        now_ts = int(time.time())
+        with DB_LOCK:
+            cur = CONN.execute("INSERT INTO dice_games(peer_id, initiator, opponent, state, message_id, created_at) VALUES(?,?,?,?,?,?)", (peer, sender, target, "marriage", 0, now_ts))
+            prop_id = cur.lastrowid; CONN.commit()
         kb = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "💍 Согласиться", "payload": json.dumps({"cmd": "marriage_accept", "proposer": sender, "target": target})}, "color": "positive"}, {"action": {"type": "callback", "label": "❌ Отказать", "payload": json.dumps({"cmd": "marriage_decline", "proposer": sender, "target": target})}, "color": "negative"}]]})
+        invite_text = "💍 {} делает предложение {}!\nЧто скажешь? ⏰ 1 минута".format(silent_mention_badge(sender, peer), mention(target)) + _make_marker("DICE", prop_id)
         try:
-            _, cmid = send_and_get_cmid(peer, "💍 {} делает предложение {}!\nЧто скажешь? ⏰ 1 минута".format(silent_mention_badge(sender, peer), mention(target)), keyboard=kb)
-            with DB_LOCK: CONN.execute("INSERT INTO dice_games(peer_id, initiator, opponent, state, message_id, created_at) VALUES(?,?,?,?,?,?)", (peer, sender, target, "marriage", cmid, int(time.time()))); CONN.commit()
+            _, cmid = send_and_get_cmid(peer, invite_text, keyboard=kb)
+            with DB_LOCK: CONN.execute("UPDATE dice_games SET message_id=? WHERE id=?", (cmid, prop_id)); CONN.commit()
         except Exception as e: print("marriage send error:", e)
     elif cmd == "развод":
         marriage = get_marriage(peer, sender)
