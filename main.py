@@ -4306,6 +4306,8 @@ def timer_loop():
             now_msk = get_msk_now(); today_str = now_msk.strftime("%Y-%m-%d"); now = int(time.time())
             for k in list(CLEAR_PENDING.keys()):
                 if now - CLEAR_PENDING[k] > 60: CLEAR_PENDING.pop(k, None)
+
+            # ===== Таймауты редактора карт =====
             with DB_LOCK: stale = CONN.execute("SELECT user_id, peer_id, step, context FROM card_edit_state").fetchall()
             for row in stale:
                 try: ctx = json.loads(row["context"] or "{}")
@@ -4314,6 +4316,8 @@ def timer_loop():
                     uid, pid = row["user_id"], row["peer_id"]
                     with DB_LOCK: CONN.execute("DELETE FROM card_edit_state WHERE user_id=? AND peer_id=?", (uid, pid))
                     close_card_session(pid, ctx, "Время на редактирование вышло, {} вы бездействовали минуту⏳".format(mention(uid)))
+
+            # ===== Таймауты аукционов / промо / калькулятора / voice =====
             with DB_LOCK: astale = CONN.execute("SELECT user_id, peer_id, step, context FROM auction_state").fetchall()
             for row in astale:
                 try: ctx = json.loads(row["context"] or "{}")
@@ -4338,6 +4342,8 @@ def timer_loop():
                         if not kw: continue
                         try: VK.messages.delete(peer_id=pid, delete_for_all=1, **kw); break
                         except: continue
+
+            # ===== Старт аукционов по расписанию =====
             with DB_LOCK: sched = CONN.execute("SELECT * FROM auctions WHERE state='scheduled'").fetchall()
             for a in sched:
                 dt = parse_auction_dt(a["datetime_str"])
@@ -4348,6 +4354,8 @@ def timer_loop():
                         with DB_LOCK: CONN.execute("UPDATE auctions SET state='finished' WHERE id=?", (a2["id"],)); CONN.commit()
                         continue
                     start_lot(a2, 0)
+
+            # ===== Завершение активных лотов =====
             with DB_LOCK: run = CONN.execute("SELECT * FROM auctions WHERE state='running'").fetchall()
             for a in run:
                 a = dict(a)
@@ -4361,6 +4369,8 @@ def timer_loop():
                     set_setting(0, "auc_rem_{}".format(lot["id"]), str(now)); bid_id, buid, bamt = get_best_bid(lot["id"]); mins_left = max(1, int(-(-remain // 60)))
                     if buid: send_msg(a["peer_id"], "⏳ До конца торгов за лот «{}» осталось {} мин. Последняя ставка: {} от {}.".format(lot["name"], mins_left, fmt_rub(bamt), silent_mention_badge(buid, a["peer_id"])))
                     else: send_msg(a["peer_id"], "⏳ До конца торгов за лот «{}» осталось {} мин. Ставок ещё нет — стартовая цена 20.000.000р.".format(lot["name"], mins_left))
+
+            # ===== Таймауты игр (кости, КНБ, брак, крестики-нолики) =====
             with DB_LOCK:
                 expired = CONN.execute("SELECT * FROM dice_games WHERE state='pending' AND created_at <=?", (now-60,)).fetchall()
                 if expired:
@@ -4387,15 +4397,17 @@ def timer_loop():
                 exp_ttt = CONN.execute("SELECT * FROM ttt_games WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)).fetchall()
                 if exp_ttt:
                     CONN.execute("UPDATE ttt_games SET state='expired' WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)); CONN.commit()
-                    for g in exp_ttt:
-                        edit_game_message(g["peer_id"], g["id"], "⏰ Игра в крестики-нолики закрыта из-за бездействия.", None, table="ttt_games")
-                except: pass
-                pend_rows = CONN.execute("SELECT peer_id, value FROM settings WHERE key='top_clean_pending'").fetchall()
-                for pr in pend_rows:
-                    try: pend = json.loads(pr["value"])
-                    except: pend = None
-                    if not pend: set_setting(pr["peer_id"], "top_clean_pending", ""); continue
-                    if int(time.time()) - pend.get("ts", 0) > 60: set_setting(pr["peer_id"], "top_clean_pending", ""); send_msg(pr["peer_id"], "⏰ Время подтверждения очистки топа истекло. Отменено.")
+                    for g in exp_ttt: edit_game_message(g["peer_id"], g["id"], "⏰ Игра в крестики-нолики закрыта из-за бездействия.", None, table="ttt_games")
+
+            # ===== Таймауты подтверждений очистки топа =====
+            with DB_LOCK: pend_rows = CONN.execute("SELECT peer_id, value FROM settings WHERE key='top_clean_pending'").fetchall()
+            for pr in pend_rows:
+                try: pend = json.loads(pr["value"])
+                except: pend = None
+                if not pend: set_setting(pr["peer_id"], "top_clean_pending", ""); continue
+                if int(time.time()) - pend.get("ts", 0) > 60: set_setting(pr["peer_id"], "top_clean_pending", ""); send_msg(pr["peer_id"], "⏰ Время подтверждения очистки топа истекло. Отменено.")
+
+            # ===== Напоминания про мут-упоминания (кости) =====
             with DB_LOCK: due = CONN.execute("SELECT * FROM dice_mentions WHERE next_trigger <=? AND end_time >?", (now, now)).fetchall()
             for dm in due:
                 send_msg(dm["peer_id"], "🎲 {}, {} ".format(mention(dm["user_id"]), random.choice(DICE_PHRASES))); nt = now + dm["interval_minutes"] * 60
@@ -4403,6 +4415,8 @@ def timer_loop():
                     if nt >= dm["end_time"]: CONN.execute("DELETE FROM dice_mentions WHERE id=?", (dm["id"],))
                     else: CONN.execute("UPDATE dice_mentions SET next_trigger=? WHERE id=?", (nt, dm["id"]))
                 CONN.commit()
+
+            # ===== Напоминалка + авто-опросы =====
             with DB_LOCK:
                 peers = CONN.execute("SELECT DISTINCT peer_id FROM reminders").fetchall()
                 bday_peers = CONN.execute("SELECT DISTINCT peer_id FROM members").fetchall()
