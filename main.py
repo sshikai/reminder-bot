@@ -1432,8 +1432,7 @@ def calc_amount(text):
     return None
 def fmt_money(v):
     if v is None: return "—"
-    if isinstance(v, float) and v != int(v): return "{:,.2f}р".format(v).replace(",", " ")
-    return "{:,}р".format(int(round(v))).replace(",", " ")
+    return "{:,}".format(int(round(v))).replace(",", ".") + "р"
 def calc_main_kb():
     return {"inline": True, "buttons": [
         [{"action": {"type": "callback", "label": "🚗 Авто", "payload": json.dumps({"cmd": "calc_auto"})}, "color": "primary"}, {"action": {"type": "callback", "label": "🤝 Трейд", "payload": json.dumps({"cmd": "calc_trade"})}, "color": "primary"}],
@@ -1460,12 +1459,10 @@ def handle_calc_input(sender, peer, text, cmid=None, attachments=None):
     if time.time() - ctx.get("ts", 0) > 60:
         clear_auction_state(sender, peer); close_calc_session(peer, ctx, "⏰ Калькулятор закрыт из-за бездействия."); return True
     def reply(msg, kb=None):
-        # 1. Старое сообщение вопроса → "✅ Готово" без кнопок
+        kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
         if prompt_cmid:
-            try:
-                VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message="✅ Готово", keyboard=json.dumps({"inline": True, "buttons": []}))
+            try: VK.messages.edit(peer_id=peer, conversation_message_id=prompt_cmid, message=msg, keyboard=kbj); return
             except: pass
-        # 2. Новое сообщение с результатом
         send_msg(peer, msg, keyboard=kb)
     if text.strip().lower() in ("отмена", "отменить"):
         clear_auction_state(sender, peer); reply("❌ Калькулятор закрыт."); return True
@@ -1473,9 +1470,9 @@ def handle_calc_input(sender, peer, text, cmid=None, attachments=None):
         op = ctx.get("op")
         if op == "auto_profit":
             parts = [p.strip() for p in text.replace(" ", "").split(",")]
-            if len(parts) != 2: reply("❌ Формат: купил,продал (через запятую, например 123,321)."); return True
+            if len(parts) != 2: reply("❌ Формат: купил,продал (через запятую, например 11.000.000,12.000.000)."); return True
             buy = calc_amount(parts[0]); sell = calc_amount(parts[1])
-            if buy is None or sell is None: reply("❌ Не понял числа. Пример: 123,321"); return True
+            if buy is None or sell is None: reply("❌ Не понял числа. Пример: 11.000.000,12.000.000"); return True
             commission = sell * 0.01
             profit = sell - buy - commission
             set_auction_state(sender, peer, "calc_menu", ctx)
@@ -1510,7 +1507,7 @@ def handle_calc_input(sender, peer, text, cmid=None, attachments=None):
             if s is None: reply("❌ Не понял число."); return True
             half = s * 0.5
             set_auction_state(sender, peer, "calc_menu", ctx)
-            reply("🏛 Госс стоимость: {}\n💰 Половина (что вы получите): {}".format(fmt_money(s), fmt_money(half)), calc_main_kb())
+            reply("🏛 Госс стоимость: {}\n💰 Половина: {}".format(fmt_money(s), fmt_money(half)), calc_main_kb())
             return True
         return False
     return False
@@ -2753,7 +2750,7 @@ def handle_event(event):
             with DB_LOCK: game = CONN.execute("SELECT * FROM dice_games WHERE id=?", (game_id,)).fetchone()
             if not game: snackbar("❌"); return
             now = int(time.time())
-            if game["state"] == "pending" and (now - game["created_at"]) > 60:
+                if (now - game["created_at"]) > 60:
                 with DB_LOCK: CONN.execute("UPDATE dice_games SET state='expired' WHERE id=?", (game_id,)); CONN.commit()
                 try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="⏰ Время вышло!", keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
@@ -2778,7 +2775,7 @@ def handle_event(event):
                 roll = random.randint(1, 6); ini, opp = game["initiator"], game["opponent"]
                 if user_id == ini: ni, no, nt = roll, game["opponent_roll"], opp
                 else: ni, no, nt = game["initiator_roll"], roll, ini
-                with DB_LOCK: CONN.execute("UPDATE dice_games SET initiator_roll=?, opponent_roll=?, current_turn=? WHERE id=?", (ni, no, nt, game_id)); CONN.commit()
+                with DB_LOCK: CONN.execute("UPDATE dice_games SET initiator_roll=?, opponent_roll=?, current_turn=?, created_at=? WHERE id=?", (ni, no, nt, int(time.time()), game_id)); CONN.commit()
                 if ni > 0 and no > 0:
                     if ni == no:
                         with DB_LOCK: CONN.execute("UPDATE dice_games SET initiator_roll=0, opponent_roll=0, current_turn=? WHERE id=?", (ini, game_id)); CONN.commit()
@@ -2835,7 +2832,7 @@ def handle_event(event):
             with DB_LOCK: game = CONN.execute("SELECT * FROM kmb_games WHERE id=?", (game_id,)).fetchone()
             if not game: snackbar("❌"); return
             chat_peer = game["peer_id"]; now = int(time.time())
-            if game["state"] == "pending" and (now - game["created_at"]) > 60:
+                if (now - game["created_at"]) > 60:
                 with DB_LOCK: CONN.execute("UPDATE kmb_games SET state='expired' WHERE id=?", (game_id,)); CONN.commit()
                 try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=cmid, message="⏰ КНБ: время вышло!", keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
@@ -2863,10 +2860,10 @@ def handle_event(event):
                 with DB_LOCK:
                     if user_id == game["initiator"]:
                         if game["init_choice"]: snackbar("⚠️ Уже выбрал!"); return
-                        CONN.execute("UPDATE kmb_games SET init_choice=? WHERE id=?", (choice, game_id))
+                        CONN.execute("UPDATE kmb_games SET init_choice=?, created_at=? WHERE id=?", (choice, int(time.time()), game_id))
                     else:
                         if game["opp_choice"]: snackbar("⚠️ Уже выбрал!"); return
-                        CONN.execute("UPDATE kmb_games SET opp_choice=? WHERE id=?", (choice, game_id))
+                        CONN.execute("UPDATE kmb_games SET opp_choice=?, created_at=? WHERE id=?", (choice, int(time.time()), game_id))
                     CONN.commit(); game = CONN.execute("SELECT * FROM kmb_games WHERE id=?", (game_id,)).fetchone()
                 snackbar("✅ Выбор сохранён!")
                 if game["init_choice"] and game["opp_choice"]:
@@ -3070,15 +3067,16 @@ def handle_event(event):
 def handle_calc_callback(cmd, user_id, peer_id, cmid, payload):
     state = get_auction_state(user_id, peer_id)
     if not state or state["step"] not in ("calc_menu", "calc_auto", "calc_input"):
-        # State потерялся — восстанавливаем, чтобы первое нажатие сработало
         set_auction_state(user_id, peer_id, "calc_menu", {"msg_cmid": cmid})
         state = get_auction_state(user_id, peer_id)
-    ctx = state.get("context", {}); prompt_cmid = ctx.get("msg_cmid") or cmid
+    ctx = state.get("context", {}); prompt_cmid = cmid or ctx.get("msg_cmid")
     def calc_edit(msg, kb=None):
+        kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
         if prompt_cmid:
-            try: VK.messages.edit(peer_id=peer_id, conversation_message_id=prompt_cmid, message=msg, keyboard=json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})); return
+            try: VK.messages.edit(peer_id=peer_id, conversation_message_id=prompt_cmid, message=msg, keyboard=kbj); return
             except: pass
         send_msg(peer_id, msg, keyboard=kb)
+    ctx["msg_cmid"] = prompt_cmid
     if cmd == "calc_cancel":
         clear_auction_state(user_id, peer_id); calc_edit("❌ Калькулятор закрыт."); return True
     if cmd == "calc_back_menu":
@@ -3086,15 +3084,15 @@ def handle_calc_callback(cmd, user_id, peer_id, cmid, payload):
     if cmd == "calc_auto":
         set_auction_state(user_id, peer_id, "calc_auto", ctx); calc_edit("Вам нужно узнать профит или просто комиссию с продажи?", calc_auto_kb()); return True
     if cmd == "calc_trade":
-        ctx["op"] = "trade"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("Какую сумму вы передадите трейдом?\n(1% комиссия)", calc_input_kb()); return True
+        ctx["op"] = "trade"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("Какую сумму вы передадите трейдом? (например 11.000.000)", calc_input_kb()); return True
     if cmd == "calc_auction":
-        ctx["op"] = "auction"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("За какую сумму вы продаёте вещь на Аукционе?\n(5% комиссия)", calc_input_kb()); return True
+        ctx["op"] = "auction"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("За какую сумму вы продаёте вещь на Аукционе? (5% комиссия)", calc_input_kb()); return True
     if cmd == "calc_gos":
         ctx["op"] = "gos"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("Какая госс стоимость у авто?", calc_input_kb()); return True
     if cmd == "calc_auto_profit":
-        ctx["op"] = "auto_profit"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("Напишите цену покупки и продажи авто через запятую (123,321):", calc_input_kb()); return True
+        ctx["op"] = "auto_profit"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("Напишите цену покупки и продажи авто через запятую (например 11.000.000,12.000.000):", calc_input_kb()); return True
     if cmd == "calc_auto_sell":
-        ctx["op"] = "auto_sell"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("Напишите цену продажи авто:", calc_input_kb()); return True
+        ctx["op"] = "auto_sell"; set_auction_state(user_id, peer_id, "calc_input", ctx); calc_edit("Напишите цену продажи авто (например 11.000.000):", calc_input_kb()); return True
     return False
 
 # ===== СЛУЖЕБНОЕ =====
@@ -4262,14 +4260,10 @@ def timer_loop():
                     else: send_msg(a["peer_id"], "⏳ До конца торгов {} мин. Ставок нет — стартовая 20.000.000р.".format(mins_left))
 
             with DB_LOCK:
-                expired = CONN.execute("SELECT * FROM dice_games WHERE state='pending' AND created_at <=?", (now-60,)).fetchall()
+                expired = CONN.execute("SELECT * FROM dice_games WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)).fetchall()
                 if expired:
-                    CONN.execute("UPDATE dice_games SET state='expired' WHERE state='pending' AND created_at <=?", (now-60,)); CONN.commit()
-                    for g in expired: send_msg(g["peer_id"], "⏰ Время вышло! {} не успел принять.".format(silent_mention_badge(g["opponent"], g["peer_id"])))
-                stuck_dice = CONN.execute("SELECT * FROM dice_games WHERE state='playing' AND created_at <=?", (now-600,)).fetchall()
-                if stuck_dice:
-                    CONN.execute("UPDATE dice_games SET state='expired' WHERE state='playing' AND created_at <=?", (now-600,)); CONN.commit()
-                    for g in stuck_dice: send_msg(g["peer_id"], "⏰ Игра в кости закрыта (AFK).")
+                    CONN.execute("UPDATE dice_games SET state='expired' WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)); CONN.commit()
+                    for g in expired: send_msg(g["peer_id"], "⏰ Игра в кости закрыта из-за бездействия.")
                 exp_m = CONN.execute("SELECT * FROM dice_games WHERE state='marriage' AND created_at <=?", (now-60,)).fetchall()
                 if exp_m:
                     CONN.execute("UPDATE dice_games SET state='marriage_expired' WHERE state='marriage' AND created_at <=?", (now-60,)); CONN.commit()
@@ -4278,10 +4272,6 @@ def timer_loop():
                 if expired_kmb:
                     CONN.execute("UPDATE kmb_games SET state='expired' WHERE state IN ('pending','choosing') AND created_at <=?", (now-60,)); CONN.commit()
                     for g in expired_kmb: send_msg(g["peer_id"], "⏰ КНБ: время вышло!")
-                stuck_kmb = CONN.execute("SELECT * FROM kmb_games WHERE state='choosing' AND created_at <=?", (now-300,)).fetchall()
-                if stuck_kmb:
-                    CONN.execute("UPDATE kmb_games SET state='expired' WHERE state='choosing' AND created_at <=?", (now-300,)); CONN.commit()
-                    for g in stuck_kmb: send_msg(g["peer_id"], "⏰ КНБ закрыта (AFK).")
                 exp_ttt = CONN.execute("SELECT * FROM ttt_games WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)).fetchall()
                 if exp_ttt:
                     CONN.execute("UPDATE ttt_games SET state='expired' WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)); CONN.commit()
