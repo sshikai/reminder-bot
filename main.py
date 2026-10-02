@@ -1924,16 +1924,32 @@ def edit_game_message(peer, game_id, text, keyboard_json=None, table="dice_games
         row = CONN.execute("SELECT message_id FROM {} WHERE id=?".format(table), (game_id,)).fetchone()
         stored = row["message_id"] if row else 0
     kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
-    try: VK.messages.edit(peer_id=peer, conversation_message_id=stored, message=text, keyboard=kb); return True
-    except: pass
-    try: VK.messages.edit(peer_id=peer, message_id=stored, message=text, keyboard=kb); return True
-    except: pass
+    err1 = err2 = None
+    if stored and int(stored) > 0:
+        # 1. Пробуем как conversation_message_id
+        try:
+            VK.messages.edit(peer_id=peer, conversation_message_id=stored, message=text, keyboard=kb)
+            return True
+        except Exception as e: err1 = str(e)
+        # 2. Пробуем как message_id
+        try:
+            VK.messages.edit(peer_id=peer, message_id=stored, message=text, keyboard=kb)
+            return True
+        except Exception as e: err2 = str(e)
+        print("edit_game_message fail table={} gid={} cmid_err={} mid_err={}".format(table, game_id, err1, err2))
+    # 3. Фейл — удаляем старое (если было), создаём новое
     try:
+        if stored and int(stored) > 0:
+            try: VK.messages.delete(peer_id=peer, message_ids=[stored], delete_for_all=1)
+            except:
+                try: VK.messages.delete(peer_id=peer, conversation_message_ids=[stored], delete_for_all=1)
+                except: pass
         new_id = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
-        cmid = resolve_cmid(peer, new_id)
-        with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (cmid, game_id)); CONN.commit()
+        with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (new_id, game_id)); CONN.commit()
         return True
-    except: return False
+    except Exception as e:
+        print("edit_game_message send new fail:", e)
+        return False
 
 def get_user_name(user_id):
     if user_id in NAME_CACHE: return NAME_CACHE[user_id]
@@ -2783,8 +2799,12 @@ def handle_event(event):
             gid = payload.get("g", 0)
             with DB_LOCK: game = CONN.execute("SELECT * FROM ttt_games WHERE id=?", (gid,)).fetchone()
             if not game: snackbar("❌ Игра не найдена"); return
+            # СНАЧАЛА проверяем state — если уже не pending/playing, выходим
+            if game["state"] not in ("pending", "playing"):
+                snackbar("⚠️ Игра уже завершена"); return
             chat_peer = game["peer_id"]
             now = int(time.time())
+            # Только теперь проверяем таймаут
             if now - game["created_at"] > 60:
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET state='expired' WHERE id=?", (gid,)); CONN.commit()
                 edit_game_message(chat_peer, gid, "⏰ Игра в крестики-нолики отменена из-за бездействия.", None, table="ttt_games")
@@ -2796,10 +2816,8 @@ def handle_event(event):
                 board = game["board"]
                 turn_name = silent_mention_badge(game["initiator"], chat_peer)
                 txt = "{}, ваш ход (крестики)\n\n{}".format(turn_name, ttt_board_text(board))
-                ok = edit_game_message(chat_peer, gid, txt, ttt_kb(gid, board), table="ttt_games")
-                if ok: snackbar("🎮 Игра началась!")
-                else: snackbar("⚠️ Не удалось обновить поле, напиши «Мд кн» заново")
-                return
+                edit_game_message(chat_peer, gid, txt, ttt_kb(gid, board), table="ttt_games")
+                snackbar("🎮 Игра началась!"); return
             elif cmd == "ttt_decline":
                 if user_id != game["opponent"]: snackbar("⛔ Это не твой вызов"); return
                 if game["state"] != "pending": snackbar("⚠️ Игра уже неактивна"); return
@@ -3845,8 +3863,7 @@ def handle_message(peer, sender, text, msg_obj):
         kb = json.dumps(ttt_invite_kb(gid))
         try:
             msg_id = VK.messages.send(peer_id=peer, message="❌⭕ {}, {} предлагает сыграть в крестики-нолики!\n⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)), keyboard=kb, random_id=random.getrandbits(31))
-            cmid = resolve_cmid(peer, msg_id)
-            with DB_LOCK: CONN.execute("UPDATE ttt_games SET message_id=? WHERE id=?", (cmid, gid)); CONN.commit()
+            with DB_LOCK: CONN.execute("UPDATE ttt_games SET message_id=? WHERE id=?", (msg_id, gid)); CONN.commit()
         except Exception as e: print("ttt send error:", e)
     elif cmd == "айди":
         if not moderator: send_msg(peer, "⛔ Только модератор и выше."); return
@@ -4370,7 +4387,7 @@ def timer_loop():
                 if exp_ttt:
                     CONN.execute("UPDATE ttt_games SET state='expired' WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)); CONN.commit()
                     for g in exp_ttt:
-                        try: VK.messages.edit(peer_id=g["peer_id"], conversation_message_id=g["message_id"], message="⏰ Игра в крестики-нолики закрыта из-за бездействия.", keyboard=json.dumps({"inline": True, "buttons": []}))
+                        edit_game_message(g["peer_id"], g["id"], "⏰ Игра в крестики-нолики закрыта из-за бездействия.", None, table="ttt_games")
                         except: pass
                 pend_rows = CONN.execute("SELECT peer_id, value FROM settings WHERE key='top_clean_pending'").fetchall()
                 for pr in pend_rows:
