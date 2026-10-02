@@ -1924,26 +1924,27 @@ def edit_game_message(peer, game_id, text, keyboard_json=None, table="dice_games
         row = CONN.execute("SELECT message_id FROM {} WHERE id=?".format(table), (game_id,)).fetchone()
         stored = row["message_id"] if row else 0
     kb = keyboard_json if keyboard_json else json.dumps({"inline": True, "buttons": []})
-    err1 = err2 = None
+    # 1. Пробуем редактировать по cmid
     if stored and int(stored) > 0:
-        # 1. Пробуем как conversation_message_id
         try:
             VK.messages.edit(peer_id=peer, conversation_message_id=stored, message=text, keyboard=kb)
             return True
-        except Exception as e: err1 = str(e)
-        # 2. Пробуем как message_id
+        except Exception:
+            pass
+    # 2. Пробуем редактировать по mid
+    if stored and int(stored) > 0:
         try:
             VK.messages.edit(peer_id=peer, message_id=stored, message=text, keyboard=kb)
             return True
-        except Exception as e: err2 = str(e)
-        print("edit_game_message fail table={} gid={} cmid_err={} mid_err={}".format(table, game_id, err1, err2))
-    # 3. Фейл — удаляем старое (если было), создаём новое
+        except Exception:
+            pass
+    # 3. Фоллбек — удаляем старое, шлём новое
+    if stored and int(stored) > 0:
+        try:
+            VK.messages.delete(peer_id=peer, message_ids=[stored], delete_for_all=1)
+        except Exception:
+            pass
     try:
-        if stored and int(stored) > 0:
-            try: VK.messages.delete(peer_id=peer, message_ids=[stored], delete_for_all=1)
-            except:
-                try: VK.messages.delete(peer_id=peer, conversation_message_ids=[stored], delete_for_all=1)
-                except: pass
         new_id = VK.messages.send(peer_id=peer, message=text, keyboard=kb, random_id=random.getrandbits(31))
         with DB_LOCK: CONN.execute("UPDATE {} SET message_id=? WHERE id=?".format(table), (new_id, game_id)); CONN.commit()
         return True
