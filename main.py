@@ -3857,7 +3857,7 @@ def handle_message(peer, sender, text, msg_obj):
             cur = CONN.execute("INSERT INTO ttt_games(peer_id, initiator, opponent, state, current_turn, created_at) VALUES(?,?,?,?,?,?)", (peer, sender, opponent, "pending", sender, now))
             gid = cur.lastrowid; CONN.commit()
         kb = json.dumps(ttt_invite_kb(gid))
-               try:
+        try:
             msg_id = VK.messages.send(peer_id=peer, message="❌⭕ {}, {} предлагает сыграть в крестики-нолики!\n⏰ 1 минута".format(silent_mention_badge(opponent, peer), silent_mention_badge(sender, peer)), keyboard=kb, random_id=random.getrandbits(31))
             cmid = resolve_cmid(peer, msg_id)
             with DB_LOCK: CONN.execute("UPDATE ttt_games SET message_id=? WHERE id=?", (cmid, gid)); CONN.commit()
