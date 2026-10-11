@@ -3404,7 +3404,7 @@ def handle_message(peer, sender, text, msg_obj):
                 send_msg(peer, "Введите название(я) новых машин (можно через запятую):"); return
             elif low.startswith("/delcar"):
                 set_auction_state(sender, peer, "buad_delcar", {"msg_cmid": None})
-                send_msg(peer, "Введите полное название машины для удаления:"); return
+                send_msg(peer, "Введите полное название машины для удаления(Можно несколько через запятую):"); return
             elif low.startswith("/setkto"): handle_setkto(peer, sender, text[len("/setkto"):].strip()); return
             elif low.startswith("/inspector"): handle_inspector(peer, sender, text[len("/inspector"):].strip()); return
             elif low.startswith("/аукционеры"): handle_list_auctioneers(peer); return
@@ -3453,7 +3453,7 @@ def handle_message(peer, sender, text, msg_obj):
                 if low.startswith("/addcar"):
                     set_auction_state(sender, peer, "buad_addcar", {"msg_cmid": None}); send_msg(peer, "Введите название(я) новых машин (можно через запятую):"); return
                 if low.startswith("/delcar"):
-                    set_auction_state(sender, peer, "buad_delcar", {"msg_cmid": None}); send_msg(peer, "Введите полное название:"); return
+                    set_auction_state(sender, peer, "buad_delcar", {"msg_cmid": None}); send_msg(peer, "Введите полное название машины для удаления(Можно несколько через запятую):"); return
             if is_insp and low.startswith("/clearcard"): handle_clearcard(peer, sender, text[len("/clearcard"):].strip()); return
             elif is_insp and low.startswith("/card"): handle_card_ls(peer, sender, text[len("/card"):].strip()); return
             elif is_insp and low.startswith("/verify"): handle_verify(peer, sender, text[len("/verify"):].strip(), True); return
