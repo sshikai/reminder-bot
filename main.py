@@ -3004,18 +3004,15 @@ def handle_event(event):
         if cmd == "bu_cars_page":
             try: page = int(payload.get("p", 1))
             except: page = 1
-            with DB_LOCK: rows = CONN.execute("SELECT name FROM bu_cars ORDER BY id").fetchall()
-            names = [r["name"] for r in rows]
-            total = len(names); total_pages = max(1, (total + BU_CARS_PER_PAGE - 1) // BU_CARS_PER_PAGE)
-            page = max(1, min(page, total_pages))
-            chunk = names[(page-1)*BU_CARS_PER_PAGE : page*BU_CARS_PER_PAGE]
-            lines = ["📋 Список машин (стр. {}/{}):\n".format(page, total_pages)]
-            for i, nm in enumerate(chunk, (page-1)*BU_CARS_PER_PAGE+1): lines.append("{}. {}".format(i, nm))
-            nav = []
-            if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "bu_cars_page", "p": page-1})}, "color": "secondary"})
-            nav.append({"action": {"type": "callback", "label": "{}/{}".format(page, total_pages), "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
-            if page < total_pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "bu_cars_page", "p": page+1})}, "color": "secondary"})
-            edit_msg("\n".join(lines), {"inline": True, "buttons": [nav]}); snackbar("📄"); return
+            text, kb = _bu_render_cars(page)
+            if kb and cmid:
+                try:
+                    VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=json.dumps(kb))
+                except:
+                    send_msg(peer_id, text, keyboard=json.dumps(kb))
+            else:
+                send_msg(peer_id, text, keyboard=json.dumps(kb) if kb else None)
+            snackbar("📄"); return
         
         # ===== ПРОЧИЕ CALLBACK =====
         if cmd == "poll_vote":
@@ -3376,6 +3373,24 @@ def handle_message(peer, sender, text, msg_obj):
                 lines = ["👀 Смотрящие Б/У:\n"]
                 for i, uid in enumerate(lst, 1): lines.append("{}. | {} |".format(i, silent_mention_badge(uid, peer)))
                 send_msg(peer, "\n".join(lines)); return
+            elif low.startswith("/delad"):
+                targets = extract_targets(text[len("/delad"):].strip(), 0)
+                if not targets: send_msg(peer, "❌ Формат: /delad @юзер"); return
+                _bu_adm_del_list(sender, peer, targets[0]); return
+            elif low.startswith("/adban"):
+                rest = text[len("/adban"):].strip()
+                if rest.startswith("list"): return
+                targets = extract_targets(rest, 0)
+                if not targets: send_msg(peer, "❌ Формат: /adban @юзер"); return
+                t = targets[0]
+                with DB_LOCK: CONN.execute("INSERT OR REPLACE INTO bu_bans(user_id, banned_by, banned_at) VALUES(?,?,?)", (t, sender, int(time.time()))); CONN.commit()
+                send_msg(peer, "🚫 {} забанен в Б/У.".format(silent_mention_badge(t, peer))); return
+            elif low.startswith("/adunban"):
+                targets = extract_targets(text[len("/adunban"):].strip(), 0)
+                if not targets: send_msg(peer, "❌ Формат: /adunban @юзер"); return
+                t = targets[0]
+                with DB_LOCK: res = CONN.execute("DELETE FROM bu_bans WHERE user_id=?", (t,)); CONN.commit()
+                send_msg(peer, "✅ {} разбанен в Б/У.".format(silent_mention_badge(t, peer)) if res.rowcount > 0 else "ℹ️ Не был забанен.".format(silent_mention_badge(t, peer))); return
             elif low == "/adbanlist":
                 with DB_LOCK: rows = CONN.execute("SELECT user_id, banned_by FROM bu_bans ORDER BY banned_at DESC").fetchall()
                 if not rows: send_msg(peer, "✅ Бан-лист пуст."); return
@@ -4391,25 +4406,49 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "очистить_карту": do_clear_card_command(peer, sender, args)
 
 # ===== СИСТЕМА Б/У АВТОМОБИЛЕЙ =====
+BU_CATALOG_VERSION = "2"
 BU_INIT_CARS = [
-    "ВАЗ 2107","ВАЗ 2114","Гранта","Приора","Лада Калина","Hyundai Solaris","Kia Rio","Renault Logan","Renault Sandero","Daewoo Nexia","Chevrolet Lanos","ВАЗ 21099","ВАЗ 2110","ВАЗ 2115","Daewoo Matiz","Lifan Solano","Geely MK","Chery Fora","ZAZ Sens","Москвич 2141",
-    "Toyota Camry","Honda Accord","Mazda 6","Kia Optima","Hyundai Sonata","Toyota Corolla","Nissan Teana","Volkswagen Passat","Skoda Octavia","Ford Mondeo","Renault Megane","Peugeot 508","Citroen C5","Mazda 3","Toyota Avensis","Hyundai Elantra","Kia Cerato","Volkswagen Jetta","BMW 3 Series","Mercedes C-Class",
-    "BMW 5 Series","BMW 7 Series","Mercedes E-Class","Mercedes S-Class","Audi A6","Audi A8","Lexus LS","Toyota Land Cruiser","Range Rover","Porsche Panamera","Bentley Continental","Maserati Quattroporte","Jaguar XJ","Genesis G90","Cadillac Escalade","Lexus LX","Volvo XC90","Infiniti QX80","BMW X5","Mercedes GLE",
-    "Bugatti Chiron","Lamborghini Aventador","Ferrari 488","McLaren 720S","Pagani Huayra","Koenigsegg Jesko","Aston Martin Vulcan","Rolls-Royce Phantom","Bentley Bentayga","Rolls-Royce Cullinan","Lamborghini Urus","Ferrari LaFerrari","Porsche 918 Spyder","McLaren P1","Bugatti Veyron",
+    "Акиба","Анаконда","Бекас","Бульдозер","ВАЗ 2104","ВАЗ 2107","ВаЗ 21099","ВАЗ 2111","ВАЗ 2170","Вездеход Монстр","Волколак","ГАЗ 53","ГАЗ-21 Coupe","Гидроцикл","ЗИЛ 4104","ЗИС-115","ИЖ Юпитер 5","Иж-2715","Инкасатор","КАМАЗ 54115","Каракал","Квадроцикл","Кибербуханка","КиберГАЗ-21","Койот","Комбайн","Крайт","Ларга","Лахтак","Лодка Вихрь","Лодка Охотник","ЛуАЗ 969","Медведь","Минск 125","Москвич 2141","Москвич 412 Rally","Моторная лодка","Мусоровоз","ПАЗ 3205","Пожарка","Прицеп","Слепнир","Танк","УРАЛ ИМЗ 8 Блиц","Урал ИМЗ 8.103","Цистерна","Эвакуатор",
+    "AC Shelby Cobra","Acura NSX 2023","Acura TSX","Alfa Romeo Guilia","Aprilla MXV 450","Aston Martin DB11","Audi 100 C4","Audi A4","Audi A6 C5","Audi A8 2022","Audi A8 Police","Audi e-tron GT","Audi Q7","Audi Q8","Audi Quattro 80 B2","Audi R8 LMS GT2","Audi R8 V10","Audi RS Q e-tron Dacar","Audi RS6","Audi RS6 C7 Рестайлинг","Audi RS6 C8","Audi RS7 Sport","AUDI S5 Coupe 2020","Aurus Senat",
+    "Bentley Azure mk2","Bentley Continental GT","Bentley Mulliner Bacalar","BMW 3-Series G20","BMW 3.5 CSL 1974","BMW 635CSi (E24) 2025","BMW 7-Series 750Li","BMW 7-Series E38","BMW Alpina B12 E32","BMW E28 Alpina","BMW I8 Roadster","BMW M1","BMW M3 E30","BMW M3 E36","BMW M3 E46","BMW M3 E90","BMW M3 E92","BMW M3 F80 Competition","BMW M3 G81","BMW M4 Convertible","BMW M4 CSL","BMW M4 F84","BMW M4 G82","BMW M4 GT3","BMW M5 CS","BMW M5 E34","BMW M5 E39","BMW M5 E60","BMW M5 F10","BMW M5 F90","BMW M5 G90","BMW M6 F12","BMW M8 Competition Coupe","BMW M8 F92","BMW M8 F93 Gran Coupe","BMW R60 Sidecar","BMW S 1000 RR","BMW X5 E53","BMW X5M E70","BMW X5M F85","BMW X5M G05","BMW X6M F16","BMW X7 M50i","BMW X7 Police 6x6","BMW Z4 M40i","Boss 302 Mustang","Brawn GP F1","BRF Outlander 6x6","Bugatti Centodieci","Bugatti Chiron","Bugatti Divo","Bugatti La Noire","Bugatti Type 57SC Atlantic","Bugatti Veyron","Bugatti W16 Mistral","Buick GSX 1970",
+    "Cadillac Escalade","Cadillac Escalade IV","Cadillac Escalade V","Cadillac Miller-Meteor 1959 Ecto-1","Can-Am Outlander MAX 6X6 XT 1000","Chevrolet 3100 Tow Truck","Chevrolet Astro Van Lowrider","Chevrolet Bel Air","Chevrolet Camaro 2026","Chevrolet Camaro SS","Chevrolet Camaro Z28","Chevrolet Camaro ZL1","Chevrolet Colorado ZR2","Chevrolet Corvette C6","Chevrolet Corvette C8","Chevrolet Impala 1967","Chevrolet Malibu Police Car - Cobra","Chevrolet Niva","Chevrolet Silverado 6x6","Chevrolet Tahoe RST",
+    "Daewoo Matiz Sport","DAF XF16 Euro 6","DarkFire","Datsun 100А","DeLorean DMC","Dodge Charger Police","Dodge Charger R/T 1969","Dodge Charger SRT","Dodge Demon SRT","Dodge Demon SRT Off-Road","Dodge Durango SRT","Dodge Ice Charger","Dodge RAM TRX","Dodge Viper GTC","Ducati SuperSport S","Ducati XDiavel S",
+    "Ferrari 250GT California","Ferrari 296 GTB","Ferrari 308 GTB","Ferrari 330 p4","Ferrari 488 GTB","Ferrari 488 Pista","Ferrari 812 Superfast","Ferrari California T","Ferrari Daytona","Ferrari Dino 246 GT","Ferrari Enzo","Ferrari F40","Ferrari F50","Ferrari LaFerrari","Ferrari SF90 Stradale Spider","Ferrari Testarossa","Fiat mini 500","Flanker F","Ford 1933 HotRod","Ford Bronco VI","Ford Crown Victoria","Ford Econoline Club Wagon","Ford Explorer","FORD FALCON XB","Ford Focus 3 Sedan","Ford Focus RS","Ford GT Sport","Ford Mondeo","Ford Mustang Eleanor","Ford Mustang GT","Ford Mustang GT3","Ford Mustang Hoonigan","Ford Mustang Mach E","Ford Mustang RTR","Ford Raptor F-150","Ford Torino","Ford Transit","Ford Transit 2020",
+    "Gaz 2402 Halloween","GAZ 3307","GAZ 69","Gaz Tigr","Gaz Vector Next","GAZ Volga 2410","Gazelle 3221","Gazelle 3310 (Автозак)","Geely Emgrand 7","Gibbs Quadski","GMC Vandura",
+    "Harley Davidson Iron 883","Haval F7X","Hennessey Venom F5","Hennessey Venom GT","Honda CB 650R","HONDA CB 750 Nighthawk","Honda Civic VIII","Honda NSX","Honda RD1 CR-V 5","Honda S2000","Honda TRX 420 FM","Hot-Road F132","Hudson Hornet","Hummer H2","Hummer H2 6X6","Hummer H3T Alpha","Hummer Humvee","Hyundai Grandeur","Hyundai Solaris 2021",
+    "Infiniti FX50S","Infiniti Q60S","International S 1700 School bus",
+    "Jaguar XK120 Roadster","Jeep Cherokee 1993","Jeep Grand Cherokee","Jeep Grand Cherokee SRT8","Jeep Grand Wagoneer 1990","Jeep Wrangler","Jeep Wrangler Rubicon",
+    "Kawasaki JetSki STX","Kawasaki Ninja H2R","Kenworth W900L","KIA Carnival","KIA K5","Kia Rio","Koenigsegg CCXR","Koenigsegg Regera","Koenigsegg Sadair's Spear",
+    "Lada Granta","Lada Kalina Sport","Lada Vesta Sedan","Lada Vesta SW Cross","Lamborghini Aventador S","Lamborghini Aventador SV 2017","Lamborghini Centenario","Lamborghini Countach","Lamborghini Countach (2022)","Lamborghini Diablo SV","Lamborghini Gallardo","Lamborghini Huracan","Lamborghini LM002","Lamborghini Miura Roadster","Lamborghini Murcielago","Lamborghini Reventon","Lamborghini Sesto Elemento","Lamborghini Urus","Lamborghini Veneno 2013","Lancia Stratos","Land Cruiser 300","Land Rover Range Rover III","Lenco BearCat G2","Lexus IS500F Performance","Lexus LFA","Lexus LX570","Lexus RCF","Li9","Lincoln Navigator","Lincoln Phaeton HOT-ROD 1932","Lincoln Town Car","Lotus Emira","Lotus Exige Halloween","Lykan HyperSport",
+    "Marine Yacht","MARTT","Marussia B1","Marussia B2","Maserati GranTurismo","Maybach Exelero","Mazda MX-5 Miata","Mazda RX-7","Mazda RX-8","Mazda RX7 Veilside","Mazda Sedan 3","McLaren 600LT","McLaren P1","McLaren Senna","Mercede s-Benz w211","Mercedes 280SL Pagoda","Mercedes AMG GT","Mercedes Benz g500 Police","Mercedes-AMG E63 S Wagon","Mercedes-Benz 190E Evo II","Mercedes-Benz 300SL Coupe","Mercedes-Benz 500 SL R107","Mercedes-Benz A45 AMG","Mercedes-Benz AMG Project One","Mercedes-Benz C63s AMG","Mercedes-Benz CLE AMG 53","Mercedes-Benz CLK-GTR","Mercedes-Benz CLS 55 AMG","Mercedes-Benz CLS63 AMG","Mercedes-Benz E420 W210","Mercedes-Benz E63 W212","Mercedes-Benz E63S","Mercedes-Benz EQS580","Mercedes-Benz G63 AMG","Mercedes-Benz G63 AMG 6x6","Mercedes-Benz G63 AMG Brabus","Mercedes-Benz G65 AMG","Mercedes-Benz GLS 400","Mercedes-Benz GT-R","Mercedes-Benz GT63s","Mercedes-Benz MB S650","Mercedes-Benz R230","Mercedes-Benz S-Class w221","Mercedes-Benz S-Class W223","Mercedes-Benz S600 W140","Mercedes-Benz SL65 AMG","Mercedes-Benz SLR McLaren","Mercedes-Benz SLS AMG","Mercedes-Benz Sprinter","Mercedes-Benz Sprinter 319CDI","Mercedes-Benz V-Class","Mercedes-Benz V-Class W447","Mercedes-Benz W124","Mercedes-Benz X-Class","Mercury Coupe","Mini Countryman JCW","Mitsubishi Eclipse","Mitsubishi Galant 8","Mitsubishi Lancer EVO 7","Mitsubishi Lancer Evo 8","Mitsubishi Lancer Evo X","Morris Minor",
+    "Nissan 240SX","Nissan 370Z","Nissan GT-R R35","Nissan Pathfinder 2022","Nissan Qashqai","Nissan Silvia S15","Nissan Skyline R32","Nissan Skyline R34","Nissan Teana J32","Niva 4x4 Storm","Niva Urban",
+    "Ocean Yacht","Opel Astra H OPC","Opel Vivaro 2022",
+    "Pagani Zonda","Peterbilt Model 579","Peugeot 406","Plymouth GTX 1971","Pontiac Firebird 1998","Porsche 718 Cayman GT4 RS","Porsche 911 Carrera S","Porsche 911 Dakar","Porsche 911 Singer","Porsche 918 Spyder","Porsche 930","Porsche Cayenne S","Porsche GT3 RS 992","Porsche Mission R","Porsche Panamera S","Porsche Taycan Turbo S","Puch Pinzgauer 710K","Punker",
+    "Racer Sport","Raesr Tachyon 2019","Range Rover SVR","Range Rover Velar","RCheli","Renault Logan","Renault Premium","Renault R5 Turbo 3E 2022","Rimac Nevera","Rolls Royce Spectre","Rolls-Royce Cullinan","Rolls-Royce Phantom","Rolls-Royce Wraith",
+    "Saleen S7","SCG 003","Sea Yacht","Skoda Octavia A7","Skoda Rapid 2020","Smart Fortwo 2","Speedy Yacht","Subaru BRZ","Subaru Impreza II WRX STi","Subaru Levorg","Subaru WRX STI","Subaru WRX STI Rally","Suzuki GSX-R750","Suzuki gsxr1100",
+    "Tank 500","Tesla CyberTruck","Tesla Model S","Tesla Model X","Tesla Roadster","Topfun","Toyota AE86","Toyota Altezza","Toyota Camry 3.5","Toyota Camry XV55","Toyota Celica","Toyota Chaser Tourer v 100","Toyota Cresta X100","Toyota Custom BodyKit","Toyota GT86","Toyota Hilux Dakar","Toyota Land Cruiser 200","Toyota Mark II","Toyota Prius 2018","Toyota Supra A70 mk3","Toyota Supra A80","Toyota Supra A90","Toyota Tundra Nascar",
+    "UAZ 452 Braviy","UAZ 452 Buhanka","UAZ Hunter","UAZ Patriot","UAZ Patriot Pickup",
+    "VAZ 1111","VAZ 2101","VAZ 2106","VAZ 2106 (Hoonicorn style)","VAZ 2108","VAZ 2109","VAZ 2109 Turbo Edition","VAZ 2110","VAZ 2112","VAZ 2114","VAZ 2115","VAZ 2170","VAZ-2105 Street 1996",
+    "Volkswagen Beetle Baja Bug","Volkswagen Dune Buggy 1965","Volkswagen Golf GTI","Volkswagen Golf GTI 2","Volkswagen Jetta","Volkswagen Multivan T6","Volkswagen Passat 2021","Volkswagen Passat B3","Volkswagen Polo","Volkswagen Station Delux","Volkswagen T2","Volkswagen Touareg 2022","Volvo 240 GL","Volvo 242DL","Volvo 940","Volvo V60","Volvo XC90",
+    "Xiaomi su7","Xpeng P7",
+    "Yamaha FZ-10","Yamaha SR400","Yamaha YZF-R25","Yamaha YZF-R6",
+    "ZAZ 968","Zeekr 001",
 ]
 BU_ADS_LIFETIME = 48 * 3600
 BU_PAGE_SIZE = 10
 BU_CARS_PER_PAGE = 50
 
 def bu_ensure_catalog():
+    ver = get_setting(0, "bu_catalog_version", "0")
+    if ver == BU_CATALOG_VERSION: return
     with DB_LOCK:
-        cnt = CONN.execute("SELECT COUNT(*) FROM bu_cars").fetchone()[0]
-        if cnt == 0:
-            for nm in BU_INIT_CARS:
-                try: CONN.execute("INSERT OR IGNORE INTO bu_cars(name) VALUES(?)", (nm,))
-                except: pass
-            CONN.commit()
-
+        CONN.execute("DELETE FROM bu_cars")
+        for nm in BU_INIT_CARS:
+            try: CONN.execute("INSERT OR IGNORE INTO bu_cars(name) VALUES(?)", (nm,))
+            except: pass
+        CONN.commit()
+    set_setting(0, "bu_catalog_version", BU_CATALOG_VERSION)
+    
 def is_bu_watcher(user_id): return get_setting(0, "bu_watcher_{}".format(user_id), "0") == "1"
 def get_all_bu_watchers():
     with DB_LOCK: return [int(r["key"].replace("bu_watcher_", "")) for r in CONN.execute("SELECT key FROM settings WHERE key LIKE 'bu_watcher_%' AND value='1'").fetchall()]
@@ -4610,7 +4649,8 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
             if not r["photo_att"]: reply("❌ У этого объявления нет фото."); return True
-            send_msg(peer, "📷 Фото «{}»:\n{}".format(r["car_name"], r["description"] or "—"), attachments=r["photo_att"])
+            owner_link = silent_mention_badge(r["user_id"], peer)
+            send_msg(peer, "📷 Фото «{}»:\n{}\nВладелец: {}".format(r["car_name"], r["description"] or "—", owner_link), attachments=r["photo_att"])
             return True
 
         if step == "bu_view_all":
@@ -4618,7 +4658,8 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
             if not r["photo_att"]: reply("❌ У этого объявления нет фото."); return True
-            send_msg(peer, "📷 Фото «{}»:\n{}".format(r["car_name"], r["description"] or "—"), attachments=r["photo_att"])
+            owner_link = silent_mention_badge(r["user_id"], peer)
+            send_msg(peer, "📷 Фото «{}»:\n{}\nВладелец: {}".format(r["car_name"], r["description"] or "—", owner_link), attachments=r["photo_att"])
             return True
 
         if step == "bu_view_my":
@@ -4626,9 +4667,10 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
             if not r["photo_att"]: reply("❌ У этого объявления нет фото."); return True
-            send_msg(peer, "📷 Фото «{}»:\n{}".format(r["car_name"], r["description"] or "—"), attachments=r["photo_att"])
+            owner_link = silent_mention_badge(r["user_id"], peer)
+            send_msg(peer, "📷 Фото «{}»:\n{}\nВладелец: {}".format(r["car_name"], r["description"] or "—", owner_link), attachments=r["photo_att"])
             return True
-
+            
         if step == "bu_del_pick":
             ads = _bu_fetch_ads("my", user_id=sender, only_active=False)
             r = _bu_pick_from_ads(ads, num)
@@ -4662,9 +4704,9 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
     if cmd == "bu_menu":
         setstep("bu_menu", {"msg_cmid": prompt_cmid}); edit("🚗 Вы хотите продать машину или купить?", bu_menu_kb()); snack("✅"); return True
     if cmd == "bu_sell":
-        setstep("bu_sell_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто на английском:", bu_sell_kb()); snack("✅"); return True
+        setstep("bu_sell_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто:", bu_sell_kb()); snackbar("✅"); return
     if cmd == "bu_buy":
-        setstep("bu_buy_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто на английском, или посмотрите все объявления:", bu_buy_kb()); snack("✅"); return True
+        setstep("bu_buy_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто, или посмотрите все объявления:", bu_buy_kb()); snackbar("✅"); return
     if cmd == "bu_skip_photo":
         now_ts = int(time.time())
         with DB_LOCK:
@@ -4725,8 +4767,8 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
         edit("✅ Все ваши объявления удалены.", bu_menu_kb()); snack("✅"); return True
     return False
 
-def handle_bu_cars_list(peer, sender, raw):
-    try: page = int(raw.strip())
+def _bu_render_cars(page):
+    try: page = int(page)
     except: page = 1
     with DB_LOCK: rows = CONN.execute("SELECT name FROM bu_cars ORDER BY id").fetchall()
     names = [r["name"] for r in rows]
@@ -4739,8 +4781,15 @@ def handle_bu_cars_list(peer, sender, raw):
     if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "bu_cars_page", "p": page-1})}, "color": "secondary"})
     nav.append({"action": {"type": "callback", "label": "{}/{}".format(page, total_pages), "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
     if page < total_pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "bu_cars_page", "p": page+1})}, "color": "secondary"})
-    kb = json.dumps({"inline": True, "buttons": [nav]})
-    send_msg(peer, "\n".join(lines), keyboard=kb if nav else None)
+    kb = {"inline": True, "buttons": [nav]} if nav else None
+    return "\n".join(lines), kb
+
+def handle_bu_cars_list(peer, sender, raw):
+    try: page = int(raw.strip())
+    except: page = 1
+    text, kb = _bu_render_cars(page)
+    if kb: send_msg(peer, text, keyboard=json.dumps(kb))
+    else: send_msg(peer, text)
 
 # ===== СМОТРЯЩИЕ Б/У =====
 def handle_bu_watcher_cmd(peer, sender, raw):
@@ -4799,14 +4848,23 @@ def handle_bu_admin_input(sender, peer, text, cmid=None, attachments=None):
         clear_auction_state(sender, peer)
         reply("✅ Добавлено {} машин(ы) в базу.".format(added)); return True
     if step == "buad_delcar":
-        name = text.strip()
+        names = [n.strip() for n in text.split(",") if n.strip()]
+        if not names: reply("❌ Введите название(я):"); return True
+        deleted = []; not_found = []
         with DB_LOCK:
-            row = CONN.execute("SELECT id FROM bu_cars WHERE LOWER(name)=LOWER(?)", (name,)).fetchone()
-        if not row: reply("❌ Такой машины нет в базе."); return True
-        with DB_LOCK: CONN.execute("DELETE FROM bu_cars WHERE id=?", (row["id"],)); CONN.commit()
+            for name in names:
+                row = CONN.execute("SELECT id FROM bu_cars WHERE LOWER(name)=LOWER(?)", (name,)).fetchone()
+                if row:
+                    CONN.execute("DELETE FROM bu_cars WHERE id=?", (row["id"],))
+                    deleted.append(name)
+                else:
+                    not_found.append(name)
+            CONN.commit()
         clear_auction_state(sender, peer)
-        reply("✅ Машина «{}» удалена.".format(name)); return True
-    return False
+        lines = []
+        if deleted: lines.append("✅ Удалено: " + ", ".join(deleted))
+        if not_found: lines.append("❌ Не найдено: " + ", ".join(not_found))
+        reply("\n".join(lines) or "❌ Ничего не удалено."); return True
 
 def handle_bu_admin_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
     def snack(t):
