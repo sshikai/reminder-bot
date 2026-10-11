@@ -46,7 +46,7 @@ DICE_PHRASES = ["Фортуна повернулась к тебе самым н
 LEADER_BDAY_TEXT = "Дорогой лидер Million Dollars🎉\nОт лица всего состава поздравляю тебя с днем рождения!\n\nСпасибо за твой огромный вклад в развитие Million Dollars и за то, что собрал под одним крылом таких крутых ребят.\n\nЖелаем тебе железобетонного терпения, преданных замов, огромного онлайна и чтобы никто не портил тебе настроение. Пусть наша семья гремит по всему серверу! 💰\n\n{mention}"
 DEFAULT_BDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!"
 
-VALID_COMMANDS = ["команды","админы","участник","участники","ники","ник","парк","прем","чат","пред","снять_пред","лимит_предов","кд_предов","старт_контроль","стоп_контроль","время_опросов","защита","-защита","бан","разбан","баны","адмчат","admg","номер_чата","текст_др","создать","список","удалить","редактировать","включить","отключить","развернуть","назначить","снять","голоса","тишина","тишина_офф","проверка_опроса","бр","мут","снять_мут","муты","преды","предлист","статус","статусы","проверка","кости","объява","обьява","объявы","обьявы","объяв","обьяв","кд_объяв","кд_обьяв","топ","браки","брак","развод","онлайн","др","кто","кто_я","инфа","монетка","+правила","-правила","правила","+приветствие","-приветствие","приветствие","значок","удалить_значок","значки","кнб","кн","чистка","айди","запретить_игры","разрешить_игры","очистить_топ","карта","карта_редактировать","редактор_карты","очистить_карту","запретить_редактор","разрешить_редактор","перекуп"]
+VALID_COMMANDS = ["команды","админы","участник","участники","ники","ник","парк","прем","чат","пред","снять_пред","лимит_предов","кд_предов","старт_контроль","стоп_контроль","время_опросов","защита","-защита","бан","разбан","баны","адмчат","admg","номер_чата","текст_др","создать","список","удалить","редактировать","включить","отключить","развернуть","назначить","снять","голоса","тишина","тишина_офф","проверка_опроса","бр","мут","снять_мут","муты","преды","предлист","статус","статусы","проверка","кости","объява","обьява","объявы","обьявы","объяв","обьяв","кд_объяв","кд_обьяв","топ","браки","брак","развод","онлайн","др","кто","кто_я","инфа","монетка","+правила","-правила","правила","+приветствие","-приветствие","приветствие","значок","удалить_значок","значки","кнб","кн","чистка","айди","запретить_игры","разрешить_игры","очистить_топ","карта","карта_редактировать","редактор_карты","очистить_карту","запретить_редактор","разрешить_редактор","перекуп","обновить"]
 ROLE_NAMES = {0:"Участник", 1:"👮‍️ Модератор", 2:"🛡 Админ", 3:"🥷 Главный Админ", 4:"👑 Владелец"}
 RU_MONTHS = ["янв","фев","мар","апр","мая","июн","июл","авг","сен","окт","ноя","дек"]
 NUM_EMOJI = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
@@ -975,12 +975,10 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
     def back_to_menu(msg):
         set_auction_state(sender, peer, "menu", {"msg_cmid": prompt_cmid}); reply(msg + "\n\nВыберите действие:", auction_main_kb())
     def need_chat(cur_step):
-        if not re.match(r"^2\d{9}$", text.strip()):
+        m = re.match(r"^(2\d{9})$", text.strip())
+        if not m:
             txt, kb = auction_prompt(cur_step, ctx); reply("❌ Введите номер чата цифрами (2xxxxxxxxx).\n\n" + txt, kb); return None
-        pid = int(text.strip())
-        if not chat_exists(pid):
-            txt, kb = auction_prompt(cur_step, ctx); reply("❌ Такого чата нет: {}.\n\n".format(pid) + txt, kb); return None
-        return pid
+        return int(m.group(1))
     def finish_photo_step(photo_path, photo_att):
         mode = ctx.get("photo_mode", "create")
         if mode == "create":
@@ -1137,7 +1135,7 @@ def open_promo_menu(peer, sender):
             if not r["expire_ts"] or now_ts <= r["expire_ts"]: count += 1
     set_auction_state(sender, peer, "promo_menu", {})
     send_msg(peer, f"📊 Всего активных промокодов: {count}\n\nВыберите действие:", keyboard=promo_menu_kb())
-    
+
 def build_promo_active_text():
     with DB_LOCK:
         rows = CONN.execute("SELECT code, kind, card_name, max_act, act, expire_ts FROM promos ORDER BY id").fetchall()
@@ -1156,9 +1154,10 @@ def build_promo_active_text():
 
 def close_promo_session(peer, ctx, txt):
     cm = ctx.get("msg_cmid"); mid = ctx.get("msg_id")
-    for kw in (({"conversation_message_ids": [cm]} if cm else None), ({"message_ids": [mid]} if mid else None)):
+    for kw in (({"conversation_message_id": cm} if cm else None), ({"message_id": mid} if mid else None)):
         if not kw: continue
-        try: VK.messages.delete(peer_id=peer, delete_for_all=1, **kw); break
+        try:
+            VK.messages.edit(peer_id=peer, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}), **kw); return
         except: continue
     send_msg(peer, txt)
 
@@ -1232,9 +1231,8 @@ def handle_promo_use(peer, sender, raw):
         if not strict_template(row["card_name"]): send_msg(peer, "❌ Ошибка: карта промокода не найдена в папке бота."); return
         CONN.execute("INSERT OR IGNORE INTO promo_used(promo_id, user_id, used_at) VALUES(?,?,?)", (row["id"], sender, now))
         CONN.execute("UPDATE promos SET act=act+1 WHERE id=?", (row["id"],)); CONN.commit()
-    grant_excard(sender, row["card_name"], apply=True)
-    send_msg(peer, "✅ Промокод {} активирован! Эксклюзивная карта «{}» добавлена в раздел «Эксклюзив» и применена.".format(code, row["card_name"]))
-    send_card_to(peer, sender)
+    grant_excard(sender, row["card_name"], apply=False)
+    send_msg(peer, "✅ Промокод {} активирован! Эксклюзивная карта «{}» добавлена в раздел «Эксклюзив». Применить можно в: Мд редактор карты → Эксклюзив.".format(code, row["card_name"]))
 
 def handle_ex_card(peer, sender, raw, grant):
     targets = extract_targets(raw, 0); name = raw
@@ -1418,6 +1416,11 @@ def ttt_invite_kb(game_id):
     return {"inline": True, "buttons": [[
         {"action": {"type": "callback", "label": "✅ Принять", "payload": json.dumps({"cmd": "ttt_accept", "g": game_id})}, "color": "positive"},
         {"action": {"type": "callback", "label": "❌ Отказаться", "payload": json.dumps({"cmd": "ttt_decline", "g": game_id})}, "color": "negative"}]]}
+
+def ttt_punish_kb(game_id):
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "🔇 Мут 30 мин", "payload": json.dumps({"cmd": "ttt_punish_mute", "g": game_id})}, "color": "negative"}],
+        [{"action": {"type": "callback", "label": "🕊 Помиловать", "payload": json.dumps({"cmd": "ttt_punish_pardon", "g": game_id})}, "color": "positive"}]]}
 
 # ===== ПЕРЕКУП =====
 def calc_amount(text):
@@ -1800,12 +1803,13 @@ def init_db():
         CONN.execute("""CREATE TABLE IF NOT EXISTS promo_used (promo_id INTEGER, user_id INTEGER, used_at INTEGER, PRIMARY KEY(promo_id, user_id))""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS ttt_games (id INTEGER PRIMARY KEY AUTOINCREMENT, peer_id INTEGER, initiator INTEGER, opponent INTEGER, state TEXT DEFAULT 'pending', board TEXT DEFAULT '.........', current_turn INTEGER DEFAULT 0, message_id INTEGER DEFAULT 0, winner INTEGER DEFAULT 0, created_at INTEGER DEFAULT 0)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS bot_dm_users (user_id INTEGER PRIMARY KEY, first_seen INTEGER DEFAULT 0)""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS chat_owners (peer_id INTEGER PRIMARY KEY, owner_id INTEGER, set_at INTEGER DEFAULT 0)""")
     migrations = ["ALTER TABLE members ADD COLUMN warn_durations TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN last_vote_time INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN mute_until INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN mute_reason TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''", "ALTER TABLE message_stats ADD COLUMN kmb_wins INTEGER DEFAULT 0", "ALTER TABLE message_stats ADD COLUMN char_count INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN who_name TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN who_ts INTEGER DEFAULT 0", "ALTER TABLE player_cards ADD COLUMN design TEXT DEFAULT '{}'", "ALTER TABLE player_cards ADD COLUMN verified INTEGER DEFAULT 0", "ALTER TABLE auction_lots ADD COLUMN seller TEXT DEFAULT ''"]
     for sql in migrations:
         try: CONN.execute(sql)
         except: pass
     CONN.commit()
-
+    
 def get_setting(peer, key, default=""):
     with DB_LOCK:
         row = CONN.execute("SELECT value FROM settings WHERE peer_id=? AND key=?", (peer, key)).fetchone()
@@ -1813,7 +1817,47 @@ def get_setting(peer, key, default=""):
 def set_setting(peer, key, value):
     with DB_LOCK: CONN.execute("INSERT OR REPLACE INTO settings(peer_id, key, value) VALUES(?,?,?)", (peer, key, value)); CONN.commit()
 
+# ===== ВЛАДЕЛЕЦ ЧАТА =====
+CHAT_STAR_CACHE = {}
+def is_chat_star(sender, peer):
+    if sender <= 0: return False
+    now = time.time()
+    key = (sender, peer)
+    cached = CHAT_STAR_CACHE.get(key)
+    if cached and now - cached[0] < 300: return cached[1]
+    res = False
+    try:
+        members_resp = VK.messages.getConversationMembers(peer_id=peer)
+        for item in members_resp.get("items", []):
+            if int(item.get("member_id", 0)) == sender:
+                if item.get("is_admin") or item.get("is_owner") or item.get("is_star"):
+                    res = True
+                break
+    except Exception as e: print("is_chat_star err:", e)
+    CHAT_STAR_CACHE[key] = (now, res)
+    return res
+
+def get_saved_owner(peer):
+    with DB_LOCK:
+        row = CONN.execute("SELECT owner_id FROM chat_owners WHERE peer_id=?", (peer,)).fetchone()
+        return int(row["owner_id"]) if row else 0
+def set_saved_owner(peer, user_id):
+    with DB_LOCK: CONN.execute("INSERT OR REPLACE INTO chat_owners(peer_id, owner_id, set_at) VALUES(?,?,?)", (peer, user_id, int(time.time()))); CONN.commit()
+def clear_saved_owner(peer):
+    with DB_LOCK: CONN.execute("DELETE FROM chat_owners WHERE peer_id=?", (peer,)); CONN.commit()
+
+def plural_ru(n, one, few, many):
+    n = abs(int(n))
+    if n % 100 in (11, 12, 13, 14): return many
+    last = n % 10
+    if last == 1: return one
+    if last in (2, 3, 4): return few
+    return many
+# ============================================
+
 def get_chat_owner(peer):
+    saved = get_saved_owner(peer)
+    if saved: return saved
     if VK is None: return OWNER_CACHE.get(peer, 0)
     if peer in OWNER_CACHE: return OWNER_CACHE[peer]
     oid = 0
@@ -2124,12 +2168,12 @@ def get_help_back_to_manage(): return {"inline": True, "buttons": [[{"action": {
 def get_help_back_to_systems(): return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_systems"})}, "color": "secondary"}]]}
 
 HELP_GENERAL_TEXT = ("👥 Общие:\n\nОсновные💻:\n1. Мд админы — список руководителей чата.\n2. Мд участник — твоя статистика.\n3. Мд ник — установить ник.\n4. Мд ники — список ников участников.\n5. Мд участники — список всех участников.\n6. Мд статусы — список статусов.\n7. Мд топ — топы чата.\n8. Мд онлайн — кто сейчас онлайн.\n9. Мд правила — правила чата.\n10. Мд редактор карты — редактор личной карточки.\n\nИнформационные💼:\n1. Мд парк — информация об автопарке.\n2. Мд прем — информация о премиях.\n3. Мд чат — ссылка на чат для отчетов.\n4. Мд бр форум — ссылка на форум BR.\n5. Мд бр админы — таблица администрации BR BLUE.\n\nРазвлекательные🎭:\n1. Мд браки — список браков.\n2. Мд др — ближайшие дни рождения.\n3. Мд кто <слово> — кто является словом.\n4. Мд кто я — кто ты сегодня.\n5. Мд инфа <текст> — рандомные проценты.\n6. Мд монетка — орёл или решка.\n7. Мд значки — список значков.\n8. Мд значок — установить/посмотреть значок.\n9. Мд удалить значок — удалить значок.")
-HELP_ADMIN_TEXT = ("🛡 Команды Администратора:\n1. Мд ник [@юз] <имя> — установить ник другому.\n2. Мд номер чата — узнать ID чата.\n3. Мд проверка [@юз] — история наказаний.\n4. Мд тишина / тишина офф.\n5. Мд назначить @игрок <ранг>.\n6. Мд снять @игрок.\n7. Мд чистка @игрок <число> — макс 50, КД 30 сек.\n8. Мд карта — своя карта.\nИмеет возможности прошлых ролей.")
+HELP_ADMIN_TEXT = ("🛡 Команды Администратора:\n1. Мд ник [@юз] <имя> — установить ник другому.\n2. Мд номер чата — узнать ID чата.\n3. Мд проверка [@юз] — история наказаний.\n4. Мд тишина / тишина офф.\n5. Мд назначить @игрок <ранг>.\n6. Мд снять @игрок.\n7. Мд карта — своя карта.\nИмеет возможности прошлых ролей.")
 HELP_REMIND_TEXT = ("🔔 Напоминалка:\n1. Мд создать <название> <минуты> [кол-во]\n2. Мд список\n3. Мд удалить <название/номер>\n4. Мд редактировать <название/номер> <минуты>\n5. Мд отключить / включить\n6. Мд развернуть <название/номер>")
 HELP_OWNER_TEXT = ("👑 Команды владельца:\n1. Мд адмчат <id> / удалить\n2. Мд лимит предов <число>\n3. Мд кд предов <дней>\n4. Мд текст др — текст поздравления.\n5. Мд назначить @игрок <1-4>\n6. Мд снять @игрок\nИмеет возможности прошлых ролей.")
 HELP_POLLS_TEXT = ("📢 Система опросов:\n🛡️Админские:\n1. Мд голоса / голоса вчера\n2. Мд защита / -защита [@юз]\n🤴Владельца:\n1. Мд старт/стоп контроль\n2. Мд время опросов <ЧЧ:ММ> <ЧЧ:ММ>\n3. Мд проверка опроса <ЧЧ:ММ>")
 HELP_BR_TEXT = ("🎮 BLACK RUSSIA:\n\nℹ️Информационные:\n1. Мд бр — список серверов и онлайн.\n2. Мд бр форум — ссылка на форум Black Russia🎮.\n3. Мд бр админы — актуальная таблица администрации BR BLUE🔹.\n\n📈Калькулятор перекупа:\n1. Мд перекуп\n\n🗃️Личная карточка:\n1. Мд карта — выводит фото карты.\n2. Мд редактор карты — редактирование.\n3. Мд очистить карту [параметр] — очистить свою карту.\n\nЖелательно использовать в лс бота😉")
-HELP_MODERATOR_TEXT = ("👮‍️ Команды Модератора:\n1. Мд пред [@юз] причина — выдать пред.\n2. Мд снять пред [@юз] — снять пред.\n3. Мд бан [@юз] [дни/навсегда] — забанить.\n4. Мд разбан [@юз] — разбанить.\n5. Мд баны — список забаненных.\n6. Мд мут [@юз] <минуты> причина — выдать мут.\n7. Мд снять мут [@юз] — снять мут.\n8. Мд муты — список замученных.\n9. Мд преды — список предупреждений.\n10. Мд айди [@юз] — настоящий айди страницы.\nНаказания только для участников ниже рангом.")
+HELP_MODERATOR_TEXT = ("👮‍️ Команды Модератора:\n1. Мд пред [@юз] причина — выдать пред.\n2. Мд снять пред [@юз] — снять пред.\n3. Мд бан [@юз] [дни/навсегда] — забанить.\n4. Мд разбан [@юз] — разбанить.\n5. Мд баны — список забаненных.\n6. Мд мут [@юз] <минуты> причина — выдать мут.\n7. Мд снять мут [@юз] — снять мут.\n8. Мд муты — список замученных.\n9. Мд преды — список предупреждений.\n10. Мд айди [@юз] — настоящий айди страницы.\n11. Мд чистка @игрок <число> — удалить сообщения (макс 50).\nНаказания только для участников ниже рангом.")
 HELP_MAIN_ADMIN_TEXT = ("🥷 Команды Главного Админа:\n1. Мд статус @игрок <номер>\n2. Мд статус создать/удалить/редактировать/снять\n3. Мд +правила / -правила (ответом)\n4. Мд +приветствие / -приветствие (ответом)\n5. Мд запретить игры / разрешить игры\n6. Мд очистить топ [@игроки] [тип]\n7. Мд запретить редактор / разрешить редактор\nИмеет возможности прошлых ролей.")
 HELP_GAMES_TEXT = ("🎯 Игровые команды:\n1. Мд кости @игрок — пригласить игрока бросить кости. 🎲\nПобедитель выбирает наказание проигравшему:\n• 🔇 Мут на 30 минут\n• 📢 Упоминать каждые 60 мин, 5 часов\n• 🕊 Помиловать\n2. Мд кнб @игрок — камень, ножницы, бумага ✊✌️✋\n3. Мд кн @игрок — крестики-нолики ❌⭕")
 HELP_MD_TEXT = ("👊 Основной состав MD:\n1. Мд объява — объявление во все чаты.\n🛡️ Админские:\n1. Мд кд объяв <минуты>\n2. Мд объявы — вкл/выкл объявления.")
@@ -2685,7 +2729,36 @@ def handle_event(event):
             except Exception as e: print("card cb err:", e); snackbar("❌ Ошибка")
             return
 
-        # ===== ИГРЫ: КРЕСТИКИ-НОЛИКИ =====
+        # ===== КРЕСТИКИ: НАКАЗАНИЯ =====
+        if cmd in ["ttt_punish_mute", "ttt_punish_pardon"]:
+            gid = payload.get("g", 0)
+            with DB_LOCK: game = CONN.execute("SELECT * FROM ttt_games WHERE id=?", (gid,)).fetchone()
+            if not game: snackbar("❌ Игра не найдена"); return
+            if game["state"] != "finished": snackbar("⚠️ Игра уже закрыта"); return
+            if game["winner"] == 1:
+                winner_id, loser_id = game["initiator"], game["opponent"]
+            elif game["winner"] == 2:
+                winner_id, loser_id = game["opponent"], game["initiator"]
+            else:
+                snackbar("❌ Ничья — наказаний нет"); return
+            if user_id != winner_id: snackbar("⛔ Только победитель"); return
+            if cmd == "ttt_punish_mute":
+                muted_now, _ = has_active_dice_punishments(peer_id, loser_id)
+                if muted_now: snackbar("⚠️ Уже замучен"); return
+                mute_until = int(time.time()) + 30 * 60
+                with DB_LOCK:
+                    CONN.execute("INSERT OR IGNORE INTO members(user_id, peer_id) VALUES(?,?)", (loser_id, peer_id))
+                    CONN.execute("UPDATE members SET mute_until=?, mute_reason=? WHERE user_id=? AND peer_id=?", (mute_until, "Проиграл в крестики-нолики ❌⭕", loser_id, peer_id)); CONN.commit()
+                add_punishment(peer_id, loser_id, "mute", "Проиграл в крестики-нолики ❌⭕", 0, "", winner_id, 30)
+                try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="🔇 {} получил мут на 30 минут!".format(silent_mention_badge(loser_id, peer_id)), keyboard=json.dumps({"inline": True, "buttons": []}))
+                except: pass
+                snackbar("🔇 Мут выдан"); return
+            else:
+                try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="🕊 {} помиловал {}!".format(silent_mention_badge(winner_id, peer_id), silent_mention_badge(loser_id, peer_id)), keyboard=json.dumps({"inline": True, "buttons": []}))
+                except: pass
+                snackbar("🕊 Помилован"); return
+
+        # ===== КРЕСТИКИ: ИГРА =====
         if cmd in ["ttt_accept", "ttt_decline", "ttt_move"]:
             gid = payload.get("g", 0)
             with DB_LOCK: game = CONN.execute("SELECT * FROM ttt_games WHERE id=?", (gid,)).fetchone()
@@ -2728,14 +2801,19 @@ def handle_event(event):
                 board[idx] = mark; board = "".join(board)
                 winner = ttt_check_winner(board)
                 if winner:
-                    if winner == 'D': txt = "🤝 Ничья!"
+                    if winner == 'D':
+                        with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, state='finished', winner=0 WHERE id=?", (board, gid)); CONN.commit()
+                        try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=cmid, message="🤝 Ничья!", keyboard=json.dumps({"inline": True, "buttons": []}))
+                        except: pass
+                        snackbar("🎉 Ничья"); return
                     else:
                         w_id = game["initiator"] if winner == 'X' else game["opponent"]
-                        txt = "🏆 {} побеждает ({})!".format(silent_mention_badge(w_id, chat_peer), 'крестики' if winner == 'X' else 'нолики')
-                    with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, state='finished', winner=? WHERE id=?", (board, 0 if winner=='D' else 1, gid)); CONN.commit()
-                    try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=cmid, message=txt, keyboard=json.dumps({"inline": True, "buttons": []}))
-                    except: pass
-                    snackbar("🎉 Конец"); return
+                        l_id = game["opponent"] if winner == 'X' else game["initiator"]
+                        with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, state='finished', winner=? WHERE id=?", (board, 1 if winner=='X' else 2, gid)); CONN.commit()
+                        txt = "🏆 {} побеждает ({})!\n\n{}, выбери наказание для {}:".format(silent_mention_badge(w_id, chat_peer), 'крестики' if winner == 'X' else 'нолики', silent_mention_badge(w_id, chat_peer), silent_mention_badge(l_id, chat_peer))
+                        try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=cmid, message=txt, keyboard=json.dumps(ttt_punish_kb(gid)))
+                        except: pass
+                        snackbar("🎉 Победа"); return
                 next_id = game["opponent"] if user_id == game["initiator"] else game["initiator"]
                 with DB_LOCK: CONN.execute("UPDATE ttt_games SET board=?, current_turn=?, created_at=? WHERE id=?", (board, next_id, now, gid)); CONN.commit()
                 turn_word = 'крестики' if next_id == game["initiator"] else 'нолики'
@@ -2744,21 +2822,22 @@ def handle_event(event):
                 except Exception as e: print("ttt edit err:", e)
                 snackbar("✅ Ход сделан"); return
 
+
         # ===== ИГРЫ: КОСТИ =====
         if cmd in ["dice_accept", "dice_decline", "dice_roll", "dice_punish_mute", "dice_punish_mention", "dice_punish_pardon"]:
             game_id = payload.get("game_id", 0)
             with DB_LOCK: game = CONN.execute("SELECT * FROM dice_games WHERE id=?", (game_id,)).fetchone()
             if not game: snackbar("❌"); return
             now = int(time.time())
-            if (now - game["created_at"]) > 60:
+            if game["state"] in ("pending", "playing") and (now - game["created_at"]) > 60:
                 with DB_LOCK: CONN.execute("UPDATE dice_games SET state='expired' WHERE id=?", (game_id,)); CONN.commit()
-                try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="⏰ Время вышло!", keyboard=json.dumps({"inline": True, "buttons": []}))
+                try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="⏰ Игра в кости закрыта из-за бездействия.", keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
                 snackbar("⏰"); return
             if cmd == "dice_accept":
                 if user_id != game["opponent"]: snackbar("⛔"); return
                 if game["state"] != "pending": snackbar("⚠️"); return
-                with DB_LOCK: CONN.execute("UPDATE dice_games SET state='playing', current_turn=? WHERE id=?", (game["initiator"], game_id)); CONN.commit()
+                with DB_LOCK: CONN.execute("UPDATE dice_games SET state='playing', current_turn=?, created_at=? WHERE id=?", (game["initiator"], now, game_id)); CONN.commit()
                 try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="✅ {} принял вызов! Начинаем! 🎲\n{}, твоя очередь!".format(silent_mention_badge(game["opponent"], peer_id), silent_mention_badge(game["initiator"], peer_id)), keyboard=json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "🎲 Бросить", "payload": json.dumps({"cmd": "dice_roll", "game_id": game_id})}, "color": "positive"}]]}))
                 except: pass
                 snackbar("🎲"); return
@@ -2775,7 +2854,7 @@ def handle_event(event):
                 roll = random.randint(1, 6); ini, opp = game["initiator"], game["opponent"]
                 if user_id == ini: ni, no, nt = roll, game["opponent_roll"], opp
                 else: ni, no, nt = game["initiator_roll"], roll, ini
-                with DB_LOCK: CONN.execute("UPDATE dice_games SET initiator_roll=?, opponent_roll=?, current_turn=?, created_at=? WHERE id=?", (ni, no, nt, int(time.time()), game_id)); CONN.commit()
+                with DB_LOCK: CONN.execute("UPDATE dice_games SET initiator_roll=?, opponent_roll=?, current_turn=?, created_at=? WHERE id=?", (ni, no, nt, now, game_id)); CONN.commit()
                 if ni > 0 and no > 0:
                     if ni == no:
                         with DB_LOCK: CONN.execute("UPDATE dice_games SET initiator_roll=0, opponent_roll=0, current_turn=? WHERE id=?", (ini, game_id)); CONN.commit()
@@ -2825,14 +2904,14 @@ def handle_event(event):
                 try: VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message="🕊 {} помиловал {}! 🎲❤️".format(silent_mention_badge(winner, peer_id), silent_mention_badge(loser, peer_id)), keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
                 snackbar("🕊"); return
-
+                
         # ===== ИГРЫ: КНБ =====
         if cmd in ["kmb_accept", "kmb_decline", "kmb_choice"]:
             game_id = payload.get("game_id", 0)
             with DB_LOCK: game = CONN.execute("SELECT * FROM kmb_games WHERE id=?", (game_id,)).fetchone()
             if not game: snackbar("❌"); return
             chat_peer = game["peer_id"]; now = int(time.time())
-            if (now - game["created_at"]) > 60:
+            if game["state"] in ("pending", "choosing") and (now - game["created_at"]) > 60:
                 with DB_LOCK: CONN.execute("UPDATE kmb_games SET state='expired' WHERE id=?", (game_id,)); CONN.commit()
                 try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=cmid, message="⏰ КНБ: время вышло!", keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
@@ -2841,7 +2920,7 @@ def handle_event(event):
             if cmd == "kmb_accept":
                 if user_id != game["opponent"]: snackbar("⛔"); return
                 if game["state"] != "pending": snackbar("⚠️"); return
-                with DB_LOCK: CONN.execute("UPDATE kmb_games SET state='choosing', created_at=? WHERE id=?", (int(time.time()), game_id)); CONN.commit()
+                with DB_LOCK: CONN.execute("UPDATE kmb_games SET state='choosing', created_at=? WHERE id=?", (now, game_id)); CONN.commit()
                 try: VK.messages.edit(peer_id=chat_peer, conversation_message_id=cmid, message="✅ {} принял вызов КНБ! ✊✌️✋ Кнопки в ЛС!".format(silent_mention_badge(game["opponent"], chat_peer)), keyboard=json.dumps({"inline": True, "buttons": []}))
                 except: pass
                 send_msg(game["initiator"], "🎮 КНБ: выбери ход!", keyboard=kmb_kb); send_msg(game["opponent"], "🎮 КНБ: выбери ход!", keyboard=kmb_kb); snackbar("✅ Проверь ЛС!"); return
@@ -2860,23 +2939,23 @@ def handle_event(event):
                 with DB_LOCK:
                     if user_id == game["initiator"]:
                         if game["init_choice"]: snackbar("⚠️ Уже выбрал!"); return
-                        CONN.execute("UPDATE kmb_games SET init_choice=?, created_at=? WHERE id=?", (choice, int(time.time()), game_id))
+                        CONN.execute("UPDATE kmb_games SET init_choice=?, created_at=? WHERE id=?", (choice, now, game_id))
                     else:
                         if game["opp_choice"]: snackbar("⚠️ Уже выбрал!"); return
-                        CONN.execute("UPDATE kmb_games SET opp_choice=?, created_at=? WHERE id=?", (choice, int(time.time()), game_id))
+                        CONN.execute("UPDATE kmb_games SET opp_choice=?, created_at=? WHERE id=?", (choice, now, game_id))
                     CONN.commit(); game = CONN.execute("SELECT * FROM kmb_games WHERE id=?", (game_id,)).fetchone()
                 snackbar("✅ Выбор сохранён!")
                 if game["init_choice"] and game["opp_choice"]:
                     ic, oc = game["init_choice"], game["opp_choice"]; beats = {"rock": "scissors", "scissors": "paper", "paper": "rock"}; emojis = {"rock": "👊", "scissors": "✌️", "paper": "✋"}
                     if ic == oc:
-                        with DB_LOCK: CONN.execute("UPDATE kmb_games SET init_choice='', opp_choice='', created_at=? WHERE id=?", (int(time.time()), game_id)); CONN.commit()
+                        with DB_LOCK: CONN.execute("UPDATE kmb_games SET init_choice='', opp_choice='', created_at=? WHERE id=?", (now, game_id)); CONN.commit()
                         send_msg(chat_peer, "🤝 Ничья! Оба выбрали {}\nПереигрываем!".format(emojis[ic]))
                         send_msg(game["initiator"], "🎮 КНБ: переигровка!", keyboard=kmb_kb); send_msg(game["opponent"], "🎮 КНБ: переигровка!", keyboard=kmb_kb)
                     else:
                         winner = game["initiator"] if beats[ic] == oc else game["opponent"]; wc = ic if winner == game["initiator"] else oc
                         with DB_LOCK: CONN.execute("UPDATE kmb_games SET state='finished' WHERE id=?", (game_id,)); CONN.commit()
                         increment_kmb_win(chat_peer, winner)
-                        send_msg(chat_peer, "✊✌️✋ Результат КМБ:\n{} {} vs {} {}\n\n🏆 {} {} побеждает!".format(silent_mention_badge(game["initiator"], chat_peer), emojis[ic], silent_mention_badge(game["opponent"], chat_peer), emojis[oc], silent_mention_badge(winner, chat_peer), emojis[wc]))
+                        send_msg(chat_peer, "✊✌️✋ Результат КНБ:\n{} {} vs {} {}\n\n🏆 {} {} побеждает!".format(silent_mention_badge(game["initiator"], chat_peer), emojis[ic], silent_mention_badge(game["opponent"], chat_peer), emojis[oc], silent_mention_badge(winner, chat_peer), emojis[wc]))
                 return
 
         # ===== БРАК =====
@@ -3067,6 +3146,13 @@ def handle_event(event):
 def handle_calc_callback(cmd, user_id, peer_id, cmid, payload):
     state = get_auction_state(user_id, peer_id)
     if not state or state["step"] not in ("calc_menu", "calc_auto", "calc_input"):
+        # Проверяем, есть ли активный калькулятор в этом чате у кого-то ещё
+        with DB_LOCK:
+            row = CONN.execute("SELECT user_id, step, context FROM auction_state WHERE peer_id=? AND step LIKE 'calc_%' ORDER BY rowid DESC LIMIT 1", (peer_id,)).fetchone()
+        if not row:
+            snackbar("⛔ Сначала напишите «Мд перекуп»"); return True
+        if int(row["user_id"]) != user_id:
+            snackbar("⛔ Калькулятор вызвал другой человек"); return True
         set_auction_state(user_id, peer_id, "calc_menu", {"msg_cmid": cmid})
         state = get_auction_state(user_id, peer_id)
     ctx = state.get("context", {}); prompt_cmid = cmid or ctx.get("msg_cmid")
@@ -3338,6 +3424,10 @@ def handle_message(peer, sender, text, msg_obj):
     if action.get("type") == "chat_invite_user":
         user_id = action.get("member_id")
         if not user_id: return
+        # Бот добавлен в чат (member_id отрицательный = id группы)
+        if user_id < 0:
+            send_msg(peer, "👋 Вы пригласили меня! Для нормальной работы осталось:\n1) Выдать мне «звезду» в этом чате (админку)\n2) Написать: `Мд обновить`\n\n📌 Ваш номер чата: `{}`\n\nПосле этого я начну отвечать на команды, а вы станете владельцем.".format(peer))
+            return
         with DB_LOCK: ban_row = CONN.execute("SELECT ban_until FROM bans WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
         if ban_row and (ban_row["ban_until"] == 0 or ban_row["ban_until"] > int(time.time())):
             try: VK.messages.removeChatUser(chat_id=peer-2000000000, member_id=user_id); send_msg(peer, "🚫 {} забанен.".format(silent_mention_badge(user_id, peer)))
@@ -3356,12 +3446,18 @@ def handle_message(peer, sender, text, msg_obj):
     if action.get("type") == "chat_kick_user":
         user_id = action.get("member_id")
         if user_id:
-            with DB_LOCK: CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)); CONN.commit()
+            # Бот исключён (member_id отрицательный) — сбрасываем владельца
+            if user_id < 0:
+                clear_saved_owner(peer)
+                OWNER_CACHE.pop(peer, None)
+                print("Bot kicked from", peer, "- owner cleared")
+            else:
+                with DB_LOCK: CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)); CONN.commit()
         return
 
     with DB_LOCK: mute_row = CONN.execute("SELECT mute_until FROM members WHERE user_id=? AND peer_id=?", (sender, peer)).fetchone()
     if mute_row and mute_row["mute_until"] and mute_row["mute_until"] > time.time():
-        if not is_moderator(sender, peer):
+        if not is_moderator(sender, peer) and not is_chat_star(sender, peer):
             try:
                 if user_cmid: VK.messages.delete(peer_id=peer, conversation_message_ids=[user_cmid], delete_for_all=1)
             except: pass
@@ -3414,6 +3510,18 @@ def handle_message(peer, sender, text, msg_obj):
     owner = is_owner(sender, peer); real_owner = is_real_owner(sender, peer); admin = is_admin(sender, peer); moderator = is_moderator(sender, peer); main_admin = is_main_admin(sender, peer); sender_role = get_user_role(peer, sender)
     reply_obj = msg_obj.get("reply_message", {}) or {}; has_reply = bool(reply_obj and isinstance(reply_obj, dict) and reply_obj.get("from_id")); reply_msg_id = reply_obj.get("conversation_message_id", 0) if has_reply else 0; reply_text = reply_obj.get("text", "") if has_reply else ""; reply_from = reply_obj.get("from_id", 0) if has_reply else 0
 
+    if cmd == "обновить":
+        if peer < 2000000000: send_msg(peer, "❌ Только в беседах."); return
+        if not is_admin(sender, peer) and not is_chat_star(sender, peer):
+            send_msg(peer, "❌ Команду должен выполнить тот, кто выдал мне звезду, или админ чата."); return
+        saved = get_saved_owner(peer)
+        if saved and saved != sender:
+            send_msg(peer, "❌ Владелец уже определён: {}. Если владелец сменился — исключите меня и добавьте снова.".format(silent_mention_badge(saved, peer)))
+            return
+        set_saved_owner(peer, sender)
+        OWNER_CACHE[peer] = sender
+        send_msg(peer, "✅ Готово! Теперь я работаю в этом чате.\nВладелец: {}\n\nВведите `Мд команды`, чтобы посмотреть доступные команды.".format(silent_mention_badge(sender, peer)))
+        return
     if cmd == "команды": send_msg(peer, "📖 Команды MD BOT", keyboard=get_help_main_buttons())
     elif cmd == "админы":
         chat_owner_id = get_chat_owner(peer)
@@ -3804,7 +3912,7 @@ def handle_message(peer, sender, text, msg_obj):
         if targets: send_msg(peer, "⚠️ Очистить топ(ы) [{}] для: {}?\n«Подтвердить» / «Отменить».".format(names, ", ".join(silent_mention_badge(t, peer) for t in targets)))
         else: send_msg(peer, "⚠️ Очистить топ(ы) [{}] для всех?\n«Подтвердить» / «Отменить».".format(names))
     elif cmd == "чистка":
-        if not admin: send_msg(peer, "⛔"); return
+        if not moderator: send_msg(peer, "⛔ Только модератор и выше."); return
         if not real_owner:
             last_clean = int(get_setting(peer, "last_clean_{}".format(sender), "0") or "0")
             if time.time() - last_clean < 30: send_msg(peer, "⏳ КД {} сек.".format(30 - int(time.time() - last_clean))); return
