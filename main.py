@@ -3323,6 +3323,17 @@ def handle_message(peer, sender, text, msg_obj):
     first_line = text.split("\n")[0].strip(); first = norm(first_line); user_cmid = msg_obj.get("conversation_message_id"); user_mid = msg_obj.get("id")
     if peer < 2000000000:
         low = text.strip().lower(); first_tok = low.split()[0] if low.split() else ""
+        # Если юзер запустил новую команду (мд ... или /...) — сбрасываем незакрытые редакторы
+        if (first.startswith("мд ") or low.startswith("/")) and low not in ("отмена", "отменить"):
+            st = get_auction_state(sender, peer)
+            if st and st["step"].startswith("bu"):
+                clear_auction_state(sender, peer)
+            st2 = get_auction_state(sender, peer)
+            if st2 and st2["step"].startswith("calc_"):
+                clear_auction_state(sender, peer)
+            st3 = get_auction_state(sender, peer)
+            if st3 and st3["step"].startswith("promo_"):
+                clear_auction_state(sender, peer)
         with DB_LOCK:
             known = CONN.execute("SELECT 1 FROM bot_dm_users WHERE user_id=?", (sender,)).fetchone()
             if not known:
