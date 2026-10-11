@@ -4833,7 +4833,7 @@ def timer_loop():
             time.sleep(10)
             if VK is None: continue
             now_msk = get_msk_now(); today_str = now_msk.strftime("%Y-%m-%d"); now = int(time.time())
-                if now % 3600 < 15: bu_cleanup_expired()
+            if now % 3600 < 15: bu_cleanup_expired()
             for k in list(CLEAR_PENDING.keys()):
                 if now - CLEAR_PENDING[k] > 60: CLEAR_PENDING.pop(k, None)
 
@@ -5007,7 +5007,7 @@ def timer_loop():
 def main():
     global VK
     print("=== MD BOT starting ===")
-     init_db()
+    init_db()
     try: bu_ensure_catalog()
     except Exception as e: print("bu_ensure_catalog err:", e)
     threading.Thread(target=timer_loop, daemon=True).start()
