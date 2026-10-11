@@ -3456,6 +3456,10 @@ def handle_message(peer, sender, text, msg_obj):
                 if c2 == "очистить_карту": do_clear_card_command(peer, sender, pn[2:]); return
                 if pn[0] == "карта": handle_ls_card(peer, sender, "карта", pn[1:]); return
                 if pn[0] == "команды": send_msg(peer, ls_help_text(sender)); return
+                if pn[0] == "бу":
+                    if is_bu_banned(sender): send_msg(peer, "🚫 Вы забанены в системе Б/У."); return
+                    open_bu_menu(peer, sender); return
+                if pn[0] == "перекуп": open_calc_menu(peer, sender); return
                 send_msg(peer, "❌ Неизвестная команда.\n\n" + ls_help_text(sender)); return
         if text.strip().startswith("/"): send_msg(peer, "❌ Неизвестная команда.\n\n" + ls_help_text(sender)); return
         if handle_card_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
