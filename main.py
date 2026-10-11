@@ -2995,24 +2995,25 @@ def handle_event(event):
             return
 
         # ===== Б/У CALLBACKS =====
+        if cmd == "bu_cars_page":
+            try: page = int(payload.get("p", 1))
+            except: page = 1
+            text, kb = _bu_render_cars(page)
+            if cmid:
+                try:
+                    VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []}))
+                except Exception as e:
+                    print("bu_cars_page edit err:", e)
+                    send_msg(peer_id, text, keyboard=json.dumps(kb) if kb else None)
+            else:
+                send_msg(peer_id, text, keyboard=json.dumps(kb) if kb else None)
+            snackbar("📄"); return
         if cmd.startswith("bu_") or cmd == "bu_open":
             handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id)
             return
         if cmd.startswith("buad_"):
             if handle_bu_admin_callback(cmd, user_id, peer_id, cmid, payload, event_id): return
             return
-        if cmd == "bu_cars_page":
-            try: page = int(payload.get("p", 1))
-            except: page = 1
-            text, kb = _bu_render_cars(page)
-            if kb and cmid:
-                try:
-                    VK.messages.edit(peer_id=peer_id, conversation_message_id=cmid, message=text, keyboard=json.dumps(kb))
-                except:
-                    send_msg(peer_id, text, keyboard=json.dumps(kb))
-            else:
-                send_msg(peer_id, text, keyboard=json.dumps(kb) if kb else None)
-            snackbar("📄"); return
         
         # ===== ПРОЧИЕ CALLBACK =====
         if cmd == "poll_vote":
@@ -3388,9 +3389,8 @@ def handle_message(peer, sender, text, msg_obj):
                 targets = extract_targets(text[len("/delad"):].strip(), 0)
                 if not targets: send_msg(peer, "❌ Формат: /delad @юзер"); return
                 _bu_adm_del_list(sender, peer, targets[0]); return
-            elif low.startswith("/adban"):
+            elif low.startswith("/adban") and not low.startswith("/adbanlist"):
                 rest = text[len("/adban"):].strip()
-                if rest.startswith("list"): return
                 targets = extract_targets(rest, 0)
                 if not targets: send_msg(peer, "❌ Формат: /adban @юзер"); return
                 t = targets[0]
@@ -3440,9 +3440,8 @@ def handle_message(peer, sender, text, msg_obj):
                     targets = extract_targets(text[len("/delad"):].strip(), 0)
                     if not targets: send_msg(peer, "❌ Формат: /delad @юзер"); return
                     _bu_adm_del_list(sender, peer, targets[0]); return
-                if low.startswith("/adban"):
+                if low.startswith("/adban") and not low.startswith("/adbanlist"):
                     rest = text[len("/adban"):].strip()
-                    if rest.startswith("list"): return
                     targets = extract_targets(rest, 0)
                     if not targets: send_msg(peer, "❌ Формат: /adban @юзер"); return
                     t = targets[0]
@@ -4776,6 +4775,7 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
         with DB_LOCK: CONN.execute("DELETE FROM bu_ads WHERE user_id=?", (user_id,)); CONN.commit()
         clear_auction_state(user_id, peer_id)
         edit("✅ Все ваши объявления удалены.", bu_menu_kb()); snack("✅"); return True
+    snack("❌ Неизвестная кнопка Б/У")
     return False
 
 def _bu_render_cars(page):
