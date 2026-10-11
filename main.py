@@ -3627,6 +3627,8 @@ def handle_message(peer, sender, text, msg_obj):
         if not is_admin(sender, peer) and not is_chat_star(sender, peer):
             send_msg(peer, "❌ Команду должен выполнить тот, кто выдал мне звезду, или админ чата."); return
         saved = get_saved_owner(peer)
+        if saved == sender:
+            send_msg(peer, "ℹ️ Вы уже владелец этого чата."); return
         if saved and saved != sender:
             send_msg(peer, "❌ Владелец уже определён: {}. Если владелец сменился — исключите меня и добавьте снова.".format(silent_mention_badge(saved, peer)))
             return
