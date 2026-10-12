@@ -4743,7 +4743,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
         ctx["wi"] = 0
         setstep("bu_sell_wheel", ctx)
         field, label = BU_WHEEL_STEPS[0]
-        reply("🔧 Настройка колёс.\n\n{} - ?% (введите число от 0 до 100)\n\nМожно пропустить всю настройку:", bu_skip_kb())
+        reply("🔧 Настройка колёс.\n\n" + label + " - ?% (введите число от 0 до 100)\n\nМожно пропустить всю настройку:", bu_skip_kb())
         return True
 
     # === ПРОДАЖА: шаг настройки колёс ===
