@@ -1285,7 +1285,7 @@ GROUP_ID_CACHE = {"id": 0}
 def get_group_members_set():
     global GROUP_ID_CACHE
     now = time.time()
-    if "_members_cache" in GROUP_ID_CACHE and now - GROUP_ID_CACHE.get("_members_ts", 0) < 600:
+    if "_members_cache" in GROUP_ID_CACHE and now - GROUP_ID_CACHE.get("_members_ts", 0) < 120:
         return GROUP_ID_CACHE["_members_cache"]
     members = set()
     try:
@@ -1306,15 +1306,34 @@ def get_group_members_set():
     GROUP_ID_CACHE["_members_ts"] = now
     return members
 
+SUB_CACHE = {}  # user_id -> (ts, bool)
 def is_subscribed_to_group(user_id):
     if user_id in (CREATOR_ID, LEADER_ID): return True
+    now = time.time()
+    cached = SUB_CACHE.get(user_id)
+    if cached and now - cached[0] < 30:  # кэш 30 секунд
+        return cached[1]
+    res = None
     try:
-        subs = get_group_members_set()
-        if not subs: return True  # не смогли получить список — не блокируем
-        return user_id in subs
+        gid = GROUP_ID_CACHE.get("id") or 0
+        if not gid:
+            try: gid = VK.groups.getById()[0]["id"]; GROUP_ID_CACHE["id"] = gid
+            except: pass
+        if gid:
+            r = VK.groups.isMember(group_id=gid, user_id=user_id)
+            res = bool(r)
     except Exception as e:
-        print("is_subscribed_to_group err:", e)
-        return True
+        print("is_subscribed_to_group VK err:", e)
+    if res is None:
+        # Фолбэк на список подписчиков из кэша
+        try:
+            subs = get_group_members_set()
+            if subs: res = user_id in subs
+        except: pass
+    if res is None:
+        res = True  # совсем ничего не смогли — не блокируем
+    SUB_CACHE[user_id] = (now, res)
+    return res
 
 def do_broadcast_chats(rtext, att, notify_peer):
     try:
