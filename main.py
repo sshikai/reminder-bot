@@ -3543,7 +3543,7 @@ def handle_message(peer, sender, text, msg_obj):
                 if pn[0] == "команды": send_msg(peer, ls_help_text(sender)); return
                 if pn[0] == "бу":
                     if is_bu_banned(sender): send_msg(peer, "🚫 Вы забанены в системе Б/У."); return
-                    if not is_subscribed_to_group(sender): send_msg(peer, "❌ Команда доступна только подписчикам группы. Подпишись на сообщество и попробуй снова."); return
+                    if not is_subscribed_to_group(sender): send_msg(peer, "❌ Команда доступна только подписчикам группы.\n\nПодпишись на сообщество и подожди ~10 секунд (VK обновляет подписку не сразу), затем попробуй снова."); return
                     open_bu_menu(peer, sender); return
                 if pn[0] == "перекуп": open_calc_menu(peer, sender); return
                 send_msg(peer, "❌ Неизвестная команда.\n\n" + ls_help_text(sender)); return
@@ -4052,10 +4052,7 @@ def handle_message(peer, sender, text, msg_obj):
         for t in targets: lines.append("• {} — {}".format(silent_mention_badge(t, peer), t))
         send_msg(peer, "\n".join(lines))
     elif cmd == "бу":
-        if peer >= 2000000000: send_msg(peer, "❌ Команда работает только в ЛС с ботом."); return
-        if is_bu_banned(sender): send_msg(peer, "🚫 Вы забанены в системе Б/У."); return
-        if not is_subscribed_to_group(sender): send_msg(peer, "❌ Команда доступна только подписчикам группы. Подпишись на сообщество и попробуй снова."); return
-        open_bu_menu(peer, sender)
+        send_msg(peer, "❌ Команда работает только в ЛС с ботом.")
     elif cmd == "перекуп":
         open_calc_menu(peer, sender)
     elif cmd == "запретить_игры":
