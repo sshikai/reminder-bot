@@ -3010,11 +3010,22 @@ def handle_event(event):
             else:
                 send_msg(peer_id, text, keyboard=json.dumps(kb) if kb else None)
             snackbar("📄"); return
+        # ===== Б/У CALLBACKS =====
         if cmd.startswith("bu_") or cmd == "bu_open":
-            handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id)
+            try:
+                handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id)
+            except Exception as e:
+                print("bu callback error:", e)
+                try: VK.messages.sendMessageEventAnswer(event_id=event_id, user_id=user_id, peer_id=peer_id, event_data=json.dumps({"type": "show_snackbar", "text": "❌ " + str(e)[:60]}))
+                except: pass
             return
         if cmd.startswith("buad_"):
-            if handle_bu_admin_callback(cmd, user_id, peer_id, cmid, payload, event_id): return
+            try:
+                handle_bu_admin_callback(cmd, user_id, peer_id, cmid, payload, event_id)
+            except Exception as e:
+                print("buad callback error:", e)
+                try: VK.messages.sendMessageEventAnswer(event_id=event_id, user_id=user_id, peer_id=peer_id, event_data=json.dumps({"type": "show_snackbar", "text": "❌ " + str(e)[:60]}))
+                except: pass
             return
         
         # ===== ПРОЧИЕ CALLBACK =====
