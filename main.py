@@ -4607,21 +4607,45 @@ def _bu_hours_left(expires_at):
 def _bu_fetch_ads(filter_type, car_name=None, user_id=None, only_active=True):
     now = int(time.time())
     with DB_LOCK:
-        if filter_type == "car":
-            q = "SELECT id, user_id, car_name, description, photo_att, expires_at, price, wheels FROM bu_ads WHERE car_name=? "
-            if only_active: q += "AND expires_at > ? "
-            q += "ORDER BY id DESC"
-            rows = CONN.execute(q, (car_name, now) if only_active else (car_name,)).fetchall()
-        elif filter_type == "my":
-            q = "SELECT id, user_id, car_name, description, photo_att, expires_at, price, wheels FROM bu_ads WHERE car_name=? "
-            if only_active: q += "AND expires_at > ? "
-            q += "ORDER BY id DESC"
-            rows = CONN.execute(q, (user_id, now) if only_active else (user_id,)).fetchall()
-        else:
-            q = "SELECT id, user_id, car_name, description, photo_att, expires_at, price, wheels FROM bu_ads WHERE car_name=? "
-            if only_active: q += "expires_at > ? ORDER BY id DESC"
-            rows = CONN.execute(q, (now,)).fetchall() if only_active else CONN.execute("SELECT id, user_id, car_name, description, photo_att, expires_at FROM bu_ads ORDER BY id DESC").fetchall()
-    return [dict(r) for r in rows]
+        try:
+            cols = [r[1] for r in CONN.execute("PRAGMA table_info(bu_ads)").fetchall()]
+        except: cols = []
+        base_cols = "id, user_id, car_name, description, photo_att, expires_at"
+        if "price" in cols: base_cols += ", price"
+        if "wheels" in cols: base_cols += ", wheels"
+        rows = []
+        try:
+            if filter_type == "car":
+                if only_active:
+                    q = "SELECT " + base_cols + " FROM bu_ads WHERE car_name=? AND expires_at > ? ORDER BY id DESC"
+                    rows = CONN.execute(q, (car_name, now)).fetchall()
+                else:
+                    q = "SELECT " + base_cols + " FROM bu_ads WHERE car_name=? ORDER BY id DESC"
+                    rows = CONN.execute(q, (car_name,)).fetchall()
+            elif filter_type == "my":
+                if only_active:
+                    q = "SELECT " + base_cols + " FROM bu_ads WHERE user_id=? AND expires_at > ? ORDER BY id DESC"
+                    rows = CONN.execute(q, (user_id, now)).fetchall()
+                else:
+                    q = "SELECT " + base_cols + " FROM bu_ads WHERE user_id=? ORDER BY id DESC"
+                    rows = CONN.execute(q, (user_id,)).fetchall()
+            else:
+                if only_active:
+                    q = "SELECT " + base_cols + " FROM bu_ads WHERE expires_at > ? ORDER BY id DESC"
+                    rows = CONN.execute(q, (now,)).fetchall()
+                else:
+                    q = "SELECT " + base_cols + " FROM bu_ads ORDER BY id DESC"
+                    rows = CONN.execute(q).fetchall()
+        except Exception as e:
+            print("_bu_fetch_ads SQL error:", e)
+            return []
+    result = []
+    for r in rows:
+        d = dict(r)
+        if "price" not in d: d["price"] = ""
+        if "wheels" not in d: d["wheels"] = ""
+        result.append(d)
+    return result
 
 def _bu_render_ads_list(ads, page, header, with_hours=False):
     total = len(ads)
