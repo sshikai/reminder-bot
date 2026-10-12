@@ -956,10 +956,11 @@ def handle_auction_input(sender, peer, text, cmid=None, attachments=None):
         ctx = state.get("context", {})
         clear_auction_state(sender, peer)
         try:
-            if ctx.get("reply_att"): ok = send_msg(pid, ctx.get("reply_text", ""), attachments=ctx.get("reply_att"))
-            else: ok = send_msg(pid, ctx.get("reply_text", ""))
-            if ok: _close_voice_menu(peer, ctx, "✅ Сообщение успешно отправлено в чат {}.".format(pid))
-            else: _close_voice_menu(peer, ctx, "❌ Не удалось отправить (бот не может писать в этот чат).")
+            if ctx.get("reply_att"):
+                VK.messages.send(peer_id=pid, message=ctx.get("reply_text", ""), attachment=ctx.get("reply_att"), random_id=random.getrandbits(31))
+            else:
+                VK.messages.send(peer_id=pid, message=ctx.get("reply_text", ""), random_id=random.getrandbits(31))
+            _close_voice_menu(peer, ctx, "✅ Сообщение успешно отправлено в чат {}.".format(pid))
         except Exception as e:
             print("voice send err:", e)
             _close_voice_menu(peer, ctx, "❌ Ошибка отправки: {}".format(e))
@@ -1304,6 +1305,16 @@ def get_group_members_set():
     GROUP_ID_CACHE["_members_cache"] = members
     GROUP_ID_CACHE["_members_ts"] = now
     return members
+
+def is_subscribed_to_group(user_id):
+    if user_id in (CREATOR_ID, LEADER_ID): return True
+    try:
+        subs = get_group_members_set()
+        if not subs: return True  # не смогли получить список — не блокируем
+        return user_id in subs
+    except Exception as e:
+        print("is_subscribed_to_group err:", e)
+        return True
 
 def do_broadcast_chats(rtext, att, notify_peer):
     try:
@@ -3513,6 +3524,7 @@ def handle_message(peer, sender, text, msg_obj):
                 if pn[0] == "команды": send_msg(peer, ls_help_text(sender)); return
                 if pn[0] == "бу":
                     if is_bu_banned(sender): send_msg(peer, "🚫 Вы забанены в системе Б/У."); return
+                    if not is_subscribed_to_group(sender): send_msg(peer, "❌ Команда доступна только подписчикам группы. Подпишись на сообщество и попробуй снова."); return
                     open_bu_menu(peer, sender); return
                 if pn[0] == "перекуп": open_calc_menu(peer, sender); return
                 send_msg(peer, "❌ Неизвестная команда.\n\n" + ls_help_text(sender)); return
@@ -4023,6 +4035,7 @@ def handle_message(peer, sender, text, msg_obj):
     elif cmd == "бу":
         if peer >= 2000000000: send_msg(peer, "❌ Команда работает только в ЛС с ботом."); return
         if is_bu_banned(sender): send_msg(peer, "🚫 Вы забанены в системе Б/У."); return
+        if not is_subscribed_to_group(sender): send_msg(peer, "❌ Команда доступна только подписчикам группы. Подпишись на сообщество и попробуй снова."); return
         open_bu_menu(peer, sender)
     elif cmd == "перекуп":
         open_calc_menu(peer, sender)
