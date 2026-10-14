@@ -1339,16 +1339,27 @@ def do_broadcast_chats(rtext, att, notify_peer):
     try:
         chats = get_all_bot_chats()
         total = len(chats)
-        ok = 0
+        ok = 0; skipped = 0
         for t in chats:
+            with DB_LOCK:
+                dead = CONN.execute("SELECT 1 FROM dead_chats WHERE peer_id=?", (t,)).fetchone()
+            if dead: skipped += 1; continue
             try:
                 if att: VK.messages.send(peer_id=t, message=rtext, attachment=att, random_id=random.getrandbits(31))
                 else: VK.messages.send(peer_id=t, message=rtext, random_id=random.getrandbits(31))
                 ok += 1
                 time.sleep(0.25)
             except Exception as e:
-                print("broadcast chat err in", t, str(e)[:150])
-        try: send_msg(notify_peer, "✅ Рассылка по чатам завершена. Отправлено в {} {}".format(ok, plural_ru(ok, "чат", "чата", "чатов")))
+                err_str = str(e)
+                if "[901]" in err_str or "[7]" in err_str:
+                    with DB_LOCK:
+                        CONN.execute("INSERT OR REPLACE INTO dead_chats(peer_id, reason, added_at) VALUES(?,?,?)", (t, err_str[:100], int(time.time()))); CONN.commit()
+                    print("broadcast: chat {} added to dead list".format(t))
+                else:
+                    print("broadcast chat err in", t, err_str[:150])
+        summary = "✅ Рассылка по чатам завершена. Отправлено в {} {}".format(ok, plural_ru(ok, "чат", "чата", "чатов"))
+        if skipped: summary += "\n⏭ Пропущено мёртвых: {}".format(skipped)
+        try: send_msg(notify_peer, summary)
         except: pass
     except Exception as e:
         print("do_broadcast_chats CRASH:", e)
@@ -1410,18 +1421,30 @@ def plural_ru(n, one, few, many):
 
 def do_announce_broadcast(cmid, notify_peer):
     chats = get_all_bot_chats()
-    ok = 0; total = 0
+    ok = 0; total = 0; skipped = 0
     for cp in chats:
         if cp == MD_CHAT_PEER: continue
         if get_setting(cp, "announcements_enabled", "1") != "1": continue
+        with DB_LOCK:
+            dead = CONN.execute("SELECT 1 FROM dead_chats WHERE peer_id=?", (cp,)).fetchone()
+        if dead: skipped += 1; continue
         total += 1
         try:
             fj = json.dumps({"peer_id": MD_CHAT_PEER, "conversation_message_ids": [cmid]})
             VK.messages.send(peer_id=cp, message="📢 Объявление от семьи Million Dollars:", forward=fj, random_id=random.getrandbits(31))
             ok += 1
             time.sleep(0.35)
-        except Exception as e: print("announce err in", cp, e)
-    try: send_msg(notify_peer, "✅ Объявление разослано в {} {}.".format(ok, plural_ru(ok, "чат", "чата", "чатов")))
+        except Exception as e:
+            err_str = str(e)
+            if "[901]" in err_str or "[7]" in err_str:
+                with DB_LOCK:
+                    CONN.execute("INSERT OR REPLACE INTO dead_chats(peer_id, reason, added_at) VALUES(?,?,?)", (cp, err_str[:100], int(time.time()))); CONN.commit()
+                print("announce: chat {} added to dead list ({})".format(cp, err_str[:60]))
+            else:
+                print("announce err in", cp, err_str[:150])
+    summary = "✅ Объявление разослано в {} {}.".format(ok, plural_ru(ok, "чат", "чата", "чатов"))
+    if skipped: summary += "\n⏭ Пропущено мёртвых чатов: {}".format(skipped)
+    try: send_msg(notify_peer, summary)
     except: pass
 
 # ===== КРЕСТИКИ-НОЛИКИ =====
@@ -1844,6 +1867,7 @@ def init_db():
         CONN.execute("""CREATE TABLE IF NOT EXISTS nastra_likes (nastra_id INTEGER, user_id INTEGER, created_at INTEGER, PRIMARY KEY(nastra_id, user_id))""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS nastra_bans (user_id INTEGER PRIMARY KEY, banned_by INTEGER, banned_at INTEGER)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS bu_notify (user_id INTEGER, car_name TEXT, created_at INTEGER, PRIMARY KEY(user_id, car_name))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS dead_chats (peer_id INTEGER PRIMARY KEY, reason TEXT DEFAULT '', added_at INTEGER DEFAULT 0)""")
     migrations = ["ALTER TABLE members ADD COLUMN warn_durations TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN last_vote_time INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN mute_until INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN mute_reason TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''", "ALTER TABLE message_stats ADD COLUMN kmb_wins INTEGER DEFAULT 0", "ALTER TABLE message_stats ADD COLUMN char_count INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN who_name TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN who_ts INTEGER DEFAULT 0", "ALTER TABLE player_cards ADD COLUMN design TEXT DEFAULT '{}'", "ALTER TABLE player_cards ADD COLUMN verified INTEGER DEFAULT 0", "ALTER TABLE auction_lots ADD COLUMN seller TEXT DEFAULT ''", "ALTER TABLE bu_ads ADD COLUMN price TEXT DEFAULT ''", "ALTER TABLE bu_ads ADD COLUMN wheels TEXT DEFAULT ''"]
     for sql in migrations:
         try: CONN.execute(sql)
@@ -5079,9 +5103,9 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
     if cmd == "bu_menu":
         setstep("bu_menu", {"msg_cmid": prompt_cmid}); edit("🚗 Вы хотите продать машину или купить?", bu_menu_kb()); snack("✅"); return True
     if cmd == "bu_sell":
-        setstep("bu_sell_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто:", bu_sell_kb()); snackbar("✅"); return
+        setstep("bu_sell_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто:", bu_sell_kb()); snack("✅"); return True
     if cmd == "bu_buy":
-        setstep("bu_buy_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто, или посмотрите все объявления:", bu_buy_kb()); snackbar("✅"); return
+        setstep("bu_buy_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто, или посмотрите все объявления:", bu_buy_kb()); snack("✅"); return True
     if cmd == "bu_days_set":
         try: days = int(payload.get("d", 1))
         except: days = 1
@@ -5571,7 +5595,10 @@ def timer_loop():
             time.sleep(10)
             if VK is None: continue
             now_msk = get_msk_now(); today_str = now_msk.strftime("%Y-%m-%d"); now = int(time.time())
-            if now % 3600 < 15: bu_cleanup_expired()
+            if now % 3600 < 15:
+                bu_cleanup_expired()
+                with DB_LOCK:
+                    CONN.execute("DELETE FROM dead_chats WHERE added_at < ?", (now - 7*86400,)); CONN.commit()
             for k in list(CLEAR_PENDING.keys()):
                 if now - CLEAR_PENDING[k] > 60: CLEAR_PENDING.pop(k, None)
 
