@@ -3087,11 +3087,6 @@ def handle_event(event):
                         CONN.execute("DELETE FROM nastra_ads WHERE user_id=?", (user_id,)); CONN.commit()
                     clear_auction_state(user_id, peer_id)
                     nshow("✅ Все ваши настройки удалены.", nas_menu_kb()); snackbar("✅"); return
-                if cmd == "nas_skip":
-                    if state["step"] != "nas_add_wheel": snackbar("⚠️"); return
-                    ctx["wheels"] = {}; ctx["wi"] = len(BU_WHEEL_STEPS)
-                    nset("nas_add_desc", ctx)
-                    nshow("📝 Введите краткую характеристику настройки (до 70 символов):", nas_back_kb("nas_menu")); snackbar("⏭"); return
                 if cmd == "nas_photo_done":
                     photos = ctx.get("photos", [])
                     now_ts = int(time.time())
@@ -5203,9 +5198,8 @@ def nas_menu_kb():
          {"action": {"type": "callback", "label": "🗑 Удалить", "payload": json.dumps({"cmd": "nas_del_menu"})}, "color": "negative"}],
         [{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}]]}
 
-def nas_back_kb(back_cmd=None, with_skip=False):
+def nas_back_kb(back_cmd=None):
     rows = []
-    if with_skip: rows.append([{"action": {"type": "callback", "label": "⏭ Пропустить", "payload": json.dumps({"cmd": "nas_skip"})}, "color": "secondary"}])
     nav = []
     if back_cmd: nav.append({"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": back_cmd})}, "color": "secondary"})
     nav.append({"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"})
@@ -5356,7 +5350,7 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
             setstep("nas_add_wheel", ctx)
             fld, lbl = BU_WHEEL_STEPS[0]
             hint = "(до 25 символов)" if fld == "d" else "(число 0-100)"
-            reply("🔧 Настройка колёс.\n\n{} — ? {}\n\nМожно пропустить всю настройку:".format(lbl, hint), nas_back_kb("nas_menu", with_skip=True))
+            reply("🔧 Настройка колёс.\n\n{} — ? {}".format(lbl, hint), nas_back_kb("nas_menu"))
             return True
         if similar:
             reply("Возможно вы имели в виду:\n\n" + "\n".join("• {}".format(n) for n in similar) + "\n\nВведите точное название.", nas_back_kb("nas_menu"))
@@ -5373,14 +5367,14 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
         fld, lbl = BU_WHEEL_STEPS[wi]
         if fld == "d":
             v = text.strip()[:25]
-            if not v: reply("❌ Введите название дисков (до 25 символов):", nas_back_kb("nas_menu", with_skip=True)); return True
+            if not v: reply("❌ Введите название дисков (до 25 символов):", nas_back_kb("nas_menu")); return True
             wheels = ctx.get("wheels", {}); wheels[fld] = v; ctx["wheels"] = wheels
         else:
             try:
                 v = int(text.strip())
                 if v < 0 or v > 100: raise ValueError
             except:
-                reply("❌ Введите число 0-100 для «{}»:".format(lbl), nas_back_kb("nas_menu", with_skip=True)); return True
+                reply("❌ Введите число 0-100 для «{}»:".format(lbl), nas_back_kb("nas_menu")); return True
             wheels = ctx.get("wheels", {}); wheels[fld] = v; ctx["wheels"] = wheels
         ctx["wi"] = wi + 1
         if ctx["wi"] >= len(BU_WHEEL_STEPS):
@@ -5390,7 +5384,7 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
             setstep("nas_add_wheel", ctx)
             nf, nl = BU_WHEEL_STEPS[ctx["wi"]]
             hint = "(до 25 символов)" if nf == "d" else "(число 0-100)"
-            reply("🔧 {} — ? {}".format(nl, hint), nas_back_kb("nas_menu", with_skip=True))
+            reply("🔧 {} — ? {}".format(nl, hint), nas_back_kb("nas_menu"))
         return True
 
     # --- добавление: описание ---
