@@ -3123,6 +3123,11 @@ def handle_event(event):
                     clear_auction_state(user_id, peer_id)
                     nshow("✅ Все ваши настройки удалены.", nas_menu_kb()); snackbar("✅"); return
                 if cmd == "nas_photo_done":
+                    photos = ctx.get("photos", [])
+                    if not photos:
+                        snackbar("❌ Прикрепите хотя бы 1 фото")
+                        nshow("❌ Нельзя сохранить без фото. Пришлите фото (от 1 до 3):", nas_finish_kb(0))
+                        return
                     car_name = ctx.get("car_name")
                     _nas_finalize(user_id, peer_id, ctx)
                     nshow("✅ Настройка для «{}» добавлена в базу Шинки!".format(car_name)); snackbar("✅"); return
@@ -5249,11 +5254,13 @@ def nas_back_kb(back_cmd=None):
 def cad_cancel_kb():
     return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "bu_cancel"})}, "color": "negative"}]]}
 
-def nas_finish_kb():
-    return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "✅ Готово", "payload": json.dumps({"cmd": "nas_photo_done"})}, "color": "positive"}],
-        [{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}]]}
-
+def nas_finish_kb(photos_count=0):
+    rows = []
+    if photos_count > 0:
+        rows.append([{"action": {"type": "callback", "label": "✅ Готово", "payload": json.dumps({"cmd": "nas_photo_done"})}, "color": "positive"}])
+    rows.append([{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}])
+    return {"inline": True, "buttons": rows}
+    
 def nas_edit(peer, cmid, text, kb=None):
     kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
     if cmid:
@@ -5436,14 +5443,15 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
         if not d: reply("❌ Введите описание (до 70 символов):"); return True
         ctx["description"] = d; ctx["photos"] = []
         setstep("nas_add_photo", ctx)
-        reply("📷 Пришлите фото настройки (до 3). Можно отправить несколько сразу одним сообщением.", nas_finish_kb())
+        reply("📷 Пришлите фото настройки (от 1 до 3). Можно отправить несколько сразу одним сообщением.", nas_finish_kb(0))
         return True
-
+        
     # --- добавление: фото (можно сразу несколько в одном сообщении) ---
     if step == "nas_add_photo":
         photos = ctx.get("photos", [])
         urls = extract_all_photo_urls({"attachments": attachments}) if attachments else []
-        if not urls: reply("❌ Пришлите фото или нажмите «Готово».", nas_finish_kb()); return True
+        if not urls:
+            reply("❌ Пришлите фото (минимум 1, максимум 3).", nas_finish_kb(len(photos))); return True
         added = 0
         for url in urls:
             if len(photos) >= 3: break
@@ -5458,15 +5466,15 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
             except Exception as e: print("nas photo err:", e)
         ctx["photos"] = photos
         if added == 0:
-            reply("❌ Не удалось загрузить, попробуйте другое.", nas_finish_kb()); return True
+            reply("❌ Не удалось загрузить, попробуйте другое.", nas_finish_kb(len(photos))); return True
         if len(photos) >= 3:
             _nas_finalize(sender, peer, ctx)
             reply("✅ Настройка для «{}» добавлена в базу Шинки! (3 фото)".format(ctx.get("car_name")))
             return True
         setstep("nas_add_photo", ctx)
-        reply("✅ Фото {} добавлено. Ещё фото или «Готово».".format(len(photos)), nas_finish_kb())
+        reply("✅ Фото {} добавлено. Ещё фото или «Готово».".format(len(photos)), nas_finish_kb(len(photos)))
         return True
-
+        
     # --- удаление своего ---
     if step == "nas_del_pick":
         if not text.strip().isdigit(): reply("❌ Введите номер:"); return True
