@@ -3459,7 +3459,7 @@ def handle_message(peer, sender, text, msg_obj):
         # Если юзер запустил новую команду (мд ... или /...) — сбрасываем незакрытые редакторы
         if (first.startswith("мд ") or low.startswith("/")) and low not in ("отмена", "отменить"):
             st = get_auction_state(sender, peer)
-            if st and st["step"].startswith("bu"):
+            if st and (st["step"].startswith("bu") or st["step"].startswith("cad")):
                 clear_auction_state(sender, peer)
             st2 = get_auction_state(sender, peer)
             if st2 and st2["step"].startswith("calc_"):
@@ -4871,7 +4871,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
     state = get_auction_state(sender, peer)
     if not state: return False
     step = state["step"]
-    if not step.startswith("bu_"): return False
+    if not (step.startswith("bu_") or step.startswith("cad_")): return False
     ctx = state.get("context", {}); prompt_cmid = ctx.get("msg_cmid") or cmid
     if time.time() - ctx.get("ts", 0) > 180:
         clear_auction_state(sender, peer); bu_edit(peer, prompt_cmid, "⏰ Меню Б/У закрыто из-за бездействия."); return True
@@ -5078,10 +5078,11 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
     if cmd == "bu_open":
         open_bu_menu(peer_id, user_id); snack("✅"); return True
     if cmd == "bu_cancel":
+        was_cad = bool(state and state["step"].startswith("cad_"))
         if state: clear_auction_state(user_id, peer_id)
-        if cmid: bu_edit(peer_id, cmid, "❌ Меню Б/У закрыто.")
+        if cmid: bu_edit(peer_id, cmid, "❌ Создание объявления отменено." if was_cad else "❌ Меню Б/У закрыто.")
         snack("❌ Закрыто"); return True
-    if not state or not state["step"].startswith("bu_"):
+    if not state or not (state["step"].startswith("bu_") or state["step"].startswith("cad_")):
         snack("⛔ Меню устарело. Напишите «Мд бу»"); return True
     ctx = state.get("context", {}); prompt_cmid = cmid or ctx.get("msg_cmid")
     def edit(msg, kb=None): bu_edit(peer_id, prompt_cmid, msg, kb)
