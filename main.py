@@ -46,7 +46,7 @@ DICE_PHRASES = ["Фортуна повернулась к тебе самым н
 LEADER_BDAY_TEXT = "Дорогой лидер Million Dollars🎉\nОт лица всего состава поздравляю тебя с днем рождения!\n\nСпасибо за твой огромный вклад в развитие Million Dollars и за то, что собрал под одним крылом таких крутых ребят.\n\nЖелаем тебе железобетонного терпения, преданных замов, огромного онлайна и чтобы никто не портил тебе настроение. Пусть наша семья гремит по всему серверу! 💰\n\n{mention}"
 DEFAULT_BDAY_TEXT = "Поздравляем {mention}. У него сегодня день рождения!"
 
-VALID_COMMANDS = ["команды","админы","участник","участники","ники","ник","парк","прем","чат","пред","снять_пред","лимит_предов","кд_предов","старт_контроль","стоп_контроль","время_опросов","защита","-защита","бан","разбан","баны","адмчат","admg","номер_чата","текст_др","создать","список","удалить","редактировать","включить","отключить","развернуть","назначить","снять","голоса","тишина","тишина_офф","проверка_опроса","бр","мут","снять_мут","муты","преды","предлист","статус","статусы","проверка","кости","объява","обьява","объявы","обьявы","объяв","обьяв","кд_объяв","кд_обьяв","топ","браки","брак","развод","онлайн","др","кто","кто_я","инфа","монетка","+правила","-правила","правила","+приветствие","-приветствие","приветствие","значок","удалить_значок","значки","кнб","кн","чистка","айди","запретить_игры","разрешить_игры","очистить_топ","карта","карта_редактировать","редактор_карты","очистить_карту","запретить_редактор","разрешить_редактор","перекуп","обновить","бу"]
+VALID_COMMANDS = ["команды","админы","участник","участники","ники","ник","парк","прем","чат","пред","снять_пред","лимит_предов","кд_предов","старт_контроль","стоп_контроль","время_опросов","защита","-защита","бан","разбан","баны","адмчат","admg","номер_чата","текст_др","создать","список","удалить","редактировать","включить","отключить","развернуть","назначить","снять","голоса","тишина","тишина_офф","проверка_опроса","бр","мут","снять_мут","муты","преды","предлист","статус","статусы","проверка","кости","объява","обьява","объявы","обьявы","объяв","обьяв","кд_объяв","кд_обьяв","топ","браки","брак","развод","онлайн","др","кто","кто_я","инфа","монетка","+правила","-правила","правила","+приветствие","-приветствие","приветствие","значок","удалить_значок","значки","кнб","кн","чистка","айди","запретить_игры","разрешить_игры","очистить_топ","карта","карта_редактировать","редактор_карты","очистить_карту","запретить_редактор","разрешить_редактор","перекуп","обновить","бу","шинка"]
 ROLE_NAMES = {0:"Участник", 1:"👮‍️ Модератор", 2:"🛡 Админ", 3:"🥷 Главный Админ", 4:"👑 Владелец"}
 RU_MONTHS = ["янв","фев","мар","апр","мая","июн","июл","авг","сен","окт","ноя","дек"]
 NUM_EMOJI = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
@@ -4233,8 +4233,8 @@ def handle_message(peer, sender, text, msg_obj):
         head = "🆔 Айди:" if len(targets) == 1 else "🆔 Айди:"; lines = [head]
         for t in targets: lines.append("• {} — {}".format(silent_mention_badge(t, peer), t))
         send_msg(peer, "\n".join(lines))
-    elif cmd == "бу":
-        send_msg(peer, "❌ Команда работает только в ЛС с ботом.")
+    elif cmd in ("бу", "шинка"):
+        send_msg(peer, "❌ Команда «{}» работает только в ЛС с ботом!\n\n📩 Перейти в ЛС: http://vk.me/club240927320".format("Мд бу" if cmd == "бу" else "Мд шинка"))
     elif cmd == "перекуп":
         open_calc_menu(peer, sender)
     elif cmd == "запретить_игры":
@@ -4779,7 +4779,7 @@ def bu_nav_kb(page, total_pages, back_cmd="bu_menu", nav_cmd=None, extra=None):
 def open_bu_menu(peer, sender):
     close_existing_editors(peer, sender)
     try:
-        mid = VK.messages.send(peer_id=peer, message="🚗 Вы хотите продать машину или купить?", keyboard=json.dumps(bu_menu_kb()), random_id=random.getrandbits(31))
+        mid = VK.messages.send(peer_id=peer, message="🚗 Вы хотите продать машину или купить?\n💙Только для BLACK RUSSIA BLUE💙", keyboard=json.dumps(bu_menu_kb()), random_id=random.getrandbits(31))
         cmid = resolve_cmid_retry(peer, mid)
     except: mid = None; cmid = None
     set_auction_state(sender, peer, "bu_menu", {"msg_cmid": cmid, "msg_id": mid})
@@ -4878,7 +4878,8 @@ def _bu_render_ads_list(ads, page, header, with_hours=False):
     chunk = ads[(page-1)*BU_PAGE_SIZE : page*BU_PAGE_SIZE]
     lines = [header, ""]
     for i, r in enumerate(chunk, (page-1)*BU_PAGE_SIZE+1):
-        line = "{}. {} | {}".format(i, r["car_name"], (r["description"] or "—")[:60])
+        price = r.get("price") or "—"
+        line = "{}. {} | {} | {}".format(i, r["car_name"], (r["description"] or "—")[:60], price)
         if with_hours: line += " | {}".format(_bu_hours_left(r["expires_at"]))
         lines.append(line)
     return "\n".join(lines), page, total_pages
@@ -4983,7 +4984,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
                 if row: CONN.execute("UPDATE settings SET value=? WHERE peer_id=0 AND key='bu_success_searches'", (str(int(row["value"])+1),))
                 else: CONN.execute("INSERT INTO settings(peer_id, key, value) VALUES(0, 'bu_success_searches', '1')")
                 CONN.commit()
-            header = "В данный момент на продаже {} «{}». Посмотреть фото объявления можно отправив его номер в чат.".format(len(ads), car_name)
+            header = "В данный момент на продаже {} «{}». Посмотреть объявление подробнее можно отправив его номер в чат.".format(len(ads), car_name)
             body, page, tp = _bu_render_ads_list(ads, 1, header)
             setstep("bu_view_car_list", {"car_name": car_name, "page": page})
             extra = {"cn": car_name}
@@ -5046,39 +5047,36 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             ads = _bu_fetch_ads("car", car_name=ctx.get("car_name"), only_active=True)
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
-            if not r["photo_att"]: reply("❌ У этого объявления нет фото."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
-            send_msg(peer, "\n".join(lines), attachments=r["photo_att"])
+            send_msg(peer, "\n".join(lines), attachments=r["photo_att"] or None)
             return True
 
         if step == "bu_view_all":
             ads = _bu_fetch_ads("all", only_active=True)
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
-            if not r["photo_att"]: reply("❌ У этого объявления нет фото."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
-            send_msg(peer, "\n".join(lines), attachments=r["photo_att"])
+            send_msg(peer, "\n".join(lines), attachments=r["photo_att"] or None)
             return True
 
         if step == "bu_view_my":
             ads = _bu_fetch_ads("my", user_id=sender, only_active=True)
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
-            if not r["photo_att"]: reply("❌ У этого объявления нет фото."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
-            send_msg(peer, "\n".join(lines), attachments=r["photo_att"])
+            send_msg(peer, "\n".join(lines), attachments=r["photo_att"] or None)
             return True
             
         if step == "bu_del_pick":
@@ -5122,7 +5120,7 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
         clear_auction_state(user_id, peer_id)
         edit("❌ Хорошо, уведомление не установлено."); snack("❌"); return True
     if cmd == "bu_menu":
-        setstep("bu_menu", {"msg_cmid": prompt_cmid}); edit("🚗 Вы хотите продать машину или купить?", bu_menu_kb()); snack("✅"); return True
+        setstep("bu_menu", {"msg_cmid": prompt_cmid}); edit("🚗 Вы хотите продать машину или купить?\n💙Только для BLACK RUSSIA BLUE💙", bu_menu_kb()); snack("✅"); return True
     if cmd == "bu_sell":
         setstep("bu_sell_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто:", bu_sell_kb()); snack("✅"); return True
     if cmd == "bu_buy":
@@ -5159,7 +5157,7 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
         page = int(payload.get("p", 1) or 1)
         ads = _bu_fetch_ads("all", only_active=True)
         if not ads: edit("В данный момент объявлений нет.", bu_menu_kb()); snack("📭"); return True
-        header = "В данный момент на продаже {}. Посмотреть фото объявления можно отправив его номер в чат.".format(len(ads))
+        header = "В данный момент на продаже {}. Посмотреть объявление подробнее можно отправив его номер в чат.".format(len(ads))
         body, page, tp = _bu_render_ads_list(ads, page, header)
         setstep("bu_view_all", {"page": page, "msg_cmid": prompt_cmid})
         kb = bu_nav_kb(page, tp, back_cmd="bu_buy", nav_cmd="bu_in_sale")
@@ -5170,7 +5168,7 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
         page = int(payload.get("p", 1) or 1)
         ads = _bu_fetch_ads("car", car_name=car_name, only_active=True)
         if not ads: edit("Объявлений больше нет.", bu_menu_kb()); snack("📭"); return True
-        header = "В данный момент на продаже {} «{}». Посмотреть фото объявления можно отправив его номер в чат.".format(len(ads), car_name)
+        header = "В данный момент на продаже {} «{}». Посмотреть объявление подробнее можно отправив его номер в чат.".format(len(ads), car_name)
         body, page, tp = _bu_render_ads_list(ads, page, header)
         setstep("bu_view_car_list", {"car_name": car_name, "page": page, "msg_cmid": prompt_cmid})
         extra = {"cn": car_name}
@@ -5182,7 +5180,7 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
         page = int(payload.get("p", 1) or 1)
         ads = _bu_fetch_ads("my", user_id=user_id, only_active=True)
         if not ads: edit("У вас нет объявлений.", bu_menu_kb()); snack("📭"); return True
-        header = "Ваши автомобили на продаже. Посмотреть фото объявления можно отправив его номер в чат."
+        header = "Ваши автомобили на продаже. Посмотреть объявление подробнее можно отправив его номер в чат."
         body, page, tp = _bu_render_ads_list(ads, page, header, with_hours=True)
         setstep("bu_view_my", {"page": page, "msg_cmid": prompt_cmid})
         kb = bu_nav_kb(page, tp, back_cmd="bu_menu", nav_cmd="bu_my")
