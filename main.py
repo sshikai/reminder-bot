@@ -474,6 +474,17 @@ def extract_photo_url(msg_obj):
                 return best.get("url")
     return None
 
+def extract_all_photo_urls(msg_obj):
+    urls = []
+    for att in (msg_obj.get("attachments") or []):
+        if att.get("type") == "photo":
+            sizes = (att.get("photo") or {}).get("sizes") or []
+            if sizes:
+                best = max(sizes, key=lambda s: (s.get("width", 0) * s.get("height", 0)))
+                u = best.get("url")
+                if u: urls.append(u)
+    return urls
+
 def save_design_photo(user_id, url):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
@@ -3112,13 +3123,9 @@ def handle_event(event):
                     clear_auction_state(user_id, peer_id)
                     nshow("✅ Все ваши настройки удалены.", nas_menu_kb()); snackbar("✅"); return
                 if cmd == "nas_photo_done":
-                    photos = ctx.get("photos", [])
-                    now_ts = int(time.time())
-                    with DB_LOCK:
-                        CONN.execute("INSERT INTO nastra_ads(user_id, car_name, description, photo_atts, wheels, created_at) VALUES(?,?,?,?,?,?)",
-                                     (user_id, ctx.get("car_name"), ctx.get("description", ""), json.dumps(photos, ensure_ascii=False), json.dumps(ctx.get("wheels", {}), ensure_ascii=False), now_ts)); CONN.commit()
-                    clear_auction_state(user_id, peer_id)
-                    nshow("✅ Настройка для «{}» добавлена в базу Шинки!".format(ctx.get("car_name"))); snackbar("✅"); return
+                    car_name = ctx.get("car_name")
+                    _nas_finalize(user_id, peer_id, ctx)
+                    nshow("✅ Настройка для «{}» добавлена в базу Шинки!".format(car_name)); snackbar("✅"); return
                 if cmd == "nas_like":
                     nid = int(payload.get("id", 0))
                     n = _nas_get(nid)
@@ -5398,7 +5405,7 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
         wi = ctx.get("wi", 0)
         if wi >= len(BU_WHEEL_STEPS):
             setstep("nas_add_desc", ctx)
-            reply("📝 Введите краткую характеристику настройки (до 70 символов):", nas_back_kb("nas_menu"))
+            reply("📝 Введите название настройки (до 70 символов):", nas_back_kb("nas_menu"))
             return True
         fld, lbl = BU_WHEEL_STEPS[wi]
         if fld == "d":
@@ -5415,7 +5422,7 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
         ctx["wi"] = wi + 1
         if ctx["wi"] >= len(BU_WHEEL_STEPS):
             setstep("nas_add_desc", ctx)
-            reply("📝 Введите краткую характеристику настройки (до 70 символов):", nas_back_kb("nas_menu"))
+            reply("📝 Введите название настройки (до 70 символов):", nas_back_kb("nas_menu"))
         else:
             setstep("nas_add_wheel", ctx)
             nf, nl = BU_WHEEL_STEPS[ctx["wi"]]
@@ -5429,25 +5436,33 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
         if not d: reply("❌ Введите описание (до 70 символов):"); return True
         ctx["description"] = d; ctx["photos"] = []
         setstep("nas_add_photo", ctx)
-        reply("📷 Пришлите фото настройки (до 3). После каждого фото — «Готово» или ещё фото.", nas_finish_kb())
+        reply("📷 Пришлите фото настройки (до 3). Можно отправить несколько сразу одним сообщением.", nas_finish_kb())
         return True
 
-    # --- добавление: фото ---
+    # --- добавление: фото (можно сразу несколько в одном сообщении) ---
     if step == "nas_add_photo":
         photos = ctx.get("photos", [])
+        urls = extract_all_photo_urls({"attachments": attachments}) if attachments else []
+        if not urls: reply("❌ Пришлите фото или нажмите «Готово».", nas_finish_kb()); return True
+        added = 0
+        for url in urls:
+            if len(photos) >= 3: break
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    data = r.read()
+                    if len(data) > 1000:
+                        att = upload_photo(peer, io.BytesIO(data))
+                        if att:
+                            photos.append(att); added += 1
+            except Exception as e: print("nas photo err:", e)
+        ctx["photos"] = photos
+        if added == 0:
+            reply("❌ Не удалось загрузить, попробуйте другое.", nas_finish_kb()); return True
         if len(photos) >= 3:
-            reply("❌ Уже 3 фото, нажмите «Готово».", nas_finish_kb()); return True
-        url = extract_photo_url({"attachments": attachments}) if attachments else None
-        if not url: reply("❌ Пришлите фото или нажмите «Готово».", nas_finish_kb()); return True
-        att = None
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                data = r.read()
-                if len(data) > 1000: att = upload_photo(peer, io.BytesIO(data))
-        except Exception as e: print("nas photo err:", e)
-        if not att: reply("❌ Не удалось загрузить, попробуйте другое.", nas_finish_kb()); return True
-        photos.append(att); ctx["photos"] = photos
+            _nas_finalize(sender, peer, ctx)
+            reply("✅ Настройка для «{}» добавлена в базу Шинки! (3 фото)".format(ctx.get("car_name")))
+            return True
         setstep("nas_add_photo", ctx)
         reply("✅ Фото {} добавлено. Ещё фото или «Готово».".format(len(photos)), nas_finish_kb())
         return True
@@ -5480,6 +5495,14 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
         clear_auction_state(sender, peer)
         reply("✅ Настройка удалена."); return True
     return False
+
+def _nas_finalize(sender, peer, ctx):
+    photos = ctx.get("photos", [])
+    now_ts = int(time.time())
+    with DB_LOCK:
+        CONN.execute("INSERT INTO nastra_ads(user_id, car_name, description, photo_atts, wheels, created_at) VALUES(?,?,?,?,?,?)",
+                     (sender, ctx.get("car_name"), ctx.get("description", ""), json.dumps(photos, ensure_ascii=False), json.dumps(ctx.get("wheels", {}), ensure_ascii=False), now_ts)); CONN.commit()
+    clear_auction_state(sender, peer)
 
 def _nas_adm_del_list(sender, peer, target):
     rows = _nas_fetch("my", user_id=target)
