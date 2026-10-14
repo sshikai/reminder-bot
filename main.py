@@ -55,8 +55,8 @@ _EM_BASE = "[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U00
 _EM_ONE = _EM_BASE + "[\U0001F3FB-\U0001F3FF]?\uFE0F?"
 EM_CLUSTER = re.compile("^" + _EM_ONE + "(?:\u200D" + _EM_ONE + ")*$")
 
-BUS_TYPES_ORDER = ["АЗС","Амуниция","Одежда","Аксессуары","24/7","ТК БУС","ТК БАТ","СК","ПВЗ","Ларек","Закуска","Мотосалон","Выс. салон","Сред. салон","Низ. салон","Лод. салон","Такопарк","Шинка","Стайлинг","Тех. Центр"]
-BUS_NO_NUM = {"Мотосалон","Выс. салон","Сред. салон","Низ. салон","Лод. салон","Такопарк","Шинка","Стайлинг","Тех. Центр"}
+BUS_TYPES_ORDER = ["АЗС","Амуниция","Одежда","Аксессуары","24/7","Клуб","ТК БУС","ТК БАТ","СК","ПВЗ","Ларек","Закуска","Мотосалон","Выс. салон","Сред. салон","Низ. салон","Лод. салон","Такопарк","Шинка","Стайлинг","Тех. Центр"]
+BUS_NO_NUM = {"Клуб","Мотосалон","Выс. салон","Сред. салон","Низ. салон","Лод. салон","Такопарк","Шинка","Стайлинг","Тех. Центр"}
 BUS_SLOT2 = ("ТК БУС","ТК БАТ","СК","Такопарк")
 BUS_TAKO = "Такопарк"
 BUS_PAGES = 4
@@ -926,7 +926,7 @@ def handle_list_inspectors(peer):
     for i, uid in enumerate(lst, 1): lines.append("{}. | {} |".format(i, silent_mention_badge(uid, peer)))
     send_msg(peer, "\n".join(lines))
 
-BU_WATCHER_WELCOME = ("👀 Вас назначили смотрящим за Б/У рынком!\nСкрытые команды (только в ЛС со мной❗):\n/delad @ - удалить объявление человека.\n/adban @ - забанить в Б/У навсегда.\n/adunban @ - разбанить.\n/adbanlist - список банов.\n/addcar - добавить машину(ы) в каталог.\n/delcar - удалить машину из каталога.\n/cars - список всех машин.")
+BU_WATCHER_WELCOME = ("👀 Вас назначили смотрящим за Б/У рынком и Шинкой!\nСкрытые команды (только в ЛС со мной❗):\n/delad @ - удалить объявление человека.\n/adban @ - забанить в Б/У навсегда.\n/adunban @ - разбанить.\n/adbanlist - список банов.\n/cad - создать объявление от лица другого.\n/addcar - добавить машину(ы) в каталог.\n/delcar - удалить машину из каталога.\n/cars - список всех машин.\n/delnastra @ - удалить настройку из Шинки.\n/nastraban @ - забанить в Шинке навсегда.\n/nastraunban @ - разбанить в Шинке.\n/nastrabanlist - список банов Шинки.")
 AUCTIONEER_WELCOME = ("Вас назначили аукционером📈\nТеперь вы можете использовать скрытые команды (только в личке со мной❗).\n/аукцион - редактор аукционов.\n/стопаукцион (номер чата) - принудительно отключает идущий аукцион в чате.\n/отменить ласт ставку (номер чата) - отменить верхнюю ставку активного лота.\n/некст лот (номер чата) - завершить текущий лот и перейти к следующему.")
 INSPECTOR_WELCOME = ("Вас назначили проверяющим📋\nТеперь вы можете использовать скрытые команды (в личке со мной❗ и в чатах❗).\n/verify @ - подтвердить карту.\n/deny @ - отменить подтверждение.\n/card @ - посмотреть карту любого.\n/clearcard @ [праметр] - очистить любую карту.\n\nпараметры: бизнесы, недвижимость, имущество, гараж, телефон, фото, имя.\n(если не указать то очистит все кроме цвета)")
 
@@ -1840,6 +1840,10 @@ def init_db():
         CONN.execute("""CREATE TABLE IF NOT EXISTS bu_cars (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS bu_ads (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, car_name TEXT, description TEXT DEFAULT '', photo_att TEXT DEFAULT '', created_at INTEGER, expires_at INTEGER)""")
         CONN.execute("""CREATE TABLE IF NOT EXISTS bu_bans (user_id INTEGER PRIMARY KEY, banned_by INTEGER, banned_at INTEGER)""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS nastra_ads (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, car_name TEXT, description TEXT DEFAULT '', photo_atts TEXT DEFAULT '[]', wheels TEXT DEFAULT '{}', created_at INTEGER)""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS nastra_likes (nastra_id INTEGER, user_id INTEGER, created_at INTEGER, PRIMARY KEY(nastra_id, user_id))""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS nastra_bans (user_id INTEGER PRIMARY KEY, banned_by INTEGER, banned_at INTEGER)""")
+        CONN.execute("""CREATE TABLE IF NOT EXISTS bu_notify (user_id INTEGER, car_name TEXT, created_at INTEGER, PRIMARY KEY(user_id, car_name))""")
     migrations = ["ALTER TABLE members ADD COLUMN warn_durations TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN last_vote_time INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN mute_until INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN mute_reason TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN warn_reasons TEXT DEFAULT ''", "ALTER TABLE message_stats ADD COLUMN kmb_wins INTEGER DEFAULT 0", "ALTER TABLE message_stats ADD COLUMN char_count INTEGER DEFAULT 0", "ALTER TABLE members ADD COLUMN who_name TEXT DEFAULT ''", "ALTER TABLE members ADD COLUMN who_ts INTEGER DEFAULT 0", "ALTER TABLE player_cards ADD COLUMN design TEXT DEFAULT '{}'", "ALTER TABLE player_cards ADD COLUMN verified INTEGER DEFAULT 0", "ALTER TABLE auction_lots ADD COLUMN seller TEXT DEFAULT ''", "ALTER TABLE bu_ads ADD COLUMN price TEXT DEFAULT ''", "ALTER TABLE bu_ads ADD COLUMN wheels TEXT DEFAULT ''"]
     for sql in migrations:
         try: CONN.execute(sql)
@@ -2142,8 +2146,8 @@ def ls_help_text(user_id):
     lines = ["📖 Команды, доступные тебе в ЛС с ботом:", "1. Мд карта — посмотреть свою карту.", "2. Мд редактор карты — редактировать карту.", "3. Мд очистить карту [параметр] — очистить свою карту.", "4. Мд бу — рынок Б/У автомобилей.", "5. /promo #промокод — активировать промокод.", "6. Мд команды — этот список."]
     if is_inspector(user_id) or user_id in (CREATOR_ID, LEADER_ID): lines += ["", "🕵 Скрытые команды проверяющего:", "/verify @ - подтвердить карту.", "/deny @ - отменить подтверждение.", "/card @ - посмотреть карту любого.", "/clearcard @ [параметр] - очистить любую карту."]
     if is_auctioneer(user_id) or user_id in (CREATOR_ID, LEADER_ID): lines += ["", "📈 Скрытые команды аукционера:", "/аукцион - редактор аукционов.", "/стопаукцион (номер чата) - отключить идущий аукцион.", "/отменить ласт ставку - отменить верхнюю ставку.", "/некст лот - завершить текущий лот."]
-    if is_bu_watcher(user_id) or user_id in (CREATOR_ID, LEADER_ID): lines += ["", "👀 Скрытые команды смотрящего Б/У:", "/delad @ - удалить объявление человека.", "/adban @ - забанить в Б/У навсегда.", "/adunban @ - разбанить в Б/У.", "/adbanlist - список банов Б/У.", "/addcar - добавить машину(ы) в каталог (через запятую).", "/delcar - удалить машину из каталога.", "/cars - список всех машин в каталоге."]
-    if user_id in (CREATOR_ID, LEADER_ID): lines += ["", "👑 Скрытые команды создателя/лидера:", "/inspector @ - назначить/снять проверяющего.", "/проверяющие - список проверяющих.", "/аукционер @ - назначить/снять аукционера.", "/аукционеры - список аукционеров.", "/смотрящий @ - назначить/снять смотрящего Б/У.", "/смотрящие - список смотрящих Б/У.", "/cpromo - редактор промокодов.", "/voice (ответом) - рассылка.", "/экс карта @ <название> - выдать эксклюзив.", "/забрать карту @ <название> - забрать эксклюзив.", "/setkto @ <слова> <номер чата> - статус.", "/чаты - список бесед.", "/подписчики - список подписчиков группы.", "бр форум / бр админы <ссылка> - установить ссылки."]
+    if is_bu_watcher(user_id) or user_id in (CREATOR_ID, LEADER_ID): lines += ["", "👀 Скрытые команды смотрящего Б/У и Шинки:", "/delad @ - удалить объявление человека.", "/adban @ - забанить в Б/У навсегда.", "/adunban @ - разбанить.", "/adbanlist - список банов.", "/cad - создать объявление от лица другого.", "/addcar - добавить машину(ы) в каталог.", "/delcar - удалить машину из каталога.", "/cars - список всех машин.", "/delnastra @ - удалить настройку из Шинки.", "/nastraban @ - забанить в Шинке навсегда.", "/nastraunban @ - разбанить в Шинке.", "/nastrabanlist - список банов Шинки."]
+    if user_id in (CREATOR_ID, LEADER_ID): lines += ["", "👑 Скрытые команды создателя/лидера:", "/inspector @ - назначить/снять проверяющего.", "/проверяющие - список проверяющих.", "/аукционер @ - назначить/снять аукционера.", "/аукционеры - список аукционеров.", "/смотрящий @ - назначить/снять смотрящего Б/У.", "/смотрящие - список смотрящих Б/У.", "/cpromo - редактор промокодов.", "/voice (ответом) - рассылка.", "/экс карта @ <название> - выдать эксклюзив.", "/забрать карту @ <название> - забрать эксклюзив.", "/setkto @ <слова> <номер чата> - статус.", "/чаты - список бесед.", "/подписчики - список подписчиков группы.", "/adstat - статистика Б/У.", "бр форум / бр админы <ссылка> - установить ссылки."]
     return "\n".join(lines)
 
 def get_bdate_map(member_ids):
@@ -3041,6 +3045,72 @@ def handle_event(event):
                 send_msg(peer_id, text, keyboard=json.dumps(kb) if kb else None)
             snackbar("📄"); return
         # ===== Б/У CALLBACKS =====
+        if cmd.startswith("nas_"):
+            if peer_id < 2000000000:
+                state = get_auction_state(user_id, peer_id)
+                if cmd == "nas_cancel":
+                    if state: clear_auction_state(user_id, peer_id)
+                    if cmid: nas_edit(peer_id, cmid, "❌ Меню Шинки закрыто.")
+                    snackbar("❌"); return
+                if not state or not state["step"].startswith("nas_"):
+                    snackbar("⛔ Меню устарело. Напишите «Мд шинка»"); return
+                ctx = state.get("context", {}); prompt_cmid = cmid or ctx.get("msg_cmid")
+                def nset(s, extra=None):
+                    c = dict(extra if extra is not None else ctx); c["msg_cmid"] = prompt_cmid
+                    set_auction_state(user_id, peer_id, s, c)
+                def nshow(msg, kb=None): nas_edit(peer_id, prompt_cmid, msg, kb)
+                if cmd == "nas_menu":
+                    nset("nas_menu"); nshow("🏎 Меню Шинки:", nas_menu_kb()); snackbar("✅"); return
+                if cmd == "nas_search":
+                    nset("nas_search_input"); nshow("Введите полное название транспорта, настройку которого хотите найти:", nas_back_kb("nas_menu")); snackbar("✅"); return
+                if cmd == "nas_list":
+                    rows = _nas_fetch("all")
+                    if not rows: nshow("В базе Шинки пока нет настройки.", nas_menu_kb()); snackbar("📭"); return
+                    header = "Список всех существующих настроек. Посмотреть подробнее можно отправив номер в чат."
+                    nset("nas_list"); nshow(_nas_render_list(rows, header), nas_back_kb("nas_menu")); snackbar("✅"); return
+                if cmd == "nas_add":
+                    if is_nastra_banned(user_id): snackbar("🚫 Вы забанены"); return
+                    nset("nas_add_car"); nshow("Введите чёткое название авто:", nas_back_kb("nas_menu")); snackbar("✅"); return
+                if cmd == "nas_del_menu":
+                    rows = _nas_fetch("my", user_id=user_id)
+                    if not rows: nshow("У вас нет настройки для удаления.", nas_menu_kb()); snackbar("📭"); return
+                    lines = ["Введите номер настройки для удаления:", ""]
+                    for i, r in enumerate(rows[:20], 1): lines.append("{}. {} | {}".format(i, r["car_name"], (r["description"] or "—")[:50]))
+                    nset("nas_del_pick")
+                    kb = {"inline": True, "buttons": [
+                        [{"action": {"type": "callback", "label": "🗑 Удалить все", "payload": json.dumps({"cmd": "nas_del_all"})}, "color": "negative"}],
+                        [{"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "nas_menu"})}, "color": "secondary"}, {"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}]]}
+                    nshow("\n".join(lines), kb); snackbar("✅"); return
+                if cmd == "nas_del_all":
+                    with DB_LOCK:
+                        CONN.execute("DELETE FROM nastra_likes WHERE nastra_id IN (SELECT id FROM nastra_ads WHERE user_id=?)", (user_id,))
+                        CONN.execute("DELETE FROM nastra_ads WHERE user_id=?", (user_id,)); CONN.commit()
+                    clear_auction_state(user_id, peer_id)
+                    nshow("✅ Все ваши настройки удалены.", nas_menu_kb()); snackbar("✅"); return
+                if cmd == "nas_skip":
+                    if state["step"] != "nas_add_wheel": snackbar("⚠️"); return
+                    ctx["wheels"] = {}; ctx["wi"] = len(BU_WHEEL_STEPS)
+                    nset("nas_add_desc", ctx)
+                    nshow("📝 Введите краткую характеристику настройки (до 70 символов):", nas_back_kb("nas_menu")); snackbar("⏭"); return
+                if cmd == "nas_photo_done":
+                    photos = ctx.get("photos", [])
+                    now_ts = int(time.time())
+                    with DB_LOCK:
+                        CONN.execute("INSERT INTO nastra_ads(user_id, car_name, description, photo_atts, wheels, created_at) VALUES(?,?,?,?,?,?)",
+                                     (user_id, ctx.get("car_name"), ctx.get("description", ""), json.dumps(photos, ensure_ascii=False), json.dumps(ctx.get("wheels", {}), ensure_ascii=False), now_ts)); CONN.commit()
+                    clear_auction_state(user_id, peer_id)
+                    nshow("✅ Настройка для «{}» добавлена в базу Шинки!".format(ctx.get("car_name"))); snackbar("✅"); return
+                if cmd == "nas_like":
+                    nid = int(payload.get("id", 0))
+                    n = _nas_get(nid)
+                    if not n: snackbar("❌"); return
+                    with DB_LOCK:
+                        exists = CONN.execute("SELECT 1 FROM nastra_likes WHERE nastra_id=? AND user_id=?", (nid, user_id)).fetchone()
+                        if exists: snackbar("👍 Уже лайкнуто"); return
+                        CONN.execute("INSERT INTO nastra_likes(nastra_id, user_id, created_at) VALUES(?,?,?)", (nid, user_id, int(time.time()))); CONN.commit()
+                    snackbar("👍 Лайк поставлен")
+                    return
+            snackbar("❌"); return
         if cmd.startswith("bu_") or cmd == "bu_open":
             try:
                 handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id)
@@ -3451,6 +3521,31 @@ def handle_message(peer, sender, text, msg_obj):
                 lines = ["🚫 Бан-лист Б/У:"]
                 for r in rows: lines.append("• {} — забанил {}".format(silent_mention_badge(r["user_id"], peer), silent_mention_badge(r["banned_by"], peer)))
                 send_msg(peer, "\n".join(lines)); return
+            elif low == "/cad":
+                set_auction_state(sender, peer, "cad_car", {"msg_cmid": None})
+                send_msg(peer, "Введите чёткое название авто:"); return
+            elif low.startswith("/delnastra"):
+                targets = extract_targets(text[len("/delnastra"):].strip(), 0)
+                if not targets: send_msg(peer, "❌ Формат: /delnastra @юзер"); return
+                _nas_adm_del_list(sender, peer, targets[0]); return
+            elif low.startswith("/nastraban") and not low.startswith("/nastrabanlist"):
+                targets = extract_targets(text[len("/nastraban"):].strip(), 0)
+                if not targets: send_msg(peer, "❌ Формат: /nastraban @юзер"); return
+                t = targets[0]
+                with DB_LOCK: CONN.execute("INSERT OR REPLACE INTO nastra_bans(user_id, banned_by, banned_at) VALUES(?,?,?)", (t, sender, int(time.time()))); CONN.commit()
+                send_msg(peer, "🚫 {} забанен в Шинке.".format(silent_mention_badge(t, peer))); return
+            elif low.startswith("/nastraunban"):
+                targets = extract_targets(text[len("/nastraunban"):].strip(), 0)
+                if not targets: send_msg(peer, "❌ Формат: /nastraunban @юзер"); return
+                t = targets[0]
+                with DB_LOCK: res = CONN.execute("DELETE FROM nastra_bans WHERE user_id=?", (t,)); CONN.commit()
+                send_msg(peer, "✅ {} разбанен в Шинке.".format(silent_mention_badge(t, peer)) if res.rowcount > 0 else "ℹ️ Не был забанен."); return
+            elif low == "/nastrabanlist":
+                with DB_LOCK: rows = CONN.execute("SELECT user_id, banned_by FROM nastra_bans ORDER BY banned_at DESC").fetchall()
+                if not rows: send_msg(peer, "✅ Бан-лист Шинки пуст."); return
+                lines = ["🚫 Бан-лист Шинки:"]
+                for r in rows: lines.append("• {} — забанил {}".format(silent_mention_badge(r["user_id"], peer), silent_mention_badge(r["banned_by"], peer)))
+                send_msg(peer, "\n".join(lines)); return
             elif low == "/adstat":
                 with DB_LOCK:
                     r1 = CONN.execute("SELECT value FROM settings WHERE peer_id=0 AND key='bu_total_ads'").fetchone()
@@ -3545,6 +3640,10 @@ def handle_message(peer, sender, text, msg_obj):
                     if is_bu_banned(sender): send_msg(peer, "🚫 Вы забанены в системе Б/У."); return
                     if not is_subscribed_to_group(sender): send_msg(peer, "❌ Команда доступна только подписчикам группы.\n\nПодпишись на сообщество и подожди ~10 секунд (VK обновляет подписку не сразу), затем попробуй снова."); return
                     open_bu_menu(peer, sender); return
+                if pn[0] == "шинка":
+                    if is_nastra_banned(sender): send_msg(peer, "🚫 Вы забанены в базе Шинки."); return
+                    if not is_subscribed_to_group(sender): send_msg(peer, "❌ Команда доступна только подписчикам группы."); return
+                    open_nas_menu(peer, sender); return
                 if pn[0] == "перекуп": open_calc_menu(peer, sender); return
                 send_msg(peer, "❌ Неизвестная команда.\n\n" + ls_help_text(sender)); return
         if text.strip().startswith("/"): send_msg(peer, "❌ Неизвестная команда.\n\n" + ls_help_text(sender)); return
@@ -3552,6 +3651,7 @@ def handle_message(peer, sender, text, msg_obj):
         if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_promo_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_bu_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
+        if handle_nas_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_bu_admin_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_calc_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if re.fullmatch(r"#[a-zA-Zа-яА-Я0-9_]+", text.strip()):
@@ -3584,6 +3684,7 @@ def handle_message(peer, sender, text, msg_obj):
         if handle_auction_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_promo_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_bu_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
+        if handle_nas_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_bu_admin_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
         if handle_calc_input(sender, peer, text, cmid=user_cmid, attachments=msg_obj.get("attachments")): return
 
@@ -3596,9 +3697,11 @@ def handle_message(peer, sender, text, msg_obj):
     if action.get("type") == "chat_invite_user":
         user_id = action.get("member_id")
         if not user_id: return
-        # Бот добавлен в чат (member_id отрицательный = id группы)
         if user_id < 0:
-            send_msg(peer, "👋 Вы пригласили меня! Для нормальной работы осталось:\n1) Выдать мне «звезду» в этом чате (админку)\n2) Написать: `Мд обновить`\n\n📌 Ваш номер чата: `{}`\n\nПосле этого я начну отвечать на команды, а вы станете владельцем.".format(peer))
+            clear_saved_owner(peer)
+            OWNER_CACHE.pop(peer, None)
+            CHAT_STAR_CACHE.clear()
+            send_msg(peer, "👋 Вы пригласили меня!\n\n1) Выдайте мне «звезду» в этом чате\n2) Напишите: `Мд обновить`\n\n📌 Номер чата: `{}`\n\nПока владелец не объявлен — я игнорирую команды.".format(peer))
             return
         with DB_LOCK: ban_row = CONN.execute("SELECT ban_until FROM bans WHERE user_id=? AND peer_id=?", (user_id, peer)).fetchone()
         if ban_row and (ban_row["ban_until"] == 0 or ban_row["ban_until"] > int(time.time())):
@@ -3626,6 +3729,15 @@ def handle_message(peer, sender, text, msg_obj):
             else:
                 with DB_LOCK: CONN.execute("DELETE FROM members WHERE user_id=? AND peer_id=?", (user_id, peer)); CONN.commit()
         return
+
+        # Владелец ещё не объявлен — реагируем только на "Мд обновить"
+    if sender not in (CREATOR_ID, LEADER_ID) and not get_saved_owner(peer):
+        if first.startswith("мд "):
+            _pn = first[3:].strip().split()
+            if not (_pn and _pn[0] == "обновить"):
+                return
+        else:
+            return
 
     with DB_LOCK: mute_row = CONN.execute("SELECT mute_until FROM members WHERE user_id=? AND peer_id=?", (sender, peer)).fetchone()
     if mute_row and mute_row["mute_until"] and mute_row["mute_until"] > time.time():
@@ -3694,6 +3806,7 @@ def handle_message(peer, sender, text, msg_obj):
             return
         set_saved_owner(peer, sender)
         OWNER_CACHE[peer] = sender
+        set_user_role(peer, sender, 4)
         send_msg(peer, "✅ Готово! Теперь я работаю в этом чате.\nВладелец: {}\n\nВведите `Мд команды`, чтобы посмотреть доступные команды.".format(silent_mention_badge(sender, peer)))
         return
     if cmd == "команды": send_msg(peer, "📖 Команды MD BOT", keyboard=get_help_main_buttons())
@@ -3704,6 +3817,11 @@ def handle_message(peer, sender, text, msg_obj):
             main_admins = [r["user_id"] for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role=3", (peer,)).fetchall()]
             admins_list = [r["user_id"] for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role=2", (peer,)).fetchall()]
             moderators_list = [r["user_id"] for r in CONN.execute("SELECT user_id FROM roles WHERE peer_id=? AND role=1", (peer,)).fetchall()]
+        owners_set = set(co_owners)
+        if chat_owner_id: owners_set.add(chat_owner_id)
+        main_admins = [u for u in main_admins if u not in owners_set]
+        admins_list = [u for u in admins_list if u not in owners_set]
+        moderators_list = [u for u in moderators_list if u not in owners_set]
         owners_line = []
         if chat_owner_id: owners_line.append(silent_mention_badge(chat_owner_id, peer))
         for u in co_owners:
@@ -4628,6 +4746,24 @@ def bu_match_car(text):
             similar = [n for n in all_names if all(p in n.lower() for p in parts)][:10]
     return None, similar[:10]
 
+def _cad_finalize(sender, peer, ctx, photo_att):
+    now_ts = int(time.time()); days = int(ctx.get("days", 1))
+    target = ctx.get("target_user") or sender
+    with DB_LOCK:
+        CONN.execute("INSERT INTO bu_ads(user_id, car_name, description, photo_att, created_at, expires_at, price, wheels) VALUES(?,?,?,?,?,?,?,?)",
+                     (target, ctx.get("car_name"), ctx.get("description", ""), photo_att, now_ts, now_ts + days*86400, ctx.get("price", ""), "{}")); CONN.commit()
+    _bu_notify_new_ads(ctx.get("car_name"))
+    clear_auction_state(sender, peer)
+    send_msg(peer, "✅ Объявление «{}» создано от лица {}.".format(ctx.get("car_name"), silent_mention_badge(target, peer)))
+def _bu_notify_new_ads(car_name):
+    try:
+        with DB_LOCK:
+            subs = [r["user_id"] for r in CONN.execute("SELECT user_id FROM bu_notify WHERE car_name=?", (car_name,)).fetchall()]
+            if subs: CONN.execute("DELETE FROM bu_notify WHERE car_name=?", (car_name,)); CONN.commit()
+        for uid in subs:
+            try: send_msg(uid, "🔔 Прямо сейчас «{}» выставили в продажу! Проверьте рынок.".format(car_name))
+            except: pass
+    except Exception as e: print("bu notify err:", e)
 def _bu_hours_left(expires_at):
     left = int(expires_at) - int(time.time())
     if left <= 0: return "0ч"
@@ -4740,40 +4876,8 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
         if not re.fullmatch(r"[\d\.,]+", p): reply("❌ Введите цену цифрами (например: 100000 или 100.000):"); return True
         ctx["price"] = p
         ctx["wheels"] = {}
-        ctx["wi"] = 0
-        setstep("bu_sell_wheel", ctx)
-        field, label = BU_WHEEL_STEPS[0]
-        reply("🔧 Настройка колёс.\n\n" + label + " - ?% (введите число от 0 до 100)\n\nМожно пропустить всю настройку:", bu_skip_kb())
-        return True
-
-    # === ПРОДАЖА: шаг настройки колёс ===
-    if step == "bu_sell_wheel":
-        wi = ctx.get("wi", 0)
-        if wi >= len(BU_WHEEL_STEPS):
-            setstep("bu_sell_days", ctx)
-            reply("📅 На сколько дней выложить объявление?", bu_days_kb())
-            return True
-        field, label = BU_WHEEL_STEPS[wi]
-        if field == "d":
-            v = text.strip()[:25]
-            if not v: reply("❌ Введите название дисков (до 25 символов):"); return True
-            wheels = ctx.get("wheels", {}); wheels[field] = v; ctx["wheels"] = wheels
-        else:
-            try:
-                v = int(text.strip())
-                if v < 0 or v > 100: raise ValueError
-            except:
-                reply("❌ Введите число от 0 до 100 для «{}»:".format(label), bu_skip_kb()); return True
-            wheels = ctx.get("wheels", {}); wheels[field] = v; ctx["wheels"] = wheels
-        ctx["wi"] = wi + 1
-        if ctx["wi"] >= len(BU_WHEEL_STEPS):
-            setstep("bu_sell_days", ctx)
-            reply("📅 На сколько дней выложить объявление?", bu_days_kb())
-        else:
-            setstep("bu_sell_wheel", ctx)
-            next_field, next_label = BU_WHEEL_STEPS[ctx["wi"]]
-            hint = "(до 25 символов)" if next_field == "d" else "(число 0-100)"
-            reply("🔧 {} - ? {}".format(next_label, hint), bu_skip_kb())
+        setstep("bu_sell_days", ctx)
+        reply("📅 На сколько дней выложить объявление?", bu_days_kb())
         return True
 
     # === ПРОДАЖА: фото ===
@@ -4797,6 +4901,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             if not CONN.execute("SELECT 1 FROM settings WHERE peer_id=0 AND key='bu_total_ads'").fetchone():
                 CONN.execute("INSERT INTO settings(peer_id, key, value) VALUES(0, 'bu_total_ads', '1')")
             CONN.commit()
+        _bu_notify_new_ads(ctx.get("car_name"))   # ← ВОТ ЭТА СТРОКА
         clear_auction_state(sender, peer)
         reply("✅ Ваш {} успешно зарегистрирован в базу объявлений на {} {}.".format(ctx.get("car_name"), days, plural_ru(days, "день", "дня", "дней")))
         return True
@@ -4807,7 +4912,13 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
         if car_name:
             ads = _bu_fetch_ads("car", car_name=car_name, only_active=True)
             if not ads:
-                reply("В данный момент объявлений «{}» нет.".format(car_name), bu_buy_kb()); return True
+                ctx["notify_car"] = car_name
+                setstep("bu_notify_ask", ctx)
+                reply('В данный момент объявлений «{}» нет. Хотите мы вас уведомим когда транспорт появится в продаже?'.format(car_name),
+                      {"inline": True, "buttons": [
+                          [{"action": {"type": "callback", "label": "Да", "payload": json.dumps({"cmd": "bu_notify_yes"})}, "color": "positive"},
+                           {"action": {"type": "callback", "label": "Нет", "payload": json.dumps({"cmd": "bu_notify_no"})}, "color": "negative"}]]})
+                return True
             with DB_LOCK:
                 row = CONN.execute("SELECT value FROM settings WHERE peer_id=0 AND key='bu_success_searches'").fetchone()
                 if row: CONN.execute("UPDATE settings SET value=? WHERE peer_id=0 AND key='bu_success_searches'", (str(int(row["value"])+1),))
@@ -4826,6 +4937,48 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
         reply("❌ Такой машины нет в базе.", bu_buy_kb()); return True
 
     # === ПРОСМОТР ФОТО (из любого списка) ===
+    if step == "cad_car":
+        car_name, similar = bu_match_car(text)
+        if car_name:
+            ctx["car_name"] = car_name; ctx["target_user"] = 0
+            setstep("cad_target", ctx)
+            reply("Пришлите ссылку на человека, чьё объявление хотите выставить:", nas_back_kb(None))
+            return True
+        if similar:
+            reply("Возможно вы имели в виду:\n\n" + "\n".join("• {}".format(n) for n in similar) + "\n\nВведите точное название.", nas_back_kb(None)); return True
+        reply("❌ Такой машины нет в базе.", nas_back_kb(None)); return True
+
+    if step == "cad_target":
+        targets = extract_targets(text, 0)
+        if not targets: reply("❌ Пришлите ссылку/упоминание.", nas_back_kb(None)); return True
+        ctx["target_user"] = targets[0]
+        setstep("cad_desc", ctx)
+        reply("✅ Целевой пользователь: {}\n\nВведите краткую характеристику (до 70 символов):".format(silent_mention_badge(targets[0], peer)), nas_back_kb(None))
+        return True
+
+    if step == "cad_desc":
+        d = text.strip()[:70]
+        if not d: reply("❌ Введите описание:"); return True
+        ctx["description"] = d; setstep("cad_price", ctx)
+        reply("💰 Введите цену:"); return True
+
+    if step == "cad_price":
+        p = text.strip()
+        if not re.fullmatch(r"[\d\.,]+", p): reply("❌ Введите цену цифрами:"); return True
+        ctx["price"] = p; setstep("cad_days", ctx)
+        reply("📅 На сколько дней выложить?", bu_days_kb()); return True
+
+    if step == "cad_photo":
+        url = extract_photo_url({"attachments": attachments}) if attachments else None
+        if not url: reply("❌ Пришлите фото или нажмите «Пропустить».", bu_photo_kb()); return True
+        att = None
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+                if len(data) > 1000: att = upload_photo(peer, io.BytesIO(data))
+        except Exception as e: print("cad photo err:", e)
+        _cad_finalize(sender, peer, ctx, att or ""); return True
     if step in ("bu_view_car_list", "bu_view_all", "bu_view_my", "bu_del_pick"):
         if not text.strip().isdigit(): reply("❌ Введите номер объявления:"); return True
         num = int(text.strip())
@@ -4838,15 +4991,6 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
-            try: wheels = json.loads(r.get("wheels") or "{}")
-            except: wheels = {}
-            if wheels:
-                lines.append("")
-                lines.append("🔧 Настройка колёс:")
-                for fld, lbl in BU_WHEEL_STEPS:
-                    if fld in wheels:
-                        v = wheels[fld]
-                        lines.append("{} - {}".format(lbl, v if fld == "d" else "{}%".format(v)))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
             send_msg(peer, "\n".join(lines), attachments=r["photo_att"])
@@ -4860,15 +5004,6 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
-            try: wheels = json.loads(r.get("wheels") or "{}")
-            except: wheels = {}
-            if wheels:
-                lines.append("")
-                lines.append("🔧 Настройка колёс:")
-                for fld, lbl in BU_WHEEL_STEPS:
-                    if fld in wheels:
-                        v = wheels[fld]
-                        lines.append("{} - {}".format(lbl, v if fld == "d" else "{}%".format(v)))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
             send_msg(peer, "\n".join(lines), attachments=r["photo_att"])
@@ -4882,15 +5017,6 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
-            try: wheels = json.loads(r.get("wheels") or "{}")
-            except: wheels = {}
-            if wheels:
-                lines.append("")
-                lines.append("🔧 Настройка колёс:")
-                for fld, lbl in BU_WHEEL_STEPS:
-                    if fld in wheels:
-                        v = wheels[fld]
-                        lines.append("{} - {}".format(lbl, v if fld == "d" else "{}%".format(v)))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
             send_msg(peer, "\n".join(lines), attachments=r["photo_att"])
@@ -4925,25 +5051,35 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
         set_auction_state(user_id, peer_id, s, c)
     if is_bu_banned(user_id):
         clear_auction_state(user_id, peer_id); edit("🚫 Вы забанены в системе Б/У."); snack("🚫"); return True
-
+    if cmd == "bu_notify_yes":
+        car_name = ctx.get("notify_car", "")
+        if car_name:
+            with DB_LOCK:
+                CONN.execute("INSERT OR IGNORE INTO bu_notify(user_id, car_name, created_at) VALUES(?,?,?)", (user_id, car_name, int(time.time()))); CONN.commit()
+        clear_auction_state(user_id, peer_id)
+        edit("✅ Хорошо, уведомим вас, когда «{}» появится в продаже.".format(car_name)); snack("✅"); return True
+    if cmd == "bu_notify_no":
+        clear_auction_state(user_id, peer_id)
+        edit("❌ Хорошо, уведомление не установлено."); snack("❌"); return True
     if cmd == "bu_menu":
         setstep("bu_menu", {"msg_cmid": prompt_cmid}); edit("🚗 Вы хотите продать машину или купить?", bu_menu_kb()); snack("✅"); return True
     if cmd == "bu_sell":
         setstep("bu_sell_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто:", bu_sell_kb()); snackbar("✅"); return
     if cmd == "bu_buy":
         setstep("bu_buy_car", {"msg_cmid": prompt_cmid}); edit("Введите четкое название авто, или посмотрите все объявления:", bu_buy_kb()); snackbar("✅"); return
-    if cmd == "bu_skip_wheels":
-        ctx["wheels"] = {}
-        setstep("bu_sell_days", ctx)
-        edit("📅 На сколько дней выложить объявление?", bu_days_kb()); snack("⏭ Пропущено"); return True
     if cmd == "bu_days_set":
         try: days = int(payload.get("d", 1))
         except: days = 1
         if days not in (1, 3, 7): days = 1
         ctx["days"] = days
+        if state["step"] == "cad_days":
+            setstep("cad_photo", ctx)
+            edit("📷 Пришлите фото автомобиля или нажмите «Пропустить».\nСрок: {} {}.".format(days, plural_ru(days, "день", "дня", "дней")), bu_photo_kb()); snack("✅"); return True
         setstep("bu_sell_photo", ctx)
         edit("📷 Пришлите фото автомобиля или нажмите «Пропустить».\nСрок: {} {}.".format(days, plural_ru(days, "день", "дня", "дней")), bu_photo_kb()); snack("✅"); return True
     if cmd == "bu_skip_photo":
+        if state["step"] == "cad_photo":
+            _cad_finalize(user_id, peer_id, ctx, ""); snack("✅"); return True
         now_ts = int(time.time())
         days = int(ctx.get("days", 1))
         wheels_json = json.dumps(ctx.get("wheels", {}), ensure_ascii=False)
@@ -4954,6 +5090,7 @@ def handle_bu_callback(cmd, user_id, peer_id, cmid, payload, event_id=None):
             if row: CONN.execute("UPDATE settings SET value=? WHERE peer_id=0 AND key='bu_total_ads'", (str(int(row["value"])+1),))
             else: CONN.execute("INSERT INTO settings(peer_id, key, value) VALUES(0, 'bu_total_ads', '1')")
             CONN.commit()
+        _bu_notify_new_ads(ctx.get("car_name"))   # ← ВОТ ЭТА СТРОКА
         clear_auction_state(user_id, peer_id)
         edit("✅ Ваш {} зарегистрирован на {} {}.".format(ctx.get("car_name"), days, plural_ru(days, "день", "дня", "дней"))); snack("✅"); return True
 
@@ -5034,6 +5171,277 @@ def handle_bu_cars_list(peer, sender, raw):
     if kb: send_msg(peer, text, keyboard=json.dumps(kb))
     else: send_msg(peer, text)
 
+# ===== NASTRA (ШИНКА) =====
+def is_nastra_banned(user_id):
+    with DB_LOCK: return bool(CONN.execute("SELECT 1 FROM nastra_bans WHERE user_id=?", (user_id,)).fetchone())
+
+def nas_menu_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "🔎 Поиск", "payload": json.dumps({"cmd": "nas_search"})}, "color": "primary"},
+         {"action": {"type": "callback", "label": "📋 Список", "payload": json.dumps({"cmd": "nas_list"})}, "color": "primary"}],
+        [{"action": {"type": "callback", "label": "➕ Добавить", "payload": json.dumps({"cmd": "nas_add"})}, "color": "positive"},
+         {"action": {"type": "callback", "label": "🗑 Удалить", "payload": json.dumps({"cmd": "nas_del_menu"})}, "color": "negative"}],
+        [{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}]]}
+
+def nas_back_kb(back_cmd=None, with_skip=False):
+    rows = []
+    if with_skip: rows.append([{"action": {"type": "callback", "label": "⏭ Пропустить", "payload": json.dumps({"cmd": "nas_skip"})}, "color": "secondary"}])
+    nav = []
+    if back_cmd: nav.append({"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": back_cmd})}, "color": "secondary"})
+    nav.append({"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"})
+    rows.append(nav)
+    return {"inline": True, "buttons": rows}
+
+def nas_finish_kb():
+    return {"inline": True, "buttons": [
+        [{"action": {"type": "callback", "label": "✅ Готово", "payload": json.dumps({"cmd": "nas_photo_done"})}, "color": "positive"}],
+        [{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}]]}
+
+def nas_edit(peer, cmid, text, kb=None):
+    kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
+    if cmid:
+        try: VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=text, keyboard=kbj); return
+        except: pass
+    send_msg(peer, text, keyboard=kb)
+
+def nas_render_wheels(wheels):
+    if not wheels: return ""
+    lines = ["🔧 Настройка колёс:"]
+    for fld, lbl in BU_WHEEL_STEPS:
+        if fld in wheels:
+            v = wheels[fld]
+            lines.append("{} - {}".format(lbl, v if fld == "d" else "{}%".format(v)))
+    return "\n".join(lines)
+
+def _nas_fetch(filter_type, car_name=None, user_id=None):
+    with DB_LOCK:
+        if filter_type == "car":
+            rows = CONN.execute("SELECT n.*, (SELECT COUNT(*) FROM nastra_likes WHERE nastra_id=n.id) as likes FROM nastra_ads n WHERE n.car_name=? ORDER BY likes DESC, n.id DESC", (car_name,)).fetchall()
+        elif filter_type == "my":
+            rows = CONN.execute("SELECT n.*, (SELECT COUNT(*) FROM nastra_likes WHERE nastra_id=n.id) as likes FROM nastra_ads n WHERE n.user_id=? ORDER BY n.id DESC", (user_id,)).fetchall()
+        else:
+            rows = CONN.execute("SELECT n.*, (SELECT COUNT(*) FROM nastra_likes WHERE nastra_id=n.id) as likes FROM nastra_ads n ORDER BY likes DESC, n.id DESC").fetchall()
+    return [dict(r) for r in rows]
+
+def _nas_render_list(rows, header):
+    top = rows[:3]; rest = rows[3:]
+    lines = [header, ""]
+    if top:
+        lines.append("🔥Самые популярные:")
+        for i, r in enumerate(top, 1):
+            desc = (r["description"] or "—")[:60]
+            lines.append("{}. {} | {}".format(i, r["car_name"], desc))
+        lines.append("")
+    if rest:
+        lines.append("Все остальные:")
+        for i, r in enumerate(rest, 1):
+            desc = (r["description"] or "—")[:60]
+            lines.append("{}. {} | {}".format(i, r["car_name"], desc))
+    return "\n".join(lines)
+
+def _nas_get(nid):
+    with DB_LOCK:
+        r = CONN.execute("SELECT * FROM nastra_ads WHERE id=?", (nid,)).fetchone()
+        return dict(r) if r else None
+
+def _nas_likes_count(nid):
+    with DB_LOCK: return CONN.execute("SELECT COUNT(*) FROM nastra_likes WHERE nastra_id=?", (nid,)).fetchone()[0]
+
+def nas_send_view(peer, n, viewer_id):
+    author = silent_mention_badge(n["user_id"], peer)
+    lines = ['🏎Название: «{}»:'.format(n["car_name"])]
+    if n["description"]: lines.append(n["description"])
+    lines.append("")
+    try: wheels = json.loads(n["wheels"] or "{}")
+    except: wheels = {}
+    wh = nas_render_wheels(wheels)
+    if wh: lines.append(wh); lines.append("")
+    lines.append("👤 Автор настройки: {}".format(author))
+    lines.append("")
+    likes = _nas_likes_count(n["id"])
+    lines.append("🔥Популярность: {} {}.".format(likes, plural_ru(likes, "лайк", "лайка", "лайков")))
+    lines.append("")
+    lines.append("Желаете ли вы поставить лайк данной настройке?")
+    with DB_LOCK: liked = bool(CONN.execute("SELECT 1 FROM nastra_likes WHERE nastra_id=? AND user_id=?", (n["id"], viewer_id)).fetchone())
+    kb = {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "👍 Уже лайкнуто" if liked else "👍", "payload": json.dumps({"cmd": "nas_like", "id": n["id"]})}, "color": "secondary" if liked else "positive"}]]}
+    try: photos = json.loads(n["photo_atts"] or "[]")
+    except: photos = []
+    att = ",".join(photos) if photos else None
+    send_msg(peer, "\n".join(lines), attachments=att, keyboard=kb)
+
+def open_nas_menu(peer, sender):
+    close_existing_editors(peer, sender)
+    try:
+        mid = VK.messages.send(peer_id=peer, message="🏎 Меню Шинки:\n\n🔎 Поиск — найти настройку определённой машины.\n📋 Список — общий список настройки шинки.\n➕ Добавить — внести в базу свою настройку.\n🗑 Удалить — удалить свою настройку из списка.", keyboard=json.dumps(nas_menu_kb()), random_id=random.getrandbits(31))
+        cmid = resolve_cmid_retry(peer, mid)
+    except: mid = None; cmid = None
+    set_auction_state(sender, peer, "nas_menu", {"msg_cmid": cmid, "msg_id": mid})
+
+def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
+    state = get_auction_state(sender, peer)
+    if not state: return False
+    step = state["step"]
+    if not step.startswith("nas_"): return False
+    ctx = state.get("context", {}); prompt_cmid = ctx.get("msg_cmid") or cmid
+    if time.time() - ctx.get("ts", 0) > 300:
+        clear_auction_state(sender, peer); nas_edit(peer, prompt_cmid, "⏰ Меню Шинки закрыто."); return True
+    def reply(msg, kb=None): nas_edit(peer, prompt_cmid, msg, kb)
+    def setstep(s, extra=None):
+        c = dict(extra if extra is not None else ctx); c["msg_cmid"] = prompt_cmid
+        set_auction_state(sender, peer, s, c)
+    if text.strip().lower() in ("отмена", "отменить"):
+        clear_auction_state(sender, peer); reply("❌ Меню Шинки закрыто."); return True
+    if is_nastra_banned(sender) and step != "nas_menu":
+        clear_auction_state(sender, peer); reply("🚫 Вы забанены в базе Шинки."); return True
+
+    # --- поиск ---
+    if step == "nas_search_input":
+        car_name, similar = bu_match_car(text)
+        if car_name:
+            rows = _nas_fetch("car", car_name=car_name)
+            if not rows:
+                reply("В базе Шинки пока нет настройки для «{}».".format(car_name), nas_back_kb("nas_menu"))
+                return True
+            header = "Список настройки для {} . Посмотреть подробнее можно отправив номер в чат.".format(car_name)
+            body = _nas_render_list(rows, header)
+            setstep("nas_search_list", {"car_name": car_name})
+            reply(body, nas_back_kb("nas_menu"))
+            return True
+        if similar:
+            reply("Возможно вы имели в виду:\n\n" + "\n".join("• {}".format(n) for n in similar) + "\n\nВведите точное название.", nas_back_kb("nas_menu"))
+            return True
+        reply("❌ Такой машины нет в базе.", nas_back_kb("nas_menu")); return True
+
+    # --- список ---
+    if step == "nas_list":
+        if not text.strip().isdigit(): reply("❌ Введите номер:"); return True
+        rows = _nas_fetch("all")
+        num = int(text.strip())
+        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
+        nas_send_view(peer, rows[num-1], sender); return True
+
+    # --- поиск: просмотр ---
+    if step == "nas_search_list":
+        if not text.strip().isdigit(): reply("❌ Введите номер:"); return True
+        rows = _nas_fetch("car", car_name=ctx.get("car_name"))
+        num = int(text.strip())
+        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
+        nas_send_view(peer, rows[num-1], sender); return True
+
+    # --- добавление: название ---
+    if step == "nas_add_car":
+        car_name, similar = bu_match_car(text)
+        if car_name:
+            ctx["car_name"] = car_name; ctx["wheels"] = {}; ctx["wi"] = 0
+            setstep("nas_add_wheel", ctx)
+            fld, lbl = BU_WHEEL_STEPS[0]
+            hint = "(до 25 символов)" if fld == "d" else "(число 0-100)"
+            reply("🔧 Настройка колёс.\n\n{} — ? {}\n\nМожно пропустить всю настройку:".format(lbl, hint), nas_back_kb("nas_menu", with_skip=True))
+            return True
+        if similar:
+            reply("Возможно вы имели в виду:\n\n" + "\n".join("• {}".format(n) for n in similar) + "\n\nВведите точное название.", nas_back_kb("nas_menu"))
+            return True
+        reply("❌ Такой машины нет в базе.", nas_back_kb("nas_menu")); return True
+
+    # --- добавление: шаг колёс ---
+    if step == "nas_add_wheel":
+        wi = ctx.get("wi", 0)
+        if wi >= len(BU_WHEEL_STEPS):
+            setstep("nas_add_desc", ctx)
+            reply("📝 Введите краткую характеристику настройки (до 70 символов):", nas_back_kb("nas_menu"))
+            return True
+        fld, lbl = BU_WHEEL_STEPS[wi]
+        if fld == "d":
+            v = text.strip()[:25]
+            if not v: reply("❌ Введите название дисков (до 25 символов):", nas_back_kb("nas_menu", with_skip=True)); return True
+            wheels = ctx.get("wheels", {}); wheels[fld] = v; ctx["wheels"] = wheels
+        else:
+            try:
+                v = int(text.strip())
+                if v < 0 or v > 100: raise ValueError
+            except:
+                reply("❌ Введите число 0-100 для «{}»:".format(lbl), nas_back_kb("nas_menu", with_skip=True)); return True
+            wheels = ctx.get("wheels", {}); wheels[fld] = v; ctx["wheels"] = wheels
+        ctx["wi"] = wi + 1
+        if ctx["wi"] >= len(BU_WHEEL_STEPS):
+            setstep("nas_add_desc", ctx)
+            reply("📝 Введите краткую характеристику настройки (до 70 символов):", nas_back_kb("nas_menu"))
+        else:
+            setstep("nas_add_wheel", ctx)
+            nf, nl = BU_WHEEL_STEPS[ctx["wi"]]
+            hint = "(до 25 символов)" if nf == "d" else "(число 0-100)"
+            reply("🔧 {} — ? {}".format(nl, hint), nas_back_kb("nas_menu", with_skip=True))
+        return True
+
+    # --- добавление: описание ---
+    if step == "nas_add_desc":
+        d = text.strip()[:70]
+        if not d: reply("❌ Введите описание (до 70 символов):"); return True
+        ctx["description"] = d; ctx["photos"] = []
+        setstep("nas_add_photo", ctx)
+        reply("📷 Пришлите фото настройки (до 3). После каждого фото — «Готово» или ещё фото.", nas_finish_kb())
+        return True
+
+    # --- добавление: фото ---
+    if step == "nas_add_photo":
+        photos = ctx.get("photos", [])
+        if len(photos) >= 3:
+            reply("❌ Уже 3 фото, нажмите «Готово».", nas_finish_kb()); return True
+        url = extract_photo_url({"attachments": attachments}) if attachments else None
+        if not url: reply("❌ Пришлите фото или нажмите «Готово».", nas_finish_kb()); return True
+        att = None
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+                if len(data) > 1000: att = upload_photo(peer, io.BytesIO(data))
+        except Exception as e: print("nas photo err:", e)
+        if not att: reply("❌ Не удалось загрузить, попробуйте другое.", nas_finish_kb()); return True
+        photos.append(att); ctx["photos"] = photos
+        setstep("nas_add_photo", ctx)
+        reply("✅ Фото {} добавлено. Ещё фото или «Готово».".format(len(photos)), nas_finish_kb())
+        return True
+
+    # --- удаление своего ---
+    if step == "nas_del_pick":
+        if not text.strip().isdigit(): reply("❌ Введите номер:"); return True
+        rows = _nas_fetch("my", user_id=sender)
+        num = int(text.strip())
+        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
+        nid = rows[num-1]["id"]
+        with DB_LOCK:
+            CONN.execute("DELETE FROM nastra_likes WHERE nastra_id=?", (nid,))
+            CONN.execute("DELETE FROM nastra_ads WHERE id=?", (nid,)); CONN.commit()
+        clear_auction_state(sender, peer)
+        reply("✅ Настройка «{}» удалена.".format(rows[num-1]["car_name"]))
+        return True
+
+    # --- watcher del ---
+    if step == "nas_adel_input":
+        if not text.strip().isdigit(): reply("❌ Введите номер:"); return True
+        target = ctx.get("target")
+        rows = _nas_fetch("my", user_id=target)
+        num = int(text.strip())
+        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
+        nid = rows[num-1]["id"]
+        with DB_LOCK:
+            CONN.execute("DELETE FROM nastra_likes WHERE nastra_id=?", (nid,))
+            CONN.execute("DELETE FROM nastra_ads WHERE id=?", (nid,)); CONN.commit()
+        clear_auction_state(sender, peer)
+        reply("✅ Настройка удалена."); return True
+    return False
+
+def _nas_adm_del_list(sender, peer, target):
+    rows = _nas_fetch("my", user_id=target)
+    if not rows:
+        send_msg(peer, "У {} нет настроек.".format(silent_mention_badge(target, peer))); return
+    lines = ["Введите номер настройки для удаления:", ""]
+    for i, r in enumerate(rows[:20], 1): lines.append("{}. {} | {}".format(i, r["car_name"], (r["description"] or "—")[:50]))
+    set_auction_state(sender, peer, "nas_adel_input", {"target": target, "msg_cmid": None})
+    kb = {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}]]}
+    send_msg(peer, "\n".join(lines), keyboard=kb)
+# ===== /NASTRA =====
+
 # ===== СМОТРЯЩИЕ Б/У =====
 def handle_bu_watcher_cmd(peer, sender, raw):
     targets = extract_targets(raw, 0)
@@ -5043,7 +5451,7 @@ def handle_bu_watcher_cmd(peer, sender, raw):
     key = "bu_watcher_{}".format(t)
     if get_setting(0, key, "0") == "1":
         set_setting(0, key, "0"); send_msg(peer, "✅ С {} снята роль смотрящего Б/У.".format(silent_mention_badge(t, peer)))
-        send_msg(t, "👀 Вас сняли с роли смотрящего Б/У. Команды /delad, /adban, /adunban, /adbanlist, /addcar, /delcar, /cars больше недоступны.")
+        send_msg(t, "👀 Вас сняли с роли смотрящего Б/У и Шинки. Команды /delad, /adban, /adunban, /adbanlist, /cad, /addcar, /delcar, /cars, /delnastra, /nastraban, /nastraunban, /nastrabanlist больше недоступны.")
     else:
         set_setting(0, key, "1"); send_msg(peer, "✅ {} назначен смотрящим Б/У.".format(silent_mention_badge(t, peer)))
         send_msg(t, BU_WATCHER_WELCOME)
@@ -5133,6 +5541,16 @@ def handle_bu_admin_callback(cmd, user_id, peer_id, cmid, payload, event_id=None
     return False
 # ============================================
 
+def _expire_game_msg(peer, mid, text):
+    if mid:
+        try:
+            cm = resolve_cmid(peer, mid)
+            if cm and cm != mid:
+                VK.messages.edit(peer_id=peer, conversation_message_id=cm, message=text, keyboard=json.dumps({"inline": True, "buttons": []}))
+                return
+        except Exception as e: print("expire edit err:", e)
+    send_msg(peer, text)
+
 def timer_loop():
     while True:
         try:
@@ -5206,19 +5624,19 @@ def timer_loop():
                 expired = CONN.execute("SELECT * FROM dice_games WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)).fetchall()
                 if expired:
                     CONN.execute("UPDATE dice_games SET state='expired' WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)); CONN.commit()
-                    for g in expired: send_msg(g["peer_id"], "⏰ Игра в кости закрыта из-за бездействия.")
+                    for g in expired: _expire_game_msg(g["peer_id"], g["message_id"], "⏰ Игра в кости закрыта из-за бездействия.")
                 exp_m = CONN.execute("SELECT * FROM dice_games WHERE state='marriage' AND created_at <=?", (now-60,)).fetchall()
                 if exp_m:
                     CONN.execute("UPDATE dice_games SET state='marriage_expired' WHERE state='marriage' AND created_at <=?", (now-60,)); CONN.commit()
-                    for g in exp_m: send_msg(g["peer_id"], "⏰ Время предложения истекло! 💔")
+                    for g in exp_m: _expire_game_msg(g["peer_id"], g["message_id"], "⏰ Время предложения истекло! 💔")
                 expired_kmb = CONN.execute("SELECT * FROM kmb_games WHERE state IN ('pending','choosing') AND created_at <=?", (now-60,)).fetchall()
                 if expired_kmb:
                     CONN.execute("UPDATE kmb_games SET state='expired' WHERE state IN ('pending','choosing') AND created_at <=?", (now-60,)); CONN.commit()
-                    for g in expired_kmb: send_msg(g["peer_id"], "⏰ КНБ: время вышло!")
+                    for g in expired_kmb: _expire_game_msg(g["peer_id"], g["message_id"], "⏰ КНБ: время вышло!")
                 exp_ttt = CONN.execute("SELECT * FROM ttt_games WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)).fetchall()
                 if exp_ttt:
                     CONN.execute("UPDATE ttt_games SET state='expired' WHERE state IN ('pending','playing') AND created_at <=?", (now-60,)); CONN.commit()
-                    for g in exp_ttt: send_msg(g["peer_id"], "⏰ Игра в крестики-нолики закрыта (бездействие).")
+                    for g in exp_ttt: _expire_game_msg(g["peer_id"], g["message_id"], "⏰ Игра в крестики-нолики закрыта (бездействие).")
                 pend_rows = CONN.execute("SELECT peer_id, value FROM settings WHERE key='top_clean_pending'").fetchall()
                 for pr in pend_rows:
                     try: pend = json.loads(pr["value"])
