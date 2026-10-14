@@ -4871,6 +4871,12 @@ def _bu_fetch_ads(filter_type, car_name=None, user_id=None, only_active=True):
         result.append(d)
     return result
 
+def fmt_price_dots(val):
+    if not val: return "—"
+    digits = re.sub(r"\D", "", str(val))
+    if not digits: return "—"
+    return "{:,}".format(int(digits)).replace(",", ".")
+
 def _bu_render_ads_list(ads, page, header, with_hours=False):
     total = len(ads)
     total_pages = max(1, (total + BU_PAGE_SIZE - 1) // BU_PAGE_SIZE)
@@ -4878,7 +4884,7 @@ def _bu_render_ads_list(ads, page, header, with_hours=False):
     chunk = ads[(page-1)*BU_PAGE_SIZE : page*BU_PAGE_SIZE]
     lines = [header, ""]
     for i, r in enumerate(chunk, (page-1)*BU_PAGE_SIZE+1):
-        price = r.get("price") or "—"
+        price = fmt_price_dots(r.get("price"))
         line = "{}. {} | {} | {}".format(i, r["car_name"], (r["description"] or "—")[:60], price)
         if with_hours: line += " | {}".format(_bu_hours_left(r["expires_at"]))
         lines.append(line)
@@ -5049,7 +5055,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             if not r: reply("❌ Неверный номер."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
-            if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
+            if r.get("price"): lines.append("💰 Cтоимость: {}".format(fmt_price_dots(r["price"])))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
             send_msg(peer, "\n".join(lines), attachments=r["photo_att"] or None)
@@ -5061,7 +5067,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             if not r: reply("❌ Неверный номер."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
-            if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
+            if r.get("price"): lines.append("💰 Cтоимость: {}".format(fmt_price_dots(r["price"])))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
             send_msg(peer, "\n".join(lines), attachments=r["photo_att"] or None)
@@ -5073,7 +5079,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             if not r: reply("❌ Неверный номер."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
             lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
-            if r.get("price"): lines.append("💰 Cтоимость: {}".format(r["price"]))
+            if r.get("price"): lines.append("💰 Cтоимость: {}".format(fmt_price_dots(r["price"])))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
             send_msg(peer, "\n".join(lines), attachments=r["photo_att"] or None)
