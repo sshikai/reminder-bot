@@ -3618,6 +3618,31 @@ def handle_message(peer, sender, text, msg_obj):
                     set_auction_state(sender, peer, "buad_addcar", {"msg_cmid": None}); send_msg(peer, "Введите название(я) новых машин (можно через запятую):"); return
                 if low.startswith("/delcar"):
                     set_auction_state(sender, peer, "buad_delcar", {"msg_cmid": None}); send_msg(peer, "Введите полное название машины для удаления(Можно несколько через запятую):"); return
+                if low == "/cad":
+                    set_auction_state(sender, peer, "cad_car", {"msg_cmid": None})
+                    send_msg(peer, "Введите чёткое название авто:"); return
+                if low.startswith("/delnastra"):
+                    targets = extract_targets(text[len("/delnastra"):].strip(), 0)
+                    if not targets: send_msg(peer, "❌ Формат: /delnastra @юзер"); return
+                    _nas_adm_del_list(sender, peer, targets[0]); return
+                if low.startswith("/nastraban") and not low.startswith("/nastrabanlist"):
+                    targets = extract_targets(text[len("/nastraban"):].strip(), 0)
+                    if not targets: send_msg(peer, "❌ Формат: /nastraban @юзер"); return
+                    t = targets[0]
+                    with DB_LOCK: CONN.execute("INSERT OR REPLACE INTO nastra_bans(user_id, banned_by, banned_at) VALUES(?,?,?)", (t, sender, int(time.time()))); CONN.commit()
+                    send_msg(peer, "🚫 {} забанен в Шинке.".format(silent_mention_badge(t, peer))); return
+                if low.startswith("/nastraunban"):
+                    targets = extract_targets(text[len("/nastraunban"):].strip(), 0)
+                    if not targets: send_msg(peer, "❌ Формат: /nastraunban @юзер"); return
+                    t = targets[0]
+                    with DB_LOCK: res = CONN.execute("DELETE FROM nastra_bans WHERE user_id=?", (t,)); CONN.commit()
+                    send_msg(peer, "✅ {} разбанен в Шинке.".format(silent_mention_badge(t, peer)) if res.rowcount > 0 else "ℹ️ Не был забанен."); return
+                if low == "/nastrabanlist":
+                    with DB_LOCK: rows = CONN.execute("SELECT user_id, banned_by FROM nastra_bans ORDER BY banned_at DESC").fetchall()
+                    if not rows: send_msg(peer, "✅ Бан-лист Шинки пуст."); return
+                    lines = ["🚫 Бан-лист Шинки:"]
+                    for r in rows: lines.append("• {} — забанил {}".format(silent_mention_badge(r["user_id"], peer), silent_mention_badge(r["banned_by"], peer)))
+                    send_msg(peer, "\n".join(lines)); return
             if is_insp and low.startswith("/clearcard"): handle_clearcard(peer, sender, text[len("/clearcard"):].strip()); return
             elif is_insp and low.startswith("/card"): handle_card_ls(peer, sender, text[len("/card"):].strip()); return
             elif is_insp and low.startswith("/verify"): handle_verify(peer, sender, text[len("/verify"):].strip(), True); return
@@ -4686,11 +4711,6 @@ def bu_sell_kb():
 def bu_buy_kb():
     return {"inline": True, "buttons": [
         [{"action": {"type": "callback", "label": "🛒 В продаже", "payload": json.dumps({"cmd": "bu_in_sale", "p": 1})}, "color": "positive"}],
-        [{"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "bu_menu"})}, "color": "secondary"}, {"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "bu_cancel"})}, "color": "negative"}]]}
-
-def bu_skip_kb():
-    return {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "⏭ Пропустить", "payload": json.dumps({"cmd": "bu_skip_wheels"})}, "color": "secondary"}],
         [{"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "bu_menu"})}, "color": "secondary"}, {"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "bu_cancel"})}, "color": "negative"}]]}
 
 def bu_days_kb():
