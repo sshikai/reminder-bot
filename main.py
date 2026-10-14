@@ -4989,32 +4989,32 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
         if car_name:
             ctx["car_name"] = car_name; ctx["target_user"] = 0
             setstep("cad_target", ctx)
-            reply("Пришлите ссылку на человека, чьё объявление хотите выставить:", nas_back_kb(None))
+            reply("Пришлите ссылку на человека, чьё объявление хотите выставить:", cad_cancel_kb())
             return True
         if similar:
-            reply("Возможно вы имели в виду:\n\n" + "\n".join("• {}".format(n) for n in similar) + "\n\nВведите точное название.", nas_back_kb(None)); return True
-        reply("❌ Такой машины нет в базе.", nas_back_kb(None)); return True
+            reply("Возможно вы имели в виду:\n\n" + "\n".join("• {}".format(n) for n in similar) + "\n\nВведите точное название.", cad_cancel_kb()); return True
+        reply("❌ Такой машины нет в базе.", cad_cancel_kb()); return True
 
     if step == "cad_target":
         targets = extract_targets(text, 0)
-        if not targets: reply("❌ Пришлите ссылку/упоминание.", nas_back_kb(None)); return True
+        if not targets: reply("❌ Пришлите ссылку/упоминание.", cad_cancel_kb()); return True
         ctx["target_user"] = targets[0]
         setstep("cad_desc", ctx)
-        reply("✅ Целевой пользователь: {}\n\nВведите краткую характеристику (до 70 символов):".format(silent_mention_badge(targets[0], peer)), nas_back_kb(None))
+        reply("✅ Целевой пользователь: {}\n\nВведите краткую характеристику (до 70 символов):".format(silent_mention_badge(targets[0], peer)), cad_cancel_kb())
         return True
-
+        
     if step == "cad_desc":
         d = text.strip()[:70]
-        if not d: reply("❌ Введите описание:"); return True
+        if not d: reply("❌ Введите описание:", cad_cancel_kb()); return True
         ctx["description"] = d; setstep("cad_price", ctx)
-        reply("💰 Введите цену:"); return True
+        reply("💰 Введите цену:", cad_cancel_kb()); return True
 
     if step == "cad_price":
         p = text.strip()
-        if not re.fullmatch(r"[\d\.,]+", p): reply("❌ Введите цену цифрами:"); return True
+        if not re.fullmatch(r"[\d\.,]+", p): reply("❌ Введите цену цифрами:", cad_cancel_kb()); return True
         ctx["price"] = p; setstep("cad_days", ctx)
         reply("📅 На сколько дней выложить?", bu_days_kb()); return True
-
+        
     if step == "cad_photo":
         url = extract_photo_url({"attachments": attachments}) if attachments else None
         if not url: reply("❌ Пришлите фото или нажмите «Пропустить».", bu_photo_kb()); return True
@@ -5238,6 +5238,9 @@ def nas_back_kb(back_cmd=None):
     nav.append({"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"})
     rows.append(nav)
     return {"inline": True, "buttons": rows}
+
+def cad_cancel_kb():
+    return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "bu_cancel"})}, "color": "negative"}]]}
 
 def nas_finish_kb():
     return {"inline": True, "buttons": [
