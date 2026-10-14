@@ -3541,8 +3541,12 @@ def handle_message(peer, sender, text, msg_obj):
                 for r in rows: lines.append("• {} — забанил {}".format(silent_mention_badge(r["user_id"], peer), silent_mention_badge(r["banned_by"], peer)))
                 send_msg(peer, "\n".join(lines)); return
             elif low == "/cad":
-                set_auction_state(sender, peer, "cad_car", {"msg_cmid": None})
-                send_msg(peer, "Введите чёткое название авто:"); return
+                kb_cad = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "bu_cancel"})}, "color": "negative"}]]})
+                try:
+                    mid = VK.messages.send(peer_id=peer, message="Введите чёткое название авто:", keyboard=kb_cad, random_id=random.getrandbits(31))
+                    cmid_cad = resolve_cmid_retry(peer, mid)
+                except: mid = None; cmid_cad = None
+                set_auction_state(sender, peer, "cad_car", {"msg_cmid": cmid_cad, "msg_id": mid}); return
             elif low.startswith("/delnastra"):
                 targets = extract_targets(text[len("/delnastra"):].strip(), 0)
                 if not targets: send_msg(peer, "❌ Формат: /delnastra @юзер"); return
@@ -3638,8 +3642,12 @@ def handle_message(peer, sender, text, msg_obj):
                 if low.startswith("/delcar"):
                     set_auction_state(sender, peer, "buad_delcar", {"msg_cmid": None}); send_msg(peer, "Введите полное название машины для удаления(Можно несколько через запятую):"); return
                 if low == "/cad":
-                    set_auction_state(sender, peer, "cad_car", {"msg_cmid": None})
-                    send_msg(peer, "Введите чёткое название авто:"); return
+                    kb_cad = json.dumps({"inline": True, "buttons": [[{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "bu_cancel"})}, "color": "negative"}]]})
+                    try:
+                        mid = VK.messages.send(peer_id=peer, message="Введите чёткое название авто:", keyboard=kb_cad, random_id=random.getrandbits(31))
+                        cmid_cad = resolve_cmid_retry(peer, mid)
+                    except: mid = None; cmid_cad = None
+                    set_auction_state(sender, peer, "cad_car", {"msg_cmid": cmid_cad, "msg_id": mid}); return
                 if low.startswith("/delnastra"):
                     targets = extract_targets(text[len("/delnastra"):].strip(), 0)
                     if not targets: send_msg(peer, "❌ Формат: /delnastra @юзер"); return
