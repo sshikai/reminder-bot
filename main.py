@@ -5054,7 +5054,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
-            lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
+            lines = ['🏎️ Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(fmt_price_dots(r["price"])))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
@@ -5066,7 +5066,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
-            lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
+            lines = ['🏎️ Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(fmt_price_dots(r["price"])))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
@@ -5078,7 +5078,7 @@ def handle_bu_input(sender, peer, text, cmid=None, attachments=None):
             r = _bu_pick_from_ads(ads, num)
             if not r: reply("❌ Неверный номер."); return True
             owner_link = silent_mention_badge(r["user_id"], peer)
-            lines = ['📷 Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
+            lines = ['🏎️ Название: «{}»:'.format(r["car_name"]), r["description"] or "—"]
             if r.get("price"): lines.append("💰 Cтоимость: {}".format(fmt_price_dots(r["price"])))
             lines.append("")
             lines.append("👤 Владелец: {}".format(owner_link))
