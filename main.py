@@ -4819,8 +4819,6 @@ def bu_match_car(text):
         parts = q.split()
         if parts:
             similar = [n for n in all_names if all(p in n.lower() for p in parts)]
-    # сортируем по длине (короче = релевантнее) и берём 15
-    similar = sorted(similar, key=lambda x: len(x))[:15]
     return None, similar
 
 def _cad_finalize(sender, peer, ctx, photo_att):
