@@ -61,6 +61,7 @@ BUS_SLOT2 = ("ТК БУС","ТК БАТ","СК","Такопарк")
 BUS_TAKO = "Такопарк"
 BUS_PAGES = 4
 BUS_PER_PAGE = 6
+NAS_PER_PAGE = 15
 
 CARD_FIELD_MAP = {"бизнесы":"businesses","недвижимость":"realty","имущество":"property_val","гараж":"garage","телефон":"phone","имя":"name"}
 CARD_DATA_KEYS = set(CARD_FIELD_MAP.values())
@@ -3098,11 +3099,23 @@ def handle_event(event):
                     nset("nas_menu"); nshow("🏎 Меню Шинки:", nas_menu_kb()); snackbar("✅"); return
                 if cmd == "nas_search":
                     nset("nas_search_input"); nshow("Введите полное название транспорта, настройку которого хотите найти:", nas_back_kb("nas_menu")); snackbar("✅"); return
+                if cmd == "nas_search_page":
+                    car_name = payload.get("cn", "")
+                    page = int(payload.get("p", 1) or 1)
+                    rows = _nas_fetch("car", car_name=car_name)
+                    if not rows: nshow("Настроек больше нет.", nas_menu_kb()); snackbar("📭"); return
+                    header = "Список настройки для {} . Посмотреть подробнее можно отправив номер в чат.".format(car_name)
+                    body, page, tp = _nas_render_list(rows, header, page)
+                    kb = _nas_nav_kb(page, tp, "nas_search_page", extra={"cn": car_name}, back="nas_menu")
+                    nset("nas_search_list", {"car_name": car_name, "page": page}); nshow(body, kb); snackbar("✅"); return
                 if cmd == "nas_list":
+                    page = int(payload.get("p", 1) or 1)
                     rows = _nas_fetch("all")
                     if not rows: nshow("В базе Шинки пока нет настройки.", nas_menu_kb()); snackbar("📭"); return
                     header = "Список всех существующих настроек. Посмотреть подробнее можно отправив номер в чат."
-                    nset("nas_list"); nshow(_nas_render_list(rows, header), nas_back_kb("nas_menu")); snackbar("✅"); return
+                    body, page, tp = _nas_render_list(rows, header, page)
+                    kb = _nas_nav_kb(page, tp, "nas_list", back="nas_menu")
+                    nset("nas_list", {"page": page}); nshow(body, kb); snackbar("✅"); return
                 if cmd == "nas_add":
                     if is_nastra_banned(user_id): snackbar("🚫 Вы забанены"); return
                     nset("nas_add_car"); nshow("Введите чёткое название авто:", nas_back_kb("nas_menu")); snackbar("✅"); return
@@ -4798,12 +4811,17 @@ def bu_match_car(text):
     all_names = [r["name"] for r in rows]
     for n in all_names:
         if n.lower() == q: return n, []
-    similar = [n for n in all_names if q in n.lower() or n.lower() in q]
+    # приоритет: совпадения с началом названия
+    starts = [n for n in all_names if n.lower().startswith(q)]
+    contains = [n for n in all_names if (q in n.lower() or n.lower() in q) and n not in starts]
+    similar = starts + contains
     if not similar:
         parts = q.split()
         if parts:
-            similar = [n for n in all_names if all(p in n.lower() for p in parts)][:10]
-    return None, similar[:10]
+            similar = [n for n in all_names if all(p in n.lower() for p in parts)]
+    # сортируем по длине (короче = релевантнее) и берём 15
+    similar = sorted(similar, key=lambda x: len(x))[:15]
+    return None, similar
 
 def _cad_finalize(sender, peer, ctx, photo_att):
     now_ts = int(time.time()); days = int(ctx.get("days", 1))
@@ -4888,7 +4906,8 @@ def _bu_render_ads_list(ads, page, header, with_hours=False):
         line = "{}. {} | {} | {}".format(i, r["car_name"], (r["description"] or "—")[:60], price)
         if with_hours: line += " | {}".format(_bu_hours_left(r["expires_at"]))
         lines.append(line)
-    return "\n".join(lines), page, total_pages
+        lines.append("")
+    return "\n".join(lines).rstrip(), page, total_pages
 
 def _bu_pick_from_ads(ads, num):
     if num < 1 or num > len(ads): return None
@@ -5247,6 +5266,19 @@ def nas_menu_kb():
          {"action": {"type": "callback", "label": "🗑 Удалить", "payload": json.dumps({"cmd": "nas_del_menu"})}, "color": "negative"}],
         [{"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"}]]}
 
+def _nas_nav_kb(page, total_pages, nav_cmd, extra=None, back=None):
+    rows = []
+    nav = []
+    if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": nav_cmd, "p": page-1, **(extra or {})})}, "color": "secondary"})
+    nav.append({"action": {"type": "callback", "label": "{}/{}".format(page, total_pages), "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
+    if page < total_pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": nav_cmd, "p": page+1, **(extra or {})})}, "color": "secondary"})
+    if nav: rows.append(nav)
+    bottom = []
+    if back: bottom.append({"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": back})}, "color": "secondary"})
+    bottom.append({"action": {"type": "callback", "label": "❌ Отмена", "payload": json.dumps({"cmd": "nas_cancel"})}, "color": "negative"})
+    rows.append(bottom)
+    return {"inline": True, "buttons": rows}
+
 def nas_back_kb(back_cmd=None):
     rows = []
     nav = []
@@ -5291,22 +5323,34 @@ def _nas_fetch(filter_type, car_name=None, user_id=None):
             rows = CONN.execute("SELECT n.*, (SELECT COUNT(*) FROM nastra_likes WHERE nastra_id=n.id) as likes FROM nastra_ads n ORDER BY likes DESC, n.id DESC").fetchall()
     return [dict(r) for r in rows]
 
-def _nas_render_list(rows, header):
-    top = rows[:3]; rest = rows[3:]
+def _nas_render_list(rows, header, page=1):
+    total = len(rows)
+    total_pages = max(1, (total + NAS_PER_PAGE - 1) // NAS_PER_PAGE)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * NAS_PER_PAGE
+    end = start + NAS_PER_PAGE
+    chunk = rows[start:end]
     lines = [header, ""]
-    if top:
-        lines.append("🔥Самые популярные:")
-        for i, r in enumerate(top, 1):
-            desc = (r["description"] or "—")[:60]
-            lines.append("{}. {} | {}".format(i, r["car_name"], desc))
-        lines.append("")
-    if rest:
+    if page == 1:
+        top = chunk[:3]; rest = chunk[3:]
+        if top:
+            lines.append("🔥Самые популярные:")
+            for i, r in enumerate(top, 1):
+                desc = (r["description"] or "—")[:60]
+                lines.append("{}. {} | {}".format(i, r["car_name"], desc))
+            lines.append("")
+        if rest:
+            lines.append("Все остальные:")
+            for i, r in enumerate(rest, 4):
+                desc = (r["description"] or "—")[:60]
+                lines.append("{}. {} | {}".format(i, r["car_name"], desc))
+    else:
         lines.append("Все остальные:")
-        for i, r in enumerate(rest, 1):
+        for i, r in enumerate(chunk, start + 1):
             desc = (r["description"] or "—")[:60]
             lines.append("{}. {} | {}".format(i, r["car_name"], desc))
-    return "\n".join(lines)
-
+    return "\n".join(lines), page, total_pages
+    
 def _nas_get(nid):
     with DB_LOCK:
         r = CONN.execute("SELECT * FROM nastra_ads WHERE id=?", (nid,)).fetchone()
@@ -5371,9 +5415,10 @@ def handle_nas_input(sender, peer, text, cmid=None, attachments=None):
                 reply("В базе Шинки пока нет настройки для «{}».".format(car_name), nas_back_kb("nas_menu"))
                 return True
             header = "Список настройки для {} . Посмотреть подробнее можно отправив номер в чат.".format(car_name)
-            body = _nas_render_list(rows, header)
-            setstep("nas_search_list", {"car_name": car_name})
-            reply(body, nas_back_kb("nas_menu"))
+            body, page, tp = _nas_render_list(rows, header, 1)
+            kb = _nas_nav_kb(page, tp, "nas_search_page", extra={"cn": car_name}, back="nas_menu")
+            setstep("nas_search_list", {"car_name": car_name, "page": page})
+            reply(body, kb)
             return True
         if similar:
             reply("Возможно вы имели в виду:\n\n" + "\n".join("• {}".format(n) for n in similar) + "\n\nВведите точное название.", nas_back_kb("nas_menu"))
