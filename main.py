@@ -3484,7 +3484,7 @@ def handle_message(peer, sender, text, msg_obj):
             if not known:
                 CONN.execute("INSERT OR IGNORE INTO bot_dm_users(user_id, first_seen) VALUES(?,?)", (sender, int(time.time())))
                 CONN.commit()
-                try: send_msg(peer, "👋 Привет, {}!\nЯ бот семьи Million Dollars.\n\n📖 Список команд: напиши «Мд команды»\n🏎 Б/У Рынок: напиши «Мд бу»\n🎁 Промокоды: /promo #код".format(mention(sender)))
+try: send_msg(peer, "👋 Привет, {}!\nЯ бот семьи Million Dollars.\n\n📖 Список команд: напиши «Мд команды»\n🏎 Б/У Рынок: напиши «Мд бу»\n🛞Настройки шинки: напиши «Мд шинка»\n🎁 Промокоды: /promo #код".format(mention(sender)))
                 except: pass
         if first_tok == "/promo": handle_promo_use(peer, sender, text.strip()[len("/promo"):].strip()); return
         is_boss = sender in (CREATOR_ID, LEADER_ID) and peer == sender
