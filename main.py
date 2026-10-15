@@ -5535,10 +5535,10 @@ def handle_bu_watcher_cmd(peer, sender, raw):
     if t in (CREATOR_ID, LEADER_ID): send_msg(peer, "❌ У создателя и лидера доступ есть всегда."); return
     key = "bu_watcher_{}".format(t)
     if get_setting(0, key, "0") == "1":
-        set_setting(0, key, "0"); send_msg(peer, "✅ С {} снята роль смотрящего Б/У.".format(silent_mention_badge(t, peer)))
+        set_setting(0, key, "0"); send_msg(peer, "✅ С {} снята роль смотрящего Б/У и Шинки.".format(silent_mention_badge(t, peer)))
         send_msg(t, "👀 Вас сняли с роли смотрящего Б/У и Шинки.\n\n🏎️Б/У РЫНОК:\n/delad, /adban, /adunban, /adbanlist, /cad\n\n📋Каталог машин:\n/addcar, /delcar, /cars\n\n🛞Шинка:\n/delnastra, /nastraban, /nastraunban, /nastrabanlist\n\nВсе эти команды больше недоступны.")
     else:
-       set_setting(0, key, "1"); send_msg(peer, "✅ {} назначен смотрящим Б/У и Шинки.".format(silent_mention_badge(t, peer)))
+        set_setting(0, key, "1"); send_msg(peer, "✅ {} назначен смотрящим Б/У и Шинки.".format(silent_mention_badge(t, peer)))
         send_msg(t, BU_WATCHER_WELCOME)
 
 def _bu_adm_del_list(sender, peer, target):
