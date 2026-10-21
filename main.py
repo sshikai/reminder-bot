@@ -5837,30 +5837,15 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
         r = rows[num-1]
         with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (target, peer)).fetchone()
         nick = "[https://vk.com/id{}|{}]".format(target, m["nickname"]) if m and m["nickname"] else silent_mention_badge(target, peer)
-        att = r["photo1"]
-        if r["photo2"]: att += "," + r["photo2"]
+        att_list = []
+        if r["photo1"]: att_list.append(r["photo1"])
+        if r["photo2"]: att_list.append(r["photo2"])
+        att = ",".join(att_list) if att_list else None
         txt = "👥Ник: {}\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)".format(nick, r["build_type"], fmt_price_dots(r["amount"]), r["work_time"])
         send_msg(peer, txt, attachments=att)
         clear_auction_state(sender, peer)
         return True
 
-    if step == "sk_chk_pick":
-        if not text.strip().isdigit(): reply("❌ Введите номер отчета:"); return True
-        num = int(text.strip())
-        target = ctx.get("target")
-        with DB_LOCK:
-            rows = CONN.execute("SELECT id, build_type, amount, work_time, photo1, photo2 FROM sk_reports WHERE peer_id=? AND user_id=? ORDER BY created_at DESC LIMIT 30", (peer, target)).fetchall()
-        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
-        r = rows[num-1]
-        with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (target, peer)).fetchone()
-        nick = "[https://vk.com/id{}|{}]".format(target, m["nickname"]) if m and m["nickname"] else silent_mention_badge(target, peer)
-        att = r["photo1"]
-        if r["photo2"]: att += "," + r["photo2"]
-        txt = "👥Ник: {}\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)".format(nick, r["build_type"], fmt_price_dots(r["amount"]), r["work_time"])
-        send_msg(peer, txt, attachments=att)
-        clear_auction_state(sender, peer)
-        return True
-        
     return False
 
 def handle_punishments(peer, sender, raw):
