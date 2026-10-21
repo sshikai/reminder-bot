@@ -506,10 +506,16 @@ def save_design_photo(user_id, url):
 
 # ===== ХЕЛПЕРЫ АВТОЗАКРЫТИЯ РЕДАКТОРОВ =====
 def _silent_delete_msg(peer, cmid=None, mid=None):
-    for kw in (({"conversation_message_ids": [cmid]} if cmid else None), ({"message_ids": [mid]} if mid else None)):
-        if not kw: continue
-        try: VK.messages.delete(peer_id=peer, delete_for_all=1, **kw); return True
-        except: continue
+    if cmid:
+        try: VK.messages.delete(peer_id=peer, delete_for_all=1, conversation_message_ids=[cmid]); return True
+        except: pass
+        try: VK.messages.delete(peer_id=peer, delete_for_all=1, message_ids=[cmid]); return True
+        except: pass
+    if mid:
+        try: VK.messages.delete(peer_id=peer, delete_for_all=1, message_ids=[mid]); return True
+        except: pass
+        try: VK.messages.delete(peer_id=peer, delete_for_all=1, conversation_message_ids=[mid]); return True
+        except: pass
     return False
 
 def close_existing_editors(peer, sender):
@@ -5764,7 +5770,7 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
         return True
 
     def step_reply(next_step, msg, kb=None, extra=None):
-        # Удаляем ТОЛЬКО прошлое сообщение бота
+        # Удаляем прошлое сообщение бота (игнорируем, если не вышло)
         old_cmid = ctx.get("msg_cmid")
         if old_cmid: _silent_delete_msg(peer, old_cmid)
         # Отправляем новое
@@ -5800,7 +5806,12 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
         return True
 
     if step == "sk_date":
-        ctx["work_time"] = text.strip()
+        val = text.strip()
+        # Проверка формата: ДД.ММ.ГГ ЧЧ:ММ
+        if not re.match(r"^\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}$", val):
+            step_reply("sk_date", "❌ Неверный формат. Пример: 01.01.21 13:00", sk_nav_kb("sk_amount"))
+            return True
+        ctx["work_time"] = val
         step_reply("sk_photo1", "Пришлите скрин взятия стройки с /time:", sk_nav_kb("sk_date"))
         return True
 
