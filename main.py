@@ -191,10 +191,6 @@ def fetch_br_servers():
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             if isinstance(data, list):
-                if len(data) < 92:
-                    has_92 = any(str(s.get("firstname", "")).strip() == "92" for s in data)
-                    if not has_92:
-                        data.append({"name": "92", "firstname": "92", "online": 0, "maxonline": 0})
                 BR_CACHE["time"] = now
                 BR_CACHE["data"] = data
                 return data
@@ -2192,7 +2188,7 @@ def ls_help_text(user_id):
     if is_inspector(user_id) or user_id in (CREATOR_ID, LEADER_ID): lines += ["", "🕵 Скрытые команды проверяющего:", "/verify @ - подтвердить карту.", "/deny @ - отменить подтверждение.", "/card @ - посмотреть карту любого.", "/clearcard @ [параметр] - очистить любую карту.", "(параметры: бизнесы, недвижимость, имущество, гараж, телефон, фото, имя)"]
     if is_auctioneer(user_id) or user_id in (CREATOR_ID, LEADER_ID): lines += ["", "📈 Скрытые команды аукционера:", "/аукцион - редактор аукционов.", "/стопаукцион (номер чата) - отключить идущий аукцион.", "/отменить ласт ставку - отменить верхнюю ставку.", "/некст лот - завершить текущий лот."]
     if is_bu_watcher(user_id) or user_id in (CREATOR_ID, LEADER_ID): lines += ["", "👀 Скрытые команды смотрящего Б/У и Шинки:", "", "🏎️Б/У РЫНОК.", "/delad @ - удалить объявление человека в Б/У.", "/adban @ - забанить в Б/У навсегда.", "/adunban @ - разбанить в Б/У.", "/adbanlist - список банов Б/У.", "/cad - создать объявление в Б/У от лица другого.", "", "📋Каталог машин:", "/addcar - добавить машину(ы) в каталог.", "/delcar - удалить машину из каталога.", "/cars - каталог всех машин.", "", "🛞Шинка:", "/delnastra @ - удалить настройку из Шинки.", "/nastraban @ - забанить в Шинке навсегда.", "/nastraunban @ - разбанить в Шинке.", "/nastrabanlist - список банов Шинки.", "", "📊Статистика:", "/adstat - статистика Б/У."]
-    if user_id in (CREATOR_ID, LEADER_ID): lines += ["", "👑 Скрытые команды создателя/лидера:", "", "🎭Роли:", "/inspector @ - назначить/снять проверяющего.", "/проверяющие - список проверяющих.", "/аукционер @ - назначить/снять аукционера.", "/аукционеры - список аукционеров.", "/смотрящий @ - назначить/снять смотрящего Б/У и Шинки.", "/смотрящие - список смотрящих Б/У и Шинки.", "", "🛠Инструменты:", "/cpromo - редактор промокодов.", "/voice (ответом) - рассылка.", "/экс карта @ <название> - выдать эксклюзив.", "/забрать карту @ <название> - забрать эксклюзив.", "/setkto @ <слова> <номер чата> - статус.", "/чаты - список бесед.", "/подписчики - список подписчиков группы.", "/adstat - статистика Б/У.", "бр форум / бр админы <ссылка> - установить ссылки.", "", "🗄Служебные (статистика):", "/firstlogin <id> <номер чата> <ДД.ММ.ГГГГ> - первый вход.", "/lastlogin <id> <номер чата> <ДД.ММ.ГГГГ> - последний вход.", "/topmsg <id> <номер чата> <символы> <сообщения> - топ сообщений.", "/topemj <id> <номер чата> <эмодзи> - топ эмодзи.", "/rbrak <id> <номер чата> <дней> - изменить дату брака."]
+    if user_id in (CREATOR_ID, LEADER_ID): lines += ["", "👑 Скрытые команды создателя/лидера:", "", "🎭Роли:", "/проверяющий @ - назначить/снять проверяющего.", "/проверяющие - список проверяющих.", "/аукционер @ - назначить/снять аукционера.", "/аукционеры - список аукционеров.", "/смотрящий @ - назначить/снять смотрящего Б/У и Шинки.", "/смотрящие - список смотрящих Б/У и Шинки.", "", "🛠Инструменты:", "/cpromo - редактор промокодов.", "/voice (ответом) - рассылка.", "/экс карта @ <название> - выдать эксклюзив.", "/забрать карту @ <название> - забрать эксклюзив.", "/setkto @ <слова> <номер чата> - статус.", "/чаты - список бесед.", "/подписчики - список подписчиков группы.", "/adstat - статистика Б/У.", "бр форум / бр админы <ссылка> - установить ссылки.", "", "🗄Служебные (статистика):", "/firstlogin <id> <номер чата> <ДД.ММ.ГГГГ> - первый вход.", "/lastlogin <id> <номер чата> <ДД.ММ.ГГГГ> - последний вход.", "/topmsg <id> <номер чата> <символы> <сообщения> - топ сообщений.", "/topemj <id> <номер чата> <эмодзи> - топ эмодзи.", "/rbrak <id> <номер чата> <дней> - изменить дату брака."]
     return "\n".join(lines)
 
 def get_bdate_map(member_ids):
@@ -2247,7 +2243,7 @@ def execute_top_clean(peer, targets, top_types):
 
 def get_help_main_buttons():
     return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "Общие", "payload": json.dumps({"cmd": "help_general"})}, "color": "primary"}, {"action": {"type": "callback", "label": "Системы MD", "payload": json.dumps({"cmd": "help_systems"})}, "color": "negative"}], [{"action": {"type": "callback", "label": "BLACK RUSSIA", "payload": json.dumps({"cmd": "help_br"})}, "color": "positive"}, {"action": {"type": "callback", "label": "Управление", "payload": json.dumps({"cmd": "help_manage"})}, "color": "negative"}], [{"action": {"type": "callback", "label": "Игровые", "payload": json.dumps({"cmd": "help_games"})}, "color": "positive"}, {"action": {"type": "callback", "label": "MD", "payload": json.dumps({"cmd": "help_md"})}, "color": "negative"}]]}
-def get_help_systems_buttons(): return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "Напоминалка", "payload": json.dumps({"cmd": "help_remind"})}, "color": "primary"}, {"action": {"type": "callback", "label": "Опросы", "payload": json.dumps({"cmd": "help_polls"})}, "color": "primary"}], [{"action": {"type": "callback", "label": "СК", "payload": json.dumps({"cmd": "help_sk"})}, "color": "positive"}], [{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back"})}, "color": "secondary"}]]}
+def get_help_systems_buttons(): return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "Напоминалка", "payload": json.dumps({"cmd": "help_remind"})}, "color": "primary"}, {"action": {"type": "callback", "label": "Опросы", "payload": json.dumps({"cmd": "help_polls"})}, "color": "primary"}], [{"action": {"type": "callback", "label": "СК", "payload": json.dumps({"cmd": "help_sk"})}, "color": "primary"}], [{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back"})}, "color": "secondary"}]]}
 def get_help_manage_buttons(): return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "Владелец", "payload": json.dumps({"cmd": "help_owner"})}, "color": "negative"}, {"action": {"type": "callback", "label": "Главный Админ", "payload": json.dumps({"cmd": "help_main_admin"})}, "color": "negative"}], [{"action": {"type": "callback", "label": "Администратор", "payload": json.dumps({"cmd": "help_admin"})}, "color": "negative"}, {"action": {"type": "callback", "label": "Модератор", "payload": json.dumps({"cmd": "help_moderator"})}, "color": "negative"}], [{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back_main"})}, "color": "secondary"}]]}
 def get_help_back_button(): return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_back"})}, "color": "secondary"}]]}
 def get_help_back_to_manage(): return {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "Назад🌀", "payload": json.dumps({"cmd": "help_manage"})}, "color": "secondary"}]]}
@@ -3188,7 +3184,15 @@ def handle_event(event):
             page = int(payload.get("p", 1))
             if cmd == "pun_cancel":
                 edit_msg("❌ Лог закрыт.", None); snackbar("❌"); return
-            if not target_id or ptype not in ("ban", "mute", "warn"): snackbar("❌"); return
+            if cmd == "pun_back":
+                name = silent_mention_badge(target_id, peer_id)
+                kb = {"inline": True, "buttons": [
+                    [{"action": {"type": "callback", "label": "Баны", "payload": json.dumps({"cmd": "pun_view", "type": "ban", "target": target_id, "p": 1})}, "color": "primary"},
+                     {"action": {"type": "callback", "label": "Муты", "payload": json.dumps({"cmd": "pun_view", "type": "mute", "target": target_id, "p": 1})}, "color": "primary"}],
+                    [{"action": {"type": "callback", "label": "Преды", "payload": json.dumps({"cmd": "pun_view", "type": "warn", "target": target_id, "p": 1})}, "color": "primary"},
+                     {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "pun_cancel"})}, "color": "negative"}]]}
+                edit_msg("💻 Лог наказаний {}:".format(name), kb); snackbar("⬅️"); return
+            if not target_id or ptype not in ("ban", "mute", "warn"): snackbar("❌ Ошибка данных"); return
             month_ago = int(time.time()) - 30 * 86400
             with DB_LOCK:
                 total = CONN.execute("SELECT COUNT(*) FROM punishment_history WHERE peer_id=? AND issued_by=? AND type=? AND issued_at>=?", (peer_id, target_id, ptype, month_ago)).fetchone()[0]
@@ -3216,7 +3220,7 @@ def handle_event(event):
             if page > 1: nav.append({"action": {"type": "callback", "label": "⬅️", "payload": json.dumps({"cmd": "pun_view", "type": ptype, "target": target_id, "p": page-1})}, "color": "secondary"})
             nav.append({"action": {"type": "callback", "label": "{}/{}".format(page, total_pages), "payload": json.dumps({"cmd": "page_info", "page": page, "total": total_pages})}, "color": "default"})
             if page < total_pages: nav.append({"action": {"type": "callback", "label": "➡️", "payload": json.dumps({"cmd": "pun_view", "type": ptype, "target": target_id, "p": page+1})}, "color": "secondary"})
-            kb = {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "pun_back", "target": target_id})}, "color": "secondary"}]]}
+            kb = {"inline": True, "buttons": [[{"action": {"type": "callback", "label": "⬅️ Назад", "payload": json.dumps({"cmd": "pun_back", "target": target_id})}, "color": "primary"}]]}
             if nav: kb["buttons"].insert(0, nav)
             edit_msg("\n".join(lines), kb); snackbar("📄"); return
         if cmd == "pun_back":
@@ -3389,7 +3393,7 @@ def handle_event(event):
             cats3 = [{"action": {"type": "callback", "label": "🔥", "payload": json.dumps({"cmd": "top_streaks", "page": 1})}, "color": "primary" if top_type=="streaks" else "secondary"}]
             edit_msg("\n".join(lines), {"inline": True, "buttons": [cats1, cats2, cats3, nav]}); snackbar("📄"); return
 
-        if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls", "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_games", "help_md", "help_back", "help_back_main"]:
+        if cmd in ["help_general", "help_systems", "help_manage", "help_remind", "help_polls", "help_admin", "help_moderator", "help_main_admin", "help_owner", "help_br", "help_games", "help_md", "help_back", "help_back_main", "help_sk"]:
             checks = {"help_systems": is_admin, "help_manage": is_moderator, "help_moderator": is_moderator, "help_admin": is_admin, "help_main_admin": is_main_admin, "help_owner": is_owner, "help_remind": is_admin, "help_polls": is_admin, "help_md": is_md_member}
             if cmd in checks:
                 fn = checks[cmd]; ok = fn(user_id) if cmd == "help_md" else fn(user_id, peer_id)
@@ -3535,7 +3539,7 @@ def handle_verify(peer, sender, raw, want):
     send_msg(peer, "✅ Карточка {} подтверждена.".format(silent_mention_badge(t, peer)) if want else "✅ Подтверждение снято.".format(silent_mention_badge(t, peer)))
 def handle_inspector(peer, sender, raw):
     targets = extract_targets(raw, 0)
-    if not targets: send_msg(peer, "❌ Формат: /inspector @юзер"); return
+    if not targets: send_msg(peer, "❌ Формат: /проверяющий @юзер"); return
     t = targets[0]
     if t in (CREATOR_ID, LEADER_ID): send_msg(peer, "❌"); return
     key = "inspector_{}".format(t)
@@ -4720,31 +4724,43 @@ def handle_message(peer, sender, text, msg_obj):
         except Exception as e: send_msg(peer, "❌ {}".format(e))
     elif cmd == "др":
         def _dr_task():
-          try:
-            sync_members(peer); now_msk = get_msk_now()
-            if not member_ids: send_msg(peer, "❌ Нет участников."); return
-            bdate_map = get_bdate_map(member_ids); fill_bdates_from_vk(peer, member_ids, bdate_map); upcoming = []
-            for uid, bdate in bdate_map.items():
-                parts = bdate.split(".")
-                if len(parts) < 2: continue
-                try: day, month = int(parts[0]), int(parts[1])
-                except: continue
-                try: bday = now_msk.replace(month=month, day=day, hour=0, minute=0, second=0, microsecond=0)
-                except: continue
-                if bday.date() < now_msk.date():
-                    try: bday = bday.replace(year=now_msk.year + 1)
+            try:
+                sync_members(peer)
+                now_msk = get_msk_now()
+                with DB_LOCK:
+                    member_ids = [r["user_id"] for r in CONN.execute("SELECT user_id FROM members WHERE peer_id=?", (peer,)).fetchall()]
+                if not member_ids:
+                    send_msg(peer, "❌ Нет участников.")
+                    return
+                bdate_map = get_bdate_map(member_ids)
+                fill_bdates_from_vk(peer, member_ids, bdate_map)
+                upcoming = []
+                for uid, bdate in bdate_map.items():
+                    parts = bdate.split(".")
+                    if len(parts) < 2: continue
+                    try: day, month = int(parts[0]), int(parts[1])
                     except: continue
-                diff = (bday - now_msk).days
-                if 0 <= diff <= 60: upcoming.append((diff, uid, get_zodiac(day, month), "{} {}".format(day, RU_MONTHS[month-1])))
-            upcoming.sort(key=lambda x: x[0])
-            if not upcoming: send_msg(peer, "📝 Ближайших ДР нет."); return
-            lines = ["📝 Ближайшие ДР:\n"]
-            for diff, uid, zodiac, ds in upcoming:
-                day_word = "день" if diff == 1 else ("дня" if 2 <= diff <= 4 else "дней")
-                if diff == 0: lines.append("{} [{}]: сегодня! 🎉".format(silent_mention_badge(uid, peer), zodiac))
-                else: lines.append("{} [{}]: через {} {} ({})".format(silent_mention_badge(uid, peer), zodiac, diff, day_word, ds))
-            send_msg(peer, "\n".join(lines))
-          except Exception as e: send_msg(peer, "❌ Ошибка: {}".format(e))
+                    try: bday = now_msk.replace(month=month, day=day, hour=0, minute=0, second=0, microsecond=0)
+                    except: continue
+                    if bday.date() < now_msk.date():
+                        try: bday = bday.replace(year=now_msk.year + 1)
+                        except: continue
+                    diff = (bday - now_msk).days
+                    if 0 <= diff <= 60: upcoming.append((diff, uid, get_zodiac(day, month), "{} {}".format(day, RU_MONTHS[month-1])))
+                upcoming.sort(key=lambda x: x[0])
+                if not upcoming:
+                    send_msg(peer, "📝 Ближайших ДР нет.")
+                    return
+                lines = ["📝 Ближайшие ДР:\n"]
+                for diff, uid, zodiac, ds in upcoming:
+                    day_word = "день" if diff == 1 else ("дня" if 2 <= diff <= 4 else "дней")
+                    if diff == 0:
+                        lines.append("{} [{}]: сегодня! 🎉".format(silent_mention_badge(uid, peer), zodiac))
+                    else:
+                        lines.append("{} [{}]: через {} {} ({})".format(silent_mention_badge(uid, peer), zodiac, diff, day_word, ds))
+                send_msg(peer, "\n".join(lines))
+            except Exception as e:
+                send_msg(peer, "❌ Ошибка: {}".format(e))
         threading.Thread(target=_dr_task, daemon=True).start()
     elif cmd == "кто_я":
         last_ts = int(get_setting(peer, "who_i_cd_{}".format(sender), "0") or "0"); now_ts = int(time.time()); diff = now_ts - last_ts
@@ -5803,9 +5819,9 @@ def handle_punishments(peer, sender, raw):
     t = targets[0]
     name = silent_mention_badge(t, peer)
     kb = {"inline": True, "buttons": [
-        [{"action": {"type": "callback", "label": "Баны", "payload": json.dumps({"cmd": "pun_view", "type": "ban", "target": t, "p": 1})}, "color": "negative"},
+        [{"action": {"type": "callback", "label": "Баны", "payload": json.dumps({"cmd": "pun_view", "type": "ban", "target": t, "p": 1})}, "color": "primary"},
          {"action": {"type": "callback", "label": "Муты", "payload": json.dumps({"cmd": "pun_view", "type": "mute", "target": t, "p": 1})}, "color": "primary"}],
-        [{"action": {"type": "callback", "label": "Преды", "payload": json.dumps({"cmd": "pun_view", "type": "warn", "target": t, "p": 1})}, "color": "secondary"},
+        [{"action": {"type": "callback", "label": "Преды", "payload": json.dumps({"cmd": "pun_view", "type": "warn", "target": t, "p": 1})}, "color": "primary"},
          {"action": {"type": "callback", "label": "Отмена", "payload": json.dumps({"cmd": "pun_cancel"})}, "color": "negative"}]]}
     send_msg(peer, "💻 Лог наказаний {}:".format(name), keyboard=kb)
 
