@@ -3252,11 +3252,7 @@ def handle_event(event):
             if not state: snackbar("⛔ Меню устарело."); return
             ctx = state.get("context", {}); prompt_cmid = cmid or ctx.get("msg_cmid")
             def sk_edit_cb(msg, kb=None):
-                kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
-                if prompt_cmid:
-                    try: VK.messages.edit(peer_id=peer_id, conversation_message_id=prompt_cmid, message=msg, keyboard=kbj); return
-                    except: pass
-                send_msg(peer_id, msg, keyboard=kb)
+                sk_edit(peer_id, prompt_cmid, msg, kb)
             if cmd == "sk_set_type":
                 ctx["build_type"] = payload.get("val", "Высокая")
                 set_auction_state(user_id, peer_id, "sk_amount", ctx)
@@ -3603,9 +3599,6 @@ def handle_message(peer, sender, text, msg_obj):
                 rest = text.strip().split(None, 2); link = rest[2].strip() if len(rest) > 2 else ""
                 if not link: send_msg(peer, "❌"); return
                 set_setting(0, "br_admins_link", link); send_msg(peer, "✅ Ссылка на таблицу админов установлена."); return
-            if low == "/итоги":
-                if sender == CREATOR_ID: _sk_do_summary(peer)
-                return
             if low == "/чаты":
                 send_msg(peer, "⏳ Загрузка..."); chats = get_all_bot_chats()
                 if not chats: send_msg(peer, "📭 Нет бесед."); return
@@ -3945,7 +3938,9 @@ def handle_message(peer, sender, text, msg_obj):
             with DB_LOCK:
                 CONN.execute("INSERT INTO message_cache(peer_id, cmid, from_id, ts) VALUES(?,?,?,?)", (peer, cmid0, sender, int(time.time())))
                 CONN.execute("DELETE FROM message_cache WHERE ts < ?", (int(time.time()) - 7*86400,)); CONN.commit()
-
+    if first == "/итоги" and sender == CREATOR_ID:
+        _sk_do_summary(peer)
+        return
     if not first.startswith("мд "): return
     parts_norm = first[3:].strip().split()
     if not parts_norm: send_msg(peer, "Меня кто то звал?🧐 «Мд команды» список команд."); return
@@ -4099,7 +4094,7 @@ def handle_message(peer, sender, text, msg_obj):
         lines = ["👷‍♂️Копилки всех пользователей:\n"]
         for i, r in enumerate(rows, 1):
             with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (r["user_id"], peer)).fetchone()
-            nick = m["nickname"] if m and m["nickname"] else silent_mention_badge(r["user_id"], peer)
+            nick = "[https://vk.com/id{}|{}]".format(r["user_id"], m["nickname"]) if m and m["nickname"] else silent_mention_badge(r["user_id"], peer)
             lines.append("{}. {} - {}💵".format(i, nick, fmt_price_dots(r["total_amount"])))
         send_msg(peer, "\n".join(lines))
     elif cmd == "изменить_сумму_ск":
@@ -4110,7 +4105,7 @@ def handle_message(peer, sender, text, msg_obj):
         with DB_LOCK: w = CONN.execute("SELECT total_amount FROM sk_wallets WHERE peer_id=? AND user_id=?", (peer, t)).fetchone()
         cur = w["total_amount"] if w else 0
         with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (t, peer)).fetchone()
-        name = m["nickname"] if m and m["nickname"] else silent_mention_badge(t, peer)
+        name = "[https://vk.com/id{}|{}]".format(t, m["nickname"]) if m and m["nickname"] else silent_mention_badge(t, peer)
         try: mid = VK.messages.send(peer_id=peer, message="В данный момент у {} {}💰 в копилке, введите сумму если хотите изменить:".format(name, fmt_price_dots(cur)), keyboard=json.dumps(sk_nav_kb(None)), random_id=random.getrandbits(31)); cmid_sk = resolve_cmid_retry(peer, mid)
         except: mid = None; cmid_sk = None
         set_auction_state(sender, peer, "sk_edit_amount", {"target": t, "msg_cmid": cmid_sk, "msg_id": mid})
@@ -5745,7 +5740,13 @@ def sk_edit(peer, cmid, text, kb=None):
     kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
     if cmid:
         try: VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=text, keyboard=kbj); return
-        except: pass
+        except:
+            try: VK.messages.edit(peer_id=peer, message_id=cmid, message=text, keyboard=kbj); return
+            except: pass
+        try: VK.messages.delete(peer_id=peer, message_ids=[cmid], delete_for_all=1)
+        except:
+            try: VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
+            except: pass
     send_msg(peer, text, keyboard=kb)
 
 def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
@@ -5811,6 +5812,55 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
         clear_auction_state(sender, peer)
         reply("✅ Отчет сохранен!\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)\n❗️Ваша копилка в данный момент: {}💸".format(ctx.get("build_type"), fmt_price_dots(ctx.get("amount")), ctx.get("work_time"), fmt_price_dots(wallet)))
         return True
+
+    if step == "sk_edit_amount":
+        if not text.strip().isdigit() and not re.fullmatch(r"[\d\.]+", text.strip()):
+            reply("❌ Введите число (например 100000 или 100.000):", sk_nav_kb(None)); return True
+        try: val = int(re.sub(r"\D", "", text.strip()))
+        except: val = 0
+        target = ctx.get("target")
+        with DB_LOCK:
+            CONN.execute("INSERT OR IGNORE INTO sk_wallets(peer_id, user_id, total_amount) VALUES(?,?,0)", (peer, target))
+            CONN.execute("UPDATE sk_wallets SET total_amount=? WHERE peer_id=? AND user_id=?", (val, peer, target))
+            CONN.commit()
+        clear_auction_state(sender, peer)
+        reply("✅ Сумма копилки обновлена: {}💰".format(fmt_price_dots(val)))
+        return True
+
+    if step == "sk_chk_pick":
+        if not text.strip().isdigit(): reply("❌ Введите номер отчета:"); return True
+        num = int(text.strip())
+        target = ctx.get("target")
+        with DB_LOCK:
+            rows = CONN.execute("SELECT id, build_type, amount, work_time, photo1, photo2 FROM sk_reports WHERE peer_id=? AND user_id=? ORDER BY created_at DESC LIMIT 30", (peer, target)).fetchall()
+        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
+        r = rows[num-1]
+        with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (target, peer)).fetchone()
+        nick = "[https://vk.com/id{}|{}]".format(target, m["nickname"]) if m and m["nickname"] else silent_mention_badge(target, peer)
+        att = r["photo1"]
+        if r["photo2"]: att += "," + r["photo2"]
+        txt = "👥Ник: {}\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)".format(nick, r["build_type"], fmt_price_dots(r["amount"]), r["work_time"])
+        send_msg(peer, txt, attachments=att)
+        clear_auction_state(sender, peer)
+        return True
+
+    if step == "sk_chk_pick":
+        if not text.strip().isdigit(): reply("❌ Введите номер отчета:"); return True
+        num = int(text.strip())
+        target = ctx.get("target")
+        with DB_LOCK:
+            rows = CONN.execute("SELECT id, build_type, amount, work_time, photo1, photo2 FROM sk_reports WHERE peer_id=? AND user_id=? ORDER BY created_at DESC LIMIT 30", (peer, target)).fetchall()
+        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
+        r = rows[num-1]
+        with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (target, peer)).fetchone()
+        nick = "[https://vk.com/id{}|{}]".format(target, m["nickname"]) if m and m["nickname"] else silent_mention_badge(target, peer)
+        att = r["photo1"]
+        if r["photo2"]: att += "," + r["photo2"]
+        txt = "👥Ник: {}\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)".format(nick, r["build_type"], fmt_price_dots(r["amount"]), r["work_time"])
+        send_msg(peer, txt, attachments=att)
+        clear_auction_state(sender, peer)
+        return True
+        
     return False
 
 def handle_punishments(peer, sender, raw):
@@ -5946,7 +5996,7 @@ def _sk_do_summary(peer):
             uid = r["user_id"]; tot = r["total"]; cnt = r["cnt"]
             total_bank += tot
             with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (uid, peer)).fetchone()
-            nick = m["nickname"] if m and m["nickname"] else silent_mention_badge(uid, peer)
+            nick = "[https://vk.com/id{}|{}]".format(uid, m["nickname"]) if m and m["nickname"] else silent_mention_badge(uid, peer)
             lines.append("{}. {} - {} ({} {})".format(idx, nick, fmt_price_dots(tot), cnt, plural_ru(cnt, "отчет", "отчета", "отчетов")))
         lines.append(""); lines.append("🏦 Общий банк премий за неделю: {}".format(fmt_price_dots(total_bank)))
         send_msg(peer, "\n".join(lines))
