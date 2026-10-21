@@ -190,14 +190,18 @@ def fetch_br_servers():
         req = urllib.request.Request(BR_API_URL, headers={"User-Agent": "Mozilla/5.0 (MD BOT)"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    if isinstance(data, list):
-        if len(data) < 92:
-            has_92 = any(str(s.get("firstname", "")).strip() == "92" for s in data)
-            if not has_92:
-                data.append({"name": "92", "firstname": "92", "online": 0, "maxonline": 0})
-        BR_CACHE["time"] = now; BR_CACHE["data"] = data; return data
+            if isinstance(data, list):
+                if len(data) < 92:
+                    has_92 = any(str(s.get("firstname", "")).strip() == "92" for s in data)
+                    if not has_92:
+                        data.append({"name": "92", "firstname": "92", "online": 0, "maxonline": 0})
+                BR_CACHE["time"] = now
+                BR_CACHE["data"] = data
+                return data
             return BR_CACHE["data"]
-    except Exception as e: print("BR API error:", e); return BR_CACHE["data"]
+    except Exception as e:
+        print("BR API error:", e)
+        return BR_CACHE["data"]
 def build_br_page(page):
     servers = fetch_br_servers()
     if not servers: return None, None, 1
