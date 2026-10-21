@@ -5754,53 +5754,86 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
     if not state: return False
     step = state["step"]
     if not step.startswith("sk_"): return False
-    ctx = state.get("context", {}); prompt_cmid = ctx.get("msg_cmid") or cmid
+    ctx = state.get("context", {})
+    
     if time.time() - ctx.get("ts", 0) > 300:
-        clear_auction_state(sender, peer); sk_edit(peer, prompt_cmid, "⏰ Время вышло."); return True
-    def reply(msg, kb=None): sk_edit(peer, prompt_cmid, msg, kb)
-    def setstep(s, extra=None):
-        c = dict(extra if extra is not None else ctx); c["msg_cmid"] = prompt_cmid
-        set_auction_state(sender, peer, s, c)
-    if text.strip().lower() in ("отмена", "отменить"):
-        clear_auction_state(sender, peer); reply("❌ Отчет отменен."); return True
+        clear_auction_state(sender, peer)
+        old_cmid = ctx.get("msg_cmid")
+        if old_cmid: _silent_delete_msg(peer, old_cmid)
+        send_msg(peer, "⏰ Время вышло.")
+        return True
 
-    # Обработка "Назад" через Callback (в handle_event), но на всякий случай
+    def step_reply(next_step, msg, kb=None, extra=None):
+        # Удаляем ТОЛЬКО прошлое сообщение бота
+        old_cmid = ctx.get("msg_cmid")
+        if old_cmid: _silent_delete_msg(peer, old_cmid)
+        # Отправляем новое
+        kbj = json.dumps(kb) if kb else None
+        new_mid = send_msg(peer, msg, keyboard=kbj)
+        new_cmid = None
+        if isinstance(new_mid, int):
+            new_cmid = resolve_cmid_retry(peer, new_mid)
+        
+        c = dict(extra if extra is not None else ctx)
+        c["msg_cmid"] = new_cmid
+        c["msg_id"] = new_mid
+        set_auction_state(sender, peer, next_step, c)
+
+    if text.strip().lower() in ("отмена", "отменить"):
+        clear_auction_state(sender, peer)
+        old_cmid = ctx.get("msg_cmid")
+        if old_cmid: _silent_delete_msg(peer, old_cmid)
+        send_msg(peer, "❌ Отчет отменен.")
+        return True
+
     if step == "sk_amount":
         if not text.strip().isdigit() and not re.fullmatch(r"[\d\.]+", text.strip()):
-            reply("❌ Введите число (например 100000 или 100.000):", sk_nav_kb("sk_rep_type"))
+            step_reply("sk_amount", "❌ Введите число (например 100000 или 100.000):", sk_nav_kb("sk_rep_type"))
             return True
         try: val = int(re.sub(r"\D", "", text.strip()))
         except: val = 0
         if val < 0 or val > 450000:
-            reply("❌ Сумма должна быть от 0 до 450.000:", sk_nav_kb("sk_rep_type")); return True
-        ctx["amount"] = val; setstep("sk_date", ctx)
-        reply("Введите дату и время выполнения стройки (например 01.01.21 13:00):", sk_nav_kb("sk_amount")); return True
+            step_reply("sk_amount", "❌ Сумма должна быть от 0 до 450.000:", sk_nav_kb("sk_rep_type"))
+            return True
+        ctx["amount"] = val
+        step_reply("sk_date", "Введите дату и время выполнения стройки (например 01.01.21 13:00):", sk_nav_kb("sk_amount"))
+        return True
 
     if step == "sk_date":
-        ctx["work_time"] = text.strip(); setstep("sk_photo1", ctx)
-        reply("Пришлите скрин взятия стройки с /time:", sk_nav_kb("sk_date")); return True
+        ctx["work_time"] = text.strip()
+        step_reply("sk_photo1", "Пришлите скрин взятия стройки с /time:", sk_nav_kb("sk_date"))
+        return True
 
     if step == "sk_photo1":
         url = extract_photo_url({"attachments": attachments}) if attachments else None
-        if not url: reply("❌ Пришлите фото или нажмите «Назад».", sk_nav_kb("sk_date")); return True
+        if not url:
+            step_reply("sk_photo1", "❌ Пришлите фото или нажмите «Назад».", sk_nav_kb("sk_date"))
+            return True
         att = None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=30) as r: att = upload_photo(peer, io.BytesIO(r.read()))
         except: pass
-        if not att: reply("❌ Ошибка загрузки. Попробуйте другое фото."); return True
-        ctx["photo1"] = att; setstep("sk_photo2", ctx)
-        reply("Пришлите скрин выполненной стройки с /time:", sk_nav_kb("sk_photo1")); return True
+        if not att:
+            step_reply("sk_photo1", "❌ Ошибка загрузки. Попробуйте другое фото.", sk_nav_kb("sk_date"))
+            return True
+        ctx["photo1"] = att
+        step_reply("sk_photo2", "Пришлите скрин выполненной стройки с /time:", sk_nav_kb("sk_photo1"))
+        return True
 
     if step == "sk_photo2":
         url = extract_photo_url({"attachments": attachments}) if attachments else None
-        if not url: reply("❌ Пришлите фото или нажмите «Назад».", sk_nav_kb("sk_photo1")); return True
+        if not url:
+            step_reply("sk_photo2", "❌ Пришлите фото или нажмите «Назад».", sk_nav_kb("sk_photo1"))
+            return True
         att = None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=30) as r: att = upload_photo(peer, io.BytesIO(r.read()))
         except: pass
-        if not att: reply("❌ Ошибка загрузки. Попробуйте другое фото."); return True
+        if not att:
+            step_reply("sk_photo2", "❌ Ошибка загрузки. Попробуйте другое фото.", sk_nav_kb("sk_photo1"))
+            return True
         ctx["photo2"] = att
         now_ts = int(time.time())
         with DB_LOCK:
@@ -5809,13 +5842,17 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
             CONN.execute("UPDATE sk_wallets SET total_amount = total_amount + ? WHERE peer_id=? AND user_id=?", (ctx.get("amount"), peer, sender))
             CONN.commit()
             wallet = CONN.execute("SELECT total_amount FROM sk_wallets WHERE peer_id=? AND user_id=?", (peer, sender)).fetchone()["total_amount"]
+        
+        old_cmid = ctx.get("msg_cmid")
+        if old_cmid: _silent_delete_msg(peer, old_cmid)
         clear_auction_state(sender, peer)
-        reply("✅ Отчет сохранен!\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)\n❗️Ваша копилка в данный момент: {}💸".format(ctx.get("build_type"), fmt_price_dots(ctx.get("amount")), ctx.get("work_time"), fmt_price_dots(wallet)))
+        send_msg(peer, "✅ Отчет сохранен!\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)\n❗️Ваша копилка в данный момент: {}💸".format(ctx.get("build_type"), fmt_price_dots(ctx.get("amount")), ctx.get("work_time"), fmt_price_dots(wallet)))
         return True
 
     if step == "sk_edit_amount":
         if not text.strip().isdigit() and not re.fullmatch(r"[\d\.]+", text.strip()):
-            reply("❌ Введите число (например 100000 или 100.000):", sk_nav_kb(None)); return True
+            step_reply("sk_edit_amount", "❌ Введите число (например 100000 или 100.000):", sk_nav_kb(None))
+            return True
         try: val = int(re.sub(r"\D", "", text.strip()))
         except: val = 0
         target = ctx.get("target")
@@ -5823,27 +5860,39 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
             CONN.execute("INSERT OR IGNORE INTO sk_wallets(peer_id, user_id, total_amount) VALUES(?,?,0)", (peer, target))
             CONN.execute("UPDATE sk_wallets SET total_amount=? WHERE peer_id=? AND user_id=?", (val, peer, target))
             CONN.commit()
+        
+        old_cmid = ctx.get("msg_cmid")
+        if old_cmid: _silent_delete_msg(peer, old_cmid)
         clear_auction_state(sender, peer)
-        reply("✅ Сумма копилки обновлена: {}💰".format(fmt_price_dots(val)))
+        send_msg(peer, "✅ Сумма копилки обновлена: {}💰".format(fmt_price_dots(val)))
         return True
 
     if step == "sk_chk_pick":
-        if not text.strip().isdigit(): reply("❌ Введите номер отчета:"); return True
+        if not text.strip().isdigit():
+            step_reply("sk_chk_pick", "❌ Введите номер отчета:", sk_nav_kb(None))
+            return True
         num = int(text.strip())
         target = ctx.get("target")
         with DB_LOCK:
             rows = CONN.execute("SELECT id, build_type, amount, work_time, photo1, photo2 FROM sk_reports WHERE peer_id=? AND user_id=? ORDER BY created_at DESC LIMIT 30", (peer, target)).fetchall()
-        if num < 1 or num > len(rows): reply("❌ Неверный номер."); return True
+        if num < 1 or num > len(rows):
+            step_reply("sk_chk_pick", "❌ Неверный номер.", sk_nav_kb(None))
+            return True
         r = rows[num-1]
         with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (target, peer)).fetchone()
         nick = "[https://vk.com/id{}|{}]".format(target, m["nickname"]) if m and m["nickname"] else silent_mention_badge(target, peer)
+        
         att_list = []
         if r["photo1"]: att_list.append(r["photo1"])
         if r["photo2"]: att_list.append(r["photo2"])
         att = ",".join(att_list) if att_list else None
+        
         txt = "👥Ник: {}\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)".format(nick, r["build_type"], fmt_price_dots(r["amount"]), r["work_time"])
-        send_msg(peer, txt, attachments=att)
+        
+        old_cmid = ctx.get("msg_cmid")
+        if old_cmid: _silent_delete_msg(peer, old_cmid)
         clear_auction_state(sender, peer)
+        send_msg(peer, txt, attachments=att)
         return True
 
     return False
@@ -5971,20 +6020,25 @@ def _expire_game_msg(peer, mid, text):
 
 def _sk_do_summary(peer):
     with DB_LOCK:
-        rows = CONN.execute("SELECT user_id, SUM(amount) as total, COUNT(*) as cnt FROM sk_reports WHERE peer_id=? GROUP BY user_id", (peer,)).fetchall()
-    if not rows:
+        users = CONN.execute("SELECT user_id, total_amount FROM sk_wallets WHERE peer_id=? AND total_amount > 0 ORDER BY total_amount DESC", (peer,)).fetchall()
+    
+    if not users:
         send_msg(peer, "📢 @all Итоги недели по премиям СК!\n\n📊 Начисленные премии сотрудникам:\nНет отчетов.\n\n🏦 Общий банк премий за неделю: 0")
     else:
         lines = ["📢 @all Итоги недели по премиям СК!", "", "📊 Начисленные премии сотрудникам:"]
         total_bank = 0
-        for idx, r in enumerate(rows, 1):
-            uid = r["user_id"]; tot = r["total"]; cnt = r["cnt"]
-            total_bank += tot
-            with DB_LOCK: m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (uid, peer)).fetchone()
+        for idx, u in enumerate(users, 1):
+            uid = u["user_id"]
+            tot = u["total_amount"]
+            with DB_LOCK:
+                cnt = CONN.execute("SELECT COUNT(*) FROM sk_reports WHERE peer_id=? AND user_id=?", (peer, uid)).fetchone()[0]
+                m = CONN.execute("SELECT nickname FROM members WHERE user_id=? AND peer_id=?", (uid, peer)).fetchone()
             nick = "[https://vk.com/id{}|{}]".format(uid, m["nickname"]) if m and m["nickname"] else silent_mention_badge(uid, peer)
+            total_bank += tot
             lines.append("{}. {} - {} ({} {})".format(idx, nick, fmt_price_dots(tot), cnt, plural_ru(cnt, "отчет", "отчета", "отчетов")))
         lines.append(""); lines.append("🏦 Общий банк премий за неделю: {}".format(fmt_price_dots(total_bank)))
         send_msg(peer, "\n".join(lines))
+    
     with DB_LOCK:
         CONN.execute("DELETE FROM sk_reports WHERE peer_id=?", (peer,))
         CONN.execute("DELETE FROM sk_wallets WHERE peer_id=?", (peer,))
