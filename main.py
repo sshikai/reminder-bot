@@ -3247,7 +3247,11 @@ def handle_event(event):
             prompt_cmid = cmid or ctx.get("msg_cmid")
             
             def sk_edit_cb(msg, kb=None): 
-                sk_edit(peer_id, prompt_cmid, msg, kb)
+                nonlocal prompt_cmid
+                prompt_cmid = sk_edit(peer_id, prompt_cmid, msg, kb)
+                ctx["msg_cmid"] = prompt_cmid
+                if state:
+                    set_auction_state(user_id, peer_id, state["step"], ctx)
 
             if cmd == "sk_cancel":
                 clear_auction_state(user_id, peer_id)
@@ -3272,8 +3276,8 @@ def handle_event(event):
 
             if cmd == "sk_set_type":
                 ctx["build_type"] = payload.get("val", "Высокая")
-                set_auction_state(user_id, peer_id, "sk_amount", ctx)
                 sk_edit_cb("Введите сумму премии за выполненную стройку (0-450.000):", sk_nav_kb("sk_rep_type"))
+                set_auction_state(user_id, peer_id, "sk_amount", ctx)
                 snackbar("✅"); return
             if cmd == "sk_chk_pick": # Этот callback не используется, но на будущее
                 pass
@@ -5757,15 +5761,20 @@ def sk_nav_kb(back_cmd=None):
 def sk_edit(peer, cmid, text, kb=None):
     kbj = json.dumps(kb) if kb else json.dumps({"inline": True, "buttons": []})
     if cmid:
-        try: VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=text, keyboard=kbj); return
-        except:
-            try: VK.messages.edit(peer_id=peer, message_id=cmid, message=text, keyboard=kbj); return
+        try: 
+            VK.messages.edit(peer_id=peer, conversation_message_id=cmid, message=text, keyboard=kbj)
+            return cmid
+        except: 
+            try:
+                VK.messages.edit(peer_id=peer, message_id=cmid, message=text, keyboard=kbj)
+                return cmid
             except: pass
-        try: VK.messages.delete(peer_id=peer, message_ids=[cmid], delete_for_all=1)
-        except:
-            try: VK.messages.delete(peer_id=peer, conversation_message_ids=[cmid], delete_for_all=1)
-            except: pass
-    send_msg(peer, text, keyboard=kb)
+    
+    # Если отредактировать не удалось — шлем новое и возвращаем его ID
+    new_mid = send_msg(peer, text, keyboard=kbj)
+    if isinstance(new_mid, int):
+        return resolve_cmid_retry(peer, new_mid)
+    return None
 
 def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
     state = get_auction_state(sender, peer)
@@ -5773,20 +5782,19 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
     step = state["step"]
     if not step.startswith("sk_"): return False
     
-    # УДАЛЯЕМ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ (твой ввод)
-    if cmid: 
-        delete_user_msg(peer, cmid)
+    # УДАЛЯЕМ ТВОЕ СООБЩЕНИЕ
+    if cmid: delete_user_msg(peer, cmid)
 
     ctx = state.get("context", {}); prompt_cmid = ctx.get("msg_cmid")
     
     if time.time() - ctx.get("ts", 0) > 300:
         clear_auction_state(sender, peer)
-        if prompt_cmid: sk_edit(peer, prompt_cmid, "⏰ Время вышло.")
-        else: send_msg(peer, "⏰ Время вышло.")
+        sk_edit(peer, prompt_cmid, "⏰ Время вышло.")
         return True
 
     def reply(msg, kb=None): 
-        sk_edit(peer, prompt_cmid, msg, kb)
+        nonlocal prompt_cmid
+        prompt_cmid = sk_edit(peer, prompt_cmid, msg, kb)
     
     def setstep(s, extra=None):
         c = dict(extra if extra is not None else ctx); c["msg_cmid"] = prompt_cmid
@@ -5794,8 +5802,7 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
 
     if text.strip().lower() in ("отмена", "отменить"):
         clear_auction_state(sender, peer)
-        if prompt_cmid: sk_edit(peer, prompt_cmid, "❌ Отчет отменен.")
-        else: send_msg(peer, "❌ Отчет отменен.")
+        sk_edit(peer, prompt_cmid, "❌ Отчет отменен.")
         return True
 
     if step == "sk_amount":
@@ -5852,8 +5859,8 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
             CONN.commit()
             wallet = CONN.execute("SELECT total_amount FROM sk_wallets WHERE peer_id=? AND user_id=?", (peer, sender)).fetchone()["total_amount"]
         
+        reply("✅ Отчет сохранен!\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)\n❗️Ваша копилка в данный момент: {}💸".format(ctx.get("build_type"), fmt_price_dots(ctx.get("amount")), ctx.get("work_time"), fmt_price_dots(wallet)))
         clear_auction_state(sender, peer)
-        sk_edit(peer, prompt_cmid, "✅ Отчет сохранен!\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)\n❗️Ваша копилка в данный момент: {}💸".format(ctx.get("build_type"), fmt_price_dots(ctx.get("amount")), ctx.get("work_time"), fmt_price_dots(wallet)))
         return True
 
     if step == "sk_edit_amount":
@@ -5867,8 +5874,8 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
             CONN.execute("UPDATE sk_wallets SET total_amount=? WHERE peer_id=? AND user_id=?", (val, peer, target))
             CONN.commit()
         
+        reply("✅ Сумма копилки обновлена: {}💰".format(fmt_price_dots(val)))
         clear_auction_state(sender, peer)
-        sk_edit(peer, prompt_cmid, "✅ Сумма копилки обновлена: {}💰".format(fmt_price_dots(val)))
         return True
 
     if step == "sk_chk_pick":
@@ -5892,9 +5899,9 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
         
         txt = "👥Ник: {}\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)".format(nick, r["build_type"], fmt_price_dots(r["amount"]), r["work_time"])
         
+        reply(txt)
+        if att: send_msg(peer, "📸 Скриншоты:", attachments=att)
         clear_auction_state(sender, peer)
-        sk_edit(peer, prompt_cmid, txt) # редактируем сообщение бота
-        if att: send_msg(peer, "📸 Скриншоты:", attachments=att) # шлем фото следом
         return True
 
     return False
