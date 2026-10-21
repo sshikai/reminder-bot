@@ -3593,7 +3593,7 @@ def handle_message(peer, sender, text, msg_obj):
         # Если юзер запустил новую команду (мд ... или /...) — сбрасываем незакрытые редакторы
         if (first.startswith("мд ") or low.startswith("/")) and low not in ("отмена", "отменить"):
             st = get_auction_state(sender, peer)
-            if st and (st["step"].startswith("bu") or st["step"].startswith("cad")):
+            if st and (st["step"].startswith("bu") or st["step"].startswith("cad") or st["step"].startswith("sk_") or st["step"].startswith("nas_")):
                 clear_auction_state(sender, peer)
             st2 = get_auction_state(sender, peer)
             if st2 and st2["step"].startswith("calc_"):
@@ -5782,8 +5782,14 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
     step = state["step"]
     if not step.startswith("sk_"): return False
     
-    # УДАЛЯЕМ ТВОЕ СООБЩЕНИЕ
-    if cmid: delete_user_msg(peer, cmid)
+    # ЗАЩИТА: если это команда, не трогаем её
+    low = text.strip().lower()
+    if low.startswith("мд ") or low.startswith("/"):
+        return False
+
+    # УДАЛЯЕМ ТВОЕ СООБЩЕНИЕ (только если это реальный ввод для СК)
+    if cmid: 
+        delete_user_msg(peer, cmid)
 
     ctx = state.get("context", {}); prompt_cmid = ctx.get("msg_cmid")
     
