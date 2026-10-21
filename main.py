@@ -3240,29 +3240,44 @@ def handle_event(event):
             edit_msg("💻 Лог наказаний {}:".format(name), kb); snackbar("⬅️"); return
         if cmd.startswith("sk_"):
             state = get_auction_state(user_id, peer_id)
+            ctx = state.get("context", {}) if state else {}
+            old_cmid = ctx.get("msg_cmid")
+            old_mid = ctx.get("msg_id")
+
+            def replace_msg(msg, kb=None, next_step=None):
+                if old_cmid: _silent_delete_msg(peer_id, old_cmid)
+                if old_mid: _silent_delete_msg(peer_id, old_mid)
+                new_mid = send_msg(peer_id, msg, keyboard=json.dumps(kb) if kb else None)
+                new_cmid = resolve_cmid_retry(peer_id, new_mid) if isinstance(new_mid, int) else None
+                c = dict(ctx); c["msg_cmid"] = new_cmid; c["msg_id"] = new_mid
+                set_auction_state(user_id, peer_id, next_step or state["step"], c)
+
             if cmd == "sk_cancel":
-                if state: clear_auction_state(user_id, peer_id)
-                edit_msg("❌ Отчет отменен.", None); snackbar("❌"); return
+                if old_cmid: _silent_delete_msg(peer_id, old_cmid)
+                if old_mid: _silent_delete_msg(peer_id, old_mid)
+                clear_auction_state(user_id, peer_id)
+                send_msg(peer_id, "❌ Отчет отменен.")
+                snackbar("❌"); return
+
             if cmd == "sk_back":
                 if not state: snackbar("⛔ Меню устарело"); return
-                ctx = state.get("context", {}); step = state["step"]
+                step = state["step"]
                 if step == "sk_amount":
-                    edit_msg("Какая стройка была выполнена?", sk_menu_type_kb()); set_auction_state(user_id, peer_id, "sk_rep_type", ctx); snackbar("⬅️"); return
-                if step == "sk_date":
-                    edit_msg("Введите сумму премии (0-450.000):", sk_nav_kb("sk_rep_type")); set_auction_state(user_id, peer_id, "sk_amount", ctx); snackbar("⬅️"); return
-                if step == "sk_photo1":
-                    edit_msg("Введите дату и время (01.01.21 13:00):", sk_nav_kb("sk_amount")); set_auction_state(user_id, peer_id, "sk_date", ctx); snackbar("⬅️"); return
-                if step == "sk_photo2":
-                    edit_msg("Пришлите скрин взятия стройки:", sk_nav_kb("sk_date")); set_auction_state(user_id, peer_id, "sk_photo1", ctx); snackbar("⬅️"); return
+                    replace_msg("Какая стройка была выполнена?", sk_menu_type_kb(), "sk_rep_type")
+                elif step == "sk_date":
+                    replace_msg("Введите сумму премии (0-450.000):", sk_nav_kb("sk_rep_type"), "sk_amount")
+                elif step == "sk_photo1":
+                    replace_msg("Введите дату и время (01.01.21 13:00):", sk_nav_kb("sk_amount"), "sk_date")
+                elif step == "sk_photo2":
+                    replace_msg("Пришлите скрин взятия стройки:", sk_nav_kb("sk_date"), "sk_photo1")
                 snackbar("⬅️"); return
+
             if not state: snackbar("⛔ Меню устарело."); return
-            ctx = state.get("context", {}); prompt_cmid = cmid or ctx.get("msg_cmid")
-            def sk_edit_cb(msg, kb=None):
-                sk_edit(peer_id, prompt_cmid, msg, kb)
+
             if cmd == "sk_set_type":
                 ctx["build_type"] = payload.get("val", "Высокая")
-                set_auction_state(user_id, peer_id, "sk_amount", ctx)
-                sk_edit_cb("Введите сумму премии за выполненную стройку (0-450.000):", sk_nav_kb("sk_rep_type")); snackbar("✅"); return
+                replace_msg("Введите сумму премии за выполненную стройку (0-450.000):", sk_nav_kb("sk_rep_type"), "sk_amount")
+                snackbar("✅"); return
             if cmd == "sk_chk_pick": # Этот callback не используется, но на будущее
                 pass
         if cmd == "poll_vote":
@@ -5765,20 +5780,20 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
     if time.time() - ctx.get("ts", 0) > 300:
         clear_auction_state(sender, peer)
         old_cmid = ctx.get("msg_cmid")
+        old_mid = ctx.get("msg_id")
         if old_cmid: _silent_delete_msg(peer, old_cmid)
+        if old_mid: _silent_delete_msg(peer, old_mid)
         send_msg(peer, "⏰ Время вышло.")
         return True
 
     def step_reply(next_step, msg, kb=None, extra=None):
-        # Удаляем прошлое сообщение бота (игнорируем, если не вышло)
         old_cmid = ctx.get("msg_cmid")
+        old_mid = ctx.get("msg_id")
         if old_cmid: _silent_delete_msg(peer, old_cmid)
-        # Отправляем новое
-        kbj = json.dumps(kb) if kb else None
-        new_mid = send_msg(peer, msg, keyboard=kbj)
-        new_cmid = None
-        if isinstance(new_mid, int):
-            new_cmid = resolve_cmid_retry(peer, new_mid)
+        if old_mid: _silent_delete_msg(peer, old_mid)
+        
+        new_mid = send_msg(peer, msg, keyboard=json.dumps(kb) if kb else None)
+        new_cmid = resolve_cmid_retry(peer, new_mid) if isinstance(new_mid, int) else None
         
         c = dict(extra if extra is not None else ctx)
         c["msg_cmid"] = new_cmid
@@ -5788,7 +5803,9 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
     if text.strip().lower() in ("отмена", "отменить"):
         clear_auction_state(sender, peer)
         old_cmid = ctx.get("msg_cmid")
+        old_mid = ctx.get("msg_id")
         if old_cmid: _silent_delete_msg(peer, old_cmid)
+        if old_mid: _silent_delete_msg(peer, old_mid)
         send_msg(peer, "❌ Отчет отменен.")
         return True
 
@@ -5807,7 +5824,6 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
 
     if step == "sk_date":
         val = text.strip()
-        # Проверка формата: ДД.ММ.ГГ ЧЧ:ММ
         if not re.match(r"^\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}$", val):
             step_reply("sk_date", "❌ Неверный формат. Пример: 01.01.21 13:00", sk_nav_kb("sk_amount"))
             return True
@@ -5855,7 +5871,9 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
             wallet = CONN.execute("SELECT total_amount FROM sk_wallets WHERE peer_id=? AND user_id=?", (peer, sender)).fetchone()["total_amount"]
         
         old_cmid = ctx.get("msg_cmid")
+        old_mid = ctx.get("msg_id")
         if old_cmid: _silent_delete_msg(peer, old_cmid)
+        if old_mid: _silent_delete_msg(peer, old_mid)
         clear_auction_state(sender, peer)
         send_msg(peer, "✅ Отчет сохранен!\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)\n❗️Ваша копилка в данный момент: {}💸".format(ctx.get("build_type"), fmt_price_dots(ctx.get("amount")), ctx.get("work_time"), fmt_price_dots(wallet)))
         return True
@@ -5873,7 +5891,9 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
             CONN.commit()
         
         old_cmid = ctx.get("msg_cmid")
+        old_mid = ctx.get("msg_id")
         if old_cmid: _silent_delete_msg(peer, old_cmid)
+        if old_mid: _silent_delete_msg(peer, old_mid)
         clear_auction_state(sender, peer)
         send_msg(peer, "✅ Сумма копилки обновлена: {}💰".format(fmt_price_dots(val)))
         return True
@@ -5901,7 +5921,9 @@ def handle_sk_input(sender, peer, text, cmid=None, attachments=None):
         txt = "👥Ник: {}\n👷‍♂️Стройка: {}\n🏦Сумма: {}\n🗓️Дата время: {}\n📸Скриншоты: Сохранены (2/2)".format(nick, r["build_type"], fmt_price_dots(r["amount"]), r["work_time"])
         
         old_cmid = ctx.get("msg_cmid")
+        old_mid = ctx.get("msg_id")
         if old_cmid: _silent_delete_msg(peer, old_cmid)
+        if old_mid: _silent_delete_msg(peer, old_mid)
         clear_auction_state(sender, peer)
         send_msg(peer, txt, attachments=att)
         return True
